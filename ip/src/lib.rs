@@ -1,8 +1,8 @@
 mod cli;
 mod handlers;
-mod link;
+mod net;
 mod rip;
-mod router;
+mod route;
 
 #[cfg(test)]
 mod tests {

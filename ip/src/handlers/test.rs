@@ -1,4 +1,4 @@
-use crate::link::ProtocolHandler;
+use crate::route::ProtocolHandler;
 
 pub struct TestHandler {}
 

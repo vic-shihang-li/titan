@@ -39,29 +39,9 @@ impl Iterator for LinkIter {
     }
 }
 
-pub trait ProtocolHandler: Send {
-    fn handle_packet(&self, packet: Vec<u8>);
-}
-
-/// Provide a handler for a protocol.
-///
-/// Replaces any handler that is associated with the protocol.
-pub fn register_handler<H: ProtocolHandler + 'static>(protocol: u8, handler: H) {}
-
 /// Subscribe to a stream of packets received by this host.
 ///
 /// The received data is a packet in its binary format.
-async fn listen() -> Receiver<Vec<u8>> {
+pub fn listen() -> Receiver<Vec<u8>> {
     todo!()
-}
-
-fn handle_packets() {
-    // Note: on program start, some thread can be spawned to run this function.
-
-    while let Ok(bytes) = listen() {
-        // 0. parse bytes to packet
-        // 1. drop if packet is not valid or TTL = 0
-        // 2. if packet is for "me", pass packet to the correct protocol handler
-        // 3. if forwarding table has rule for packet, send to the next-hop interface
-    }
 }
