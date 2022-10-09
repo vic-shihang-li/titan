@@ -1,9 +1,6 @@
 *~
 \#*#
-
 *.o
-
 .vagrant/
-
 .DS_Store
-
+target
