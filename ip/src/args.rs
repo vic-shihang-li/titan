@@ -1,4 +1,8 @@
-use std::{io::BufRead, net::Ipv4Addr};
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    net::Ipv4Addr,
+};
 
 /// Input to a router; used to establish a router's interfaces.
 #[derive(Debug, PartialEq, Eq)]
@@ -70,6 +74,8 @@ pub enum ParseArgsError {
     MalformedPort,
     MalformedLink(ParseLinkError),
     ReadLineError(std::io::Error),
+    OpenLinkFileError(std::io::Error),
+    MissingLinkFileArg,
 }
 
 impl Args {
@@ -109,11 +115,25 @@ impl Args {
     }
 }
 
+impl TryFrom<std::env::Args> for Args {
+    type Error = ParseArgsError;
+
+    fn try_from(mut args: std::env::Args) -> Result<Self, Self::Error> {
+        if args.len() < 2 {
+            return Err(ParseArgsError::MissingLinkFileArg);
+        }
+
+        let link_file_path = args.nth(1).unwrap();
+        let br =
+            BufReader::new(File::open(link_file_path).map_err(ParseArgsError::OpenLinkFileError)?);
+
+        Args::try_parse(br)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::BufReader;
 
     #[test]
     fn parse_link_file() {

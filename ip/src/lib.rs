@@ -5,6 +5,8 @@ mod protocol;
 mod rip;
 mod route;
 
+pub use args::Args;
+
 #[cfg(test)]
 mod tests {
     #[test]
