@@ -14,4 +14,4 @@ The RIP packet contains 4 entries:
 - Advertising B has two interfaces (cost 0).
 - Advertising cost to C as infinity (split horizon with poison reverse).
 
-![./assets/rip_example.png](RIP protocol packet example in WireShark)
+![RIP protocol packet example in WireShark](./assets/rip_example.png)
