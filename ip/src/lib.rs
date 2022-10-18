@@ -3,6 +3,7 @@ mod net;
 mod protocol;
 mod rip;
 mod route;
+mod utils;
 
 pub use net::Args;
 
