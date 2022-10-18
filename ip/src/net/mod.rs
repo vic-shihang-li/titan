@@ -7,12 +7,17 @@ use link::{Link, LinkDefinition};
 use std::time::Duration;
 use utils::localhost_with_port;
 
+use lazy_static::lazy_static;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{
     net::UdpSocket,
     sync::{broadcast::Receiver, RwLock},
 };
+
+lazy_static! {
+    static ref LINKS: RwLock<Vec<Link>> = RwLock::new(Vec::new());
+}
 
 /// Send bytes to a destination.
 ///
@@ -38,56 +43,34 @@ pub fn listen() -> Receiver<Vec<u8>> {
     todo!()
 }
 
+async fn bootstrap_net(args: &Args) {
+    let udp_socket = Arc::new(
+        UdpSocket::bind(localhost_with_port(args.host_port))
+            .await
+            .expect("Failed to bind to this router's port"),
+    );
+
+    let mut links = LINKS.write().await;
+    for link_def in &args.links {
+        let sock = udp_socket.clone();
+        links.push(link_def.into_link(sock));
+    }
+}
+
 pub fn bootstrap(args: Args) {
     tokio::spawn(async move {
-        let net = Net::bootstrap(&args).await;
-        net.run_till_exit().await;
+        bootstrap_net(&args).await;
+        tokio::spawn(async {
+            send_periodic_updates().await;
+        })
     });
 }
 
-/// Main struct for orchestrating a router's interfaces.
-struct Net {
-    sock: Arc<UdpSocket>,
-    port: u16,
-    links: Arc<RwLock<Vec<Link>>>,
-}
-
-impl Net {
-    async fn bootstrap(args: &Args) -> Self {
-        let udp_socket = Arc::new(
-            UdpSocket::bind(localhost_with_port(args.host_port))
-                .await
-                .expect("Failed to bind to this router's port"),
-        );
-
-        let mut links = Vec::new();
-        for link_def in &args.links {
-            let sock = udp_socket.clone();
-            links.push(link_def.into_link(sock));
-        }
-
-        Self {
-            port: args.host_port,
-            sock: udp_socket,
-            links: Arc::new(RwLock::new(links)),
-        }
-    }
-}
-
-impl Net {
-    async fn run_till_exit(&self) {
-        let links = self.links.clone();
-        tokio::spawn(async move {
-            send_periodic_updates(links).await;
-        });
-    }
-}
-
-async fn send_periodic_updates(links: Arc<RwLock<Vec<Link>>>) {
+async fn send_periodic_updates() {
     let interval = Duration::from_secs(5);
 
     loop {
-        let ls = links.read().await;
+        let ls = LINKS.read().await;
         for l in ls.iter() {
             // TODO: send periodic update payload
             l.send(&[1, 2, 3, 4]).await;

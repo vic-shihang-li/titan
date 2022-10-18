@@ -12,6 +12,7 @@ async-trait = "0.1.57"
 rand = "0.8.5"
 etherparse = "0.12.0"
 rustyline = "10.0.0"
+lazy_static = "1.4.0"
 
 [[bin]]
 name = "node"
