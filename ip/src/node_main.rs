@@ -1,14 +1,13 @@
-mod cli;
-mod net;
-mod route;
-
+use ip::cli;
+use ip::net;
 use ip::Args;
 
 #[tokio::main]
 async fn main() {
-    let _args = match Args::try_from(std::env::args()) {
+    let args = match Args::try_from(std::env::args()) {
         Ok(a) => {
             eprintln!("Args: {}", a);
+            a
         }
         Err(e) => {
             eprintln!("Error: {:?}", e);
@@ -16,6 +15,8 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    net::bootstrap(args);
 
     let cli = cli::Cli::new();
     cli.run().await;

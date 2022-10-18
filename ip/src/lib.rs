@@ -1,5 +1,5 @@
-mod cli;
-mod net;
+pub mod cli;
+pub mod net;
 mod protocol;
 mod rip;
 mod route;
