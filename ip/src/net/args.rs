@@ -4,7 +4,7 @@ use std::{
     io::{BufRead, BufReader},
 };
 
-use crate::net::link::{Link, ParseLinkError};
+use crate::net::link::{LinkDefinition, ParseLinkError};
 
 /// Input to a router; used to establish a router's interfaces.
 #[derive(Debug, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub struct Args {
     /// The port where this host runs.
     pub host_port: u16,
     /// A list of the router's interfaces, ordered by their interface ID number.
-    pub links: Vec<Link>,
+    pub links: Vec<LinkDefinition>,
 }
 
 #[derive(Debug)]
@@ -51,7 +51,10 @@ impl Args {
         let mut links = Vec::new();
         for line in lines {
             let raw_link = line.map_err(ParseArgsError::ReadLineError)?;
-            links.push(Link::try_parse(raw_link.as_str()).map_err(ParseArgsError::MalformedLink)?);
+            links.push(
+                LinkDefinition::try_parse(raw_link.as_str())
+                    .map_err(ParseArgsError::MalformedLink)?,
+            );
         }
 
         if links.is_empty() {
@@ -106,12 +109,12 @@ mod tests {
             Args {
                 host_port: 5001,
                 links: vec![
-                    Link {
+                    LinkDefinition {
                         dest_port: 5000,
                         interface_ip: Ipv4Addr::new(192, 168, 0, 2),
                         dest_ip: Ipv4Addr::new(192, 168, 0, 1)
                     },
-                    Link {
+                    LinkDefinition {
                         dest_port: 5002,
                         interface_ip: Ipv4Addr::new(192, 168, 0, 3),
                         dest_ip: Ipv4Addr::new(192, 168, 0, 4)
