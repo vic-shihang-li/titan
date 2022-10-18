@@ -64,7 +64,7 @@ impl Interface {
 
 impl fmt::Display for Interface {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}\t{}\t{}\t{}\t{}", self.id, self.state, self.local_ip, self.remote_ip, self.port)
+        write!(f, "{}\t{}\t{}\t{}\t{}", self.id, self.state, self.local_ip, self.remote_ip, self.port)
     }
 }
 

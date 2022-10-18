@@ -147,7 +147,7 @@ impl Cli {
         let it = bootstrap_interface_table();
         match file {
             Some(file) => {
-                println!("Writing interface information to file {}", file);
+                eprintln!("Writing interface information to file {}", file);
                 // TODO: fetch and iterate through interfaces and print, optionally write to file.
             }
             None => {
