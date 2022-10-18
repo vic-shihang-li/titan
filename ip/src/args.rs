@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs::File,
     io::{BufRead, BufReader},
     net::Ipv4Addr,
@@ -128,6 +129,16 @@ impl TryFrom<std::env::Args> for Args {
             BufReader::new(File::open(link_file_path).map_err(ParseArgsError::OpenLinkFileError)?);
 
         Args::try_parse(br)
+    }
+}
+
+impl Display for Args {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Running on port {}", self.host_port)?;
+        for (lnk_no, lnk) in self.links.iter().enumerate() {
+            write!(f, "\n{}:{}", lnk_no, lnk.dest_ip)?;
+        }
+        Ok(())
     }
 }
 
