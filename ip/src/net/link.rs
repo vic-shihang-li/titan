@@ -82,20 +82,3 @@ impl Link {
             .unwrap();
     }
 }
-
-/// Iterate all links (both active and inactive) for this host.
-///
-/// This is useful for sending out periodic RIP messages to all links.
-pub fn iter_links() -> LinkIter {
-    todo!()
-}
-
-pub struct LinkIter {}
-
-impl Iterator for LinkIter {
-    type Item = Link;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
-    }
-}

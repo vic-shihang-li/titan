@@ -4,15 +4,16 @@ mod utils;
 
 pub use args::Args;
 use link::{Link, LinkDefinition};
+use std::ops::Deref;
 use std::time::Duration;
 use utils::localhost_with_port;
 
-use lazy_static::lazy_static;
+use lazy_static::{__Deref, lazy_static};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{
     net::UdpSocket,
-    sync::{broadcast::Receiver, RwLock},
+    sync::{broadcast::Receiver, RwLock, RwLockReadGuard},
 };
 
 lazy_static! {
@@ -34,6 +35,26 @@ pub fn activate(link_no: u16) {
 /// Turns off a link interface.
 pub fn deactivate(link_no: u16) {
     todo!()
+}
+
+/// Iterate all links (both active and inactive) for this host.
+///
+/// This is useful for sending out periodic RIP messages to all links.
+pub async fn iter_links<'a>() -> LinkIter<'a> {
+    LinkIter {
+        inner: LINKS.read().await,
+    }
+}
+
+pub struct LinkIter<'a> {
+    inner: RwLockReadGuard<'a, Vec<Link>>,
+}
+
+impl<'a> Deref for LinkIter<'a> {
+    type Target = Vec<Link>;
+    fn deref(&self) -> &Self::Target {
+        &*self.inner
+    }
 }
 
 /// Subscribe to a stream of packets received by this host.
@@ -62,7 +83,7 @@ pub fn bootstrap(args: Args) {
         bootstrap_net(&args).await;
         tokio::spawn(async {
             send_periodic_updates().await;
-        })
+        });
     });
 }
 
@@ -70,12 +91,10 @@ async fn send_periodic_updates() {
     let interval = Duration::from_secs(5);
 
     loop {
-        let ls = LINKS.read().await;
-        for l in ls.iter() {
+        for link in &*iter_links().await {
             // TODO: send periodic update payload
-            l.send(&[1, 2, 3, 4]).await;
+            link.send(&[1, 2, 3, 4]).await;
         }
-        drop(ls);
         tokio::time::sleep(interval).await;
     }
 }
