@@ -1,11 +1,10 @@
-mod args;
 mod cli;
 mod net;
 mod protocol;
 mod rip;
 mod route;
 
-pub use args::Args;
+pub use net::Args;
 
 #[cfg(test)]
 mod tests {

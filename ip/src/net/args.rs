@@ -2,68 +2,17 @@ use std::{
     fmt::Display,
     fs::File,
     io::{BufRead, BufReader},
-    net::Ipv4Addr,
 };
+
+use crate::net::link::{Link, ParseLinkError};
 
 /// Input to a router; used to establish a router's interfaces.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
     /// The port where this host runs.
-    host_port: u16,
+    pub host_port: u16,
     /// A list of the router's interfaces, ordered by their interface ID number.
-    links: Vec<Link>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Link {
-    /// The port where the connected host runs.
-    dest_port: u16,
-    /// The virtual IP of this host's interface.
-    interface_ip: Ipv4Addr,
-    /// The virtual IP of the connected host's interface.
-    dest_ip: Ipv4Addr,
-}
-
-#[derive(Debug)]
-pub enum ParseLinkError {
-    NoIp,
-    NoPort,
-    NoSrcVirtualIp,
-    NoDstVirtualIp,
-    MalformedPort,
-    MalformedIp,
-}
-
-impl Link {
-    pub fn try_parse(raw_link: &str) -> Result<Self, ParseLinkError> {
-        let mut split = raw_link.split_whitespace();
-
-        split.next().ok_or(ParseLinkError::NoIp)?;
-
-        let dest_port = split
-            .next()
-            .ok_or(ParseLinkError::NoPort)?
-            .parse::<u16>()
-            .map_err(|_| ParseLinkError::MalformedPort)?;
-
-        let interface_ip = split
-            .next()
-            .ok_or(ParseLinkError::NoSrcVirtualIp)?
-            .parse()
-            .map_err(|_| ParseLinkError::MalformedIp)?;
-
-        let dest_ip = split
-            .next()
-            .ok_or(ParseLinkError::NoDstVirtualIp)?
-            .parse()
-            .map_err(|_| ParseLinkError::MalformedIp)?;
-
-        Ok(Link {
-            dest_port,
-            interface_ip,
-            dest_ip,
-        })
-    }
+    pub links: Vec<Link>,
 }
 
 #[derive(Debug)]
