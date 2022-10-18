@@ -1,7 +1,7 @@
 
 use std::net::Ipv4Addr;
 use rustyline::{Editor, error::ReadlineError};
-use crate::route::{RoutingTable, Entry, bootstrap_routing_table};
+use crate::route::{bootstrap_routing_table, bootstrap_interface_table};
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -144,13 +144,15 @@ impl Cli {
     }
 
     fn print_interfaces(&self, file: Option<String>) {
+        let it = bootstrap_interface_table();
         match file {
             Some(file) => {
                 println!("Writing interface information to file {}", file);
                 // TODO: fetch and iterate through interfaces and print, optionally write to file.
             }
             None => {
-                println!("List all interfaces");
+                println!("id\tstate\tlocal\t\tremote\t        port");
+                println!("{}", it);
             }
         }
     }
@@ -163,8 +165,8 @@ impl Cli {
                 // TODO fetch and iterate through routes and print, optionally write to file.
             }
             None => {
-                eprintln!("List all routes");
-                eprintln!("{}", rt);
+                println!("dest\t\tnext\t\tcost");
+                println!("{}", rt);
             }
         }
     }
