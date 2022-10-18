@@ -1,6 +1,6 @@
 use crate::net;
-use std::{net::Ipv4Addr, time::Instant};
 use std::fmt;
+use std::{net::Ipv4Addr, time::Instant};
 
 pub struct InterfaceTable {
     interfaces: Vec<Interface>,
@@ -65,19 +65,21 @@ impl Interface {
 impl fmt::Display for Interface {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = if self.state { "up" } else { "down" };
-        write!(f, "{}\t{}\t{}\t{}\t{}", self.id, s, self.local_ip, self.remote_ip, self.port)
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}",
+            self.id, s, self.local_ip, self.remote_ip, self.port
+        )
     }
 }
 
 pub struct RoutingTable {
-    routes: Vec<Entry>
+    routes: Vec<Entry>,
 }
 
 impl RoutingTable {
     pub fn new() -> Self {
-        Self {
-            routes: Vec::new()
-        }
+        Self { routes: Vec::new() }
     }
 
     pub fn add_route(&mut self, entry: Entry) {
@@ -89,7 +91,9 @@ impl RoutingTable {
     }
 
     pub fn get_route_mut(&mut self, dest: Ipv4Addr) -> Option<&mut Entry> {
-        self.routes.iter_mut().find(|entry| entry.destination == dest)
+        self.routes
+            .iter_mut()
+            .find(|entry| entry.destination == dest)
     }
 
     pub fn remove_route(&mut self, dest: Ipv4Addr) {
@@ -153,24 +157,58 @@ impl Router {
     }
 }
 
-
-
 // For testing only, not part of the API
 pub fn bootstrap_routing_table() -> RoutingTable {
     let mut rt = RoutingTable::new();
-    rt.add_route(Entry::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 0), 1));
-    rt.add_route(Entry::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 1), 1));
-    rt.add_route(Entry::new(Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 0, 0, 2), 1));
-    rt.add_route(Entry::new(Ipv4Addr::new(10, 0, 0, 3), Ipv4Addr::new(10, 0, 0, 3), 1));
+    rt.add_route(Entry::new(
+        Ipv4Addr::new(10, 0, 0, 0),
+        Ipv4Addr::new(10, 0, 0, 0),
+        1,
+    ));
+    rt.add_route(Entry::new(
+        Ipv4Addr::new(10, 0, 0, 1),
+        Ipv4Addr::new(10, 0, 0, 1),
+        1,
+    ));
+    rt.add_route(Entry::new(
+        Ipv4Addr::new(10, 0, 0, 2),
+        Ipv4Addr::new(10, 0, 0, 2),
+        1,
+    ));
+    rt.add_route(Entry::new(
+        Ipv4Addr::new(10, 0, 0, 3),
+        Ipv4Addr::new(10, 0, 0, 3),
+        1,
+    ));
     rt
     // TODO: delete before submission
 }
 
 pub fn bootstrap_interface_table() -> InterfaceTable {
     let mut it = InterfaceTable::new();
-    it.add_interface(Interface::new(0, Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 1), 0));
-    it.add_interface(Interface::new(1, Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 0), 0));
-    it.add_interface(Interface::new(2, Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 0, 0, 3), 0));
-    it.add_interface(Interface::new(3, Ipv4Addr::new(10, 0, 0, 3), Ipv4Addr::new(10, 0, 0, 2), 0));
+    it.add_interface(Interface::new(
+        0,
+        Ipv4Addr::new(10, 0, 0, 0),
+        Ipv4Addr::new(10, 0, 0, 1),
+        0,
+    ));
+    it.add_interface(Interface::new(
+        1,
+        Ipv4Addr::new(10, 0, 0, 1),
+        Ipv4Addr::new(10, 0, 0, 0),
+        0,
+    ));
+    it.add_interface(Interface::new(
+        2,
+        Ipv4Addr::new(10, 0, 0, 2),
+        Ipv4Addr::new(10, 0, 0, 3),
+        0,
+    ));
+    it.add_interface(Interface::new(
+        3,
+        Ipv4Addr::new(10, 0, 0, 3),
+        Ipv4Addr::new(10, 0, 0, 2),
+        0,
+    ));
     it
 }

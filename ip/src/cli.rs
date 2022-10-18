@@ -1,7 +1,6 @@
-
+use crate::route::{bootstrap_interface_table, bootstrap_routing_table};
+use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
-use rustyline::{Editor, error::ReadlineError};
-use crate::route::{bootstrap_routing_table, bootstrap_interface_table};
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -111,18 +110,14 @@ impl Cli {
                     payload: payload.to_string(),
                 }))
             }
-            "q" => {
-                Some(Command::Quit)
-            }
-            _ => {
-                None
-            }
-        }
+            "q" => Some(Command::Quit),
+            _ => None,
+        };
     }
 
-    fn execute_command(&self, cmd: Command)  {
+    fn execute_command(&self, cmd: Command) {
         match cmd {
-            Command:: ListInterface(op) => {
+            Command::ListInterface(op) => {
                 self.print_interfaces(op);
             }
             Command::ListRoute(op) => {
@@ -135,7 +130,10 @@ impl Cli {
                 eprintln!("Turning up interface {}", interface);
             }
             Command::Send(cmd) => {
-                eprintln!("Sending packet {} with protocol {} to {}", cmd.payload, cmd.protocol, cmd.virtual_ip);
+                eprintln!(
+                    "Sending packet {} with protocol {} to {}",
+                    cmd.payload, cmd.protocol, cmd.virtual_ip
+                );
             }
             Command::Quit => {
                 eprintln!("Quitting");

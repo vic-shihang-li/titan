@@ -1,6 +1,6 @@
 mod cli;
-mod route;
 mod net;
+mod route;
 
 use ip::Args;
 
@@ -9,7 +9,7 @@ async fn main() {
     let _args = match Args::try_from(std::env::args()) {
         Ok(a) => {
             eprintln!("Args: {}", a);
-        },
+        }
         Err(e) => {
             eprintln!("Error: {:?}", e);
             eprintln!("Usage: ./node <lnx-file>");
