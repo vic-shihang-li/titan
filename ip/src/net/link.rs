@@ -1,9 +1,29 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use tokio::net::UdpSocket;
+use etherparse::{Ipv4Header, PacketBuilder};
+use tokio::{net::UdpSocket, sync::Mutex};
+
+use crate::rip::RipMessage;
 
 use super::utils::localhost_with_port;
+
+pub enum ProtocolPayload {
+    RIP(RipMessage),
+    Test(String),
+}
+
+impl ProtocolPayload {
+    fn into_bytes(self) -> (u8, Vec<u8>) {
+        // TODO: handle rip and test protocol message serialization here
+        match self {
+            ProtocolPayload::RIP(_) => (200, Vec::new()),
+            ProtocolPayload::Test(_) => (0, Vec::new()),
+        }
+    }
+}
+
+const TTL: u8 = 15;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LinkDefinition {
@@ -15,7 +35,6 @@ pub struct LinkDefinition {
     pub dest_ip: Ipv4Addr,
 }
 
-#[derive(Clone, Debug)]
 pub struct Link {
     dest_port: u16,
     dest_virtual_ip: Ipv4Addr,
@@ -75,9 +94,28 @@ impl LinkDefinition {
 }
 
 impl Link {
-    pub async fn send(&self, bytes: &[u8]) {
+    /// On this link, send a message conforming to one of the supporte protocols.
+    pub async fn send(&self, payload: ProtocolPayload) {
+        let mut buf = Vec::new();
+
+        let (protocol, payload) = payload.into_bytes();
+
+        let ip_header = Ipv4Header::new(
+            payload.len().try_into().expect("payload too long"),
+            TTL,
+            protocol,
+            self.src_virtual_ip.octets(),
+            self.dest_virtual_ip.octets(),
+        );
+
+        ip_header
+            .write(&mut buf)
+            .expect("IP header serialization error");
+
+        buf.extend_from_slice(&payload);
+
         self.sock
-            .send_to(bytes, localhost_with_port(self.dest_port))
+            .send_to(&buf[..], localhost_with_port(self.dest_port))
             .await
             .unwrap();
     }

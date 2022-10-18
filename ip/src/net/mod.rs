@@ -93,7 +93,6 @@ async fn send_periodic_updates() {
     loop {
         for link in &*iter_links().await {
             // TODO: send periodic update payload
-            link.send(&[1, 2, 3, 4]).await;
         }
         tokio::time::sleep(interval).await;
     }
