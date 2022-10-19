@@ -72,8 +72,7 @@ impl<'a> Deref for LinkIter<'a> {
 ///
 /// The received data is a packet in its binary format.
 pub async fn listen() -> Receiver<Vec<u8>> {
-    let (tx, rx) = broadcast::channel(100);
-    rx
+    NET.listen().await
 }
 
 struct Net {
