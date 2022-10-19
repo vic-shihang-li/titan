@@ -33,6 +33,10 @@ pub enum Error {
     LinkInactive,
 }
 
+pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
+    NET.links.read().await
+}
+
 /// Send bytes to a destination.
 ///
 /// The destination is typically the next-hop address for a packet.
