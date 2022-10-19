@@ -11,7 +11,6 @@ lazy_static! {
     static ref ROUTING_TABLE: RwLock<Vec<Entry>> = RwLock::new(Vec::new());
 }
 
-
 pub async fn get_routing_table() -> RwLockReadGuard<'static, Vec<Entry>> {
     ROUTING_TABLE.read().await
 }
@@ -121,7 +120,7 @@ impl Router {
     }
 
     fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
-        self.addrs.iter().find(|&a| a == addr).is_some()
+        self.addrs.iter().any(|a| a == addr)
     }
 }
 
