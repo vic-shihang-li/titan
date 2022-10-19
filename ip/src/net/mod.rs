@@ -20,6 +20,12 @@ lazy_static! {
     static ref LINKS: RwLock<Vec<Link>> = RwLock::new(Vec::new());
 }
 
+pub type Result<T> = core::result::Result<T, Error>;
+
+pub enum Error {
+    LinkNotFound,
+}
+
 /// Send bytes to a destination.
 ///
 /// The destination is typically the next-hop address for a packet.
@@ -28,13 +34,27 @@ pub fn send(bytes: &[u8], dest: Ipv4Addr) {
 }
 
 /// Turns on a link interface.
-pub fn activate(link_no: u16) {
-    todo!()
+pub async fn activate(link_no: u16) -> Result<()> {
+    let mut links = LINKS.write().await;
+    let link_no = link_no as usize;
+    if link_no >= links.len() {
+        Err(Error::LinkNotFound)
+    } else {
+        links[link_no].deactivate();
+        Ok(())
+    }
 }
 
 /// Turns off a link interface.
-pub fn deactivate(link_no: u16) {
-    todo!()
+pub async fn deactivate(link_no: u16) -> Result<()> {
+    let mut links = LINKS.write().await;
+    let link_no = link_no as usize;
+    if link_no >= links.len() {
+        Err(Error::LinkNotFound)
+    } else {
+        links[link_no].activate();
+        Ok(())
+    }
 }
 
 /// Iterate all links (both active and inactive) for this host.

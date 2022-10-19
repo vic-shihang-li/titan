@@ -39,6 +39,7 @@ pub struct Link {
     dest_port: u16,
     dest_virtual_ip: Ipv4Addr,
     src_virtual_ip: Ipv4Addr,
+    activated: bool,
     sock: Arc<UdpSocket>,
 }
 
@@ -88,14 +89,23 @@ impl LinkDefinition {
             dest_port: self.dest_port,
             dest_virtual_ip: self.dest_ip,
             src_virtual_ip: self.interface_ip,
+            activated: true,
             sock: udp_socket,
         }
     }
 }
 
+pub enum SendError {
+    LinkInactive,
+}
+
 impl Link {
-    /// On this link, send a message conforming to one of the supporte protocols.
-    pub async fn send(&self, payload: ProtocolPayload) {
+    /// On this link, send a message conforming to one of the supported protocols.
+    pub async fn send(&self, payload: ProtocolPayload) -> Result<(), SendError> {
+        if !self.activated {
+            return Err(SendError::LinkInactive);
+        }
+
         let mut buf = Vec::new();
 
         let (protocol, payload) = payload.into_bytes();
@@ -118,5 +128,15 @@ impl Link {
             .send_to(&buf[..], localhost_with_port(self.dest_port))
             .await
             .unwrap();
+
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.activated = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.activated = false;
     }
 }
