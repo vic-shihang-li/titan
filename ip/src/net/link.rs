@@ -139,4 +139,8 @@ impl Link {
     pub fn deactivate(&mut self) {
         self.activated = false;
     }
+
+    pub fn dest(&self) -> Ipv4Addr {
+        self.dest_virtual_ip
+    }
 }
