@@ -217,7 +217,7 @@ impl ProtocolHandler for RipHandler {
 
         let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
         for link in &*iter_links().await {
-            link.send(update_msg.clone().into());
+            link.send(update_msg.clone().into()).await;
         }
     }
 }
