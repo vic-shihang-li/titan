@@ -1,5 +1,5 @@
 use crate::protocol::Protocol;
-use crate::{net, net::LinkDefinition, Args};
+use crate::{net, Args};
 use etherparse::{InternetSlice, Ipv4HeaderSlice, PacketHeaders, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
@@ -98,18 +98,20 @@ impl Router {
                 }
 
                 let ip = packet.ip.unwrap();
+                let payload = packet.payload;
+
                 match ip {
-                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, bytes),
+                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, payload, bytes),
                     InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
                 };
             }
         }
     }
 
-    fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, packet_bytes: &[u8]) {
-        match self.decide_packet(&header) {
+    fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8], packet_bytes: &[u8]) {
+        match self.decide_packet(header) {
             PacketDecision::Drop => {}
-            PacketDecision::Consume => self.consume_packet(header, packet_bytes),
+            PacketDecision::Consume => self.consume_packet(header, payload),
             PacketDecision::Forward => self.forward_packet(),
         }
     }
@@ -132,11 +134,11 @@ impl Router {
         self.addrs.iter().any(|a| a == addr)
     }
 
-    fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, packet_bytes: &[u8]) {
+    fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         match header.protocol().try_into() {
             Ok(protocol) => match self.protocol_handlers.get(&protocol) {
                 Some(handler) => {
-                    handler.handle_packet(&packet_bytes);
+                    handler.handle_packet(&payload);
                 }
                 None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
             },

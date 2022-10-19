@@ -86,6 +86,13 @@ impl Message for RipMessage {
         assert!(bytes.len() >= 2, "Missing num entries byte");
         let num_entries: u8 = bytes[1];
 
+        if command == Command::Request {
+            assert!(
+                num_entries == 0,
+                "request RIP message cannot have any entries"
+            );
+        }
+
         assert!(
             bytes.len() >= 2 + num_entries as usize * Entry::serialized_size(),
             "Missing entry bytes"
@@ -146,6 +153,8 @@ impl ProtocolHandler for RipHandler {
         // TODO:
         // 1. update the routing table (what APIs does the routing module need to provide?)
         // 2. send out triggered updates (use `net::iter_links()` and `link.send(rip_message)`)
+
+        let message = RipMessage::from_bytes(payload);
     }
 }
 
