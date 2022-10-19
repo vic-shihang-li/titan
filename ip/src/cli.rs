@@ -1,6 +1,9 @@
+<<<<<<< HEAD
 use std::fs::File;
 use std::io::Write;
 use crate::route::{get_routing_table};
+=======
+>>>>>>> 3f336a6d48ece6c1cc3396fb33fe33f91e292c46
 use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
@@ -105,8 +108,12 @@ impl Cli {
         }
     }
 
+<<<<<<< HEAD
     async fn print_interfaces(&self, file: Option<String>) {
         let li = get_interfaces().await;
+=======
+    fn print_interfaces(&self, file: Option<String>) {
+>>>>>>> 3f336a6d48ece6c1cc3396fb33fe33f91e292c46
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
@@ -136,16 +143,19 @@ impl Cli {
             }
             None => {
                 println!("dest\t\tnext\t\tcost");
-                for x in 0..lr.len() {
-                    println!("{}",lr[x])
+                for r in lr {
+                    println!("{}", r);
                 }
             }
         }
     }
 }
 
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> 3f336a6d48ece6c1cc3396fb33fe33f91e292c46
 fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
     match cmd {
         "li" => {
@@ -212,13 +222,11 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
                     let protocol = protocol.parse::<u16>();
 
                     match (virtual_ip, protocol) {
-                        (Ok(virtual_ip), Ok(protocol)) => {
-                            Some(Command::Send(SendCmd {
-                                virtual_ip,
-                                protocol,
-                                payload: payload.to_string(),
-                            }))
-                        }
+                        (Ok(virtual_ip), Ok(protocol)) => Some(Command::Send(SendCmd {
+                            virtual_ip,
+                            protocol,
+                            payload: payload.to_string(),
+                        })),
                         _ => None, // TODO replace with error
                     }
                 }

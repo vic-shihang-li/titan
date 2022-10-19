@@ -146,6 +146,10 @@ impl Link {
     pub fn dest(&self) -> Ipv4Addr {
         self.dest_virtual_ip
     }
+
+    pub fn clone_socket(&self) -> Arc<UdpSocket> {
+        self.sock.clone()
+    }
 }
 
 impl fmt::Display for Link {

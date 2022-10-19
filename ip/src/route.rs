@@ -1,4 +1,5 @@
 use crate::{net, net::LinkDefinition, Args};
+use etherparse::{InternetSlice, SlicedPacket};
 use lazy_static::lazy_static;
 use std::fmt;
 use std::{net::Ipv4Addr, time::Instant};
@@ -52,11 +53,28 @@ pub struct Router {}
 
 impl Router {
     async fn run(&self) {
-        while let Ok(bytes) = net::listen().recv().await {
+        while let Ok(bytes) = net::listen().await.recv().await {
             // 0. parse bytes to packet
             // 1. drop if packet is not valid or TTL = 0
             // 2. if packet is for "me", pass packet to the correct protocol handler
             // 3. if forwarding table has rule for packet, send to the next-hop interface
+
+            match SlicedPacket::from_ip(&bytes) {
+                Err(value) => eprintln!("Err {:?}", value),
+                Ok(packet) => {
+                    eprintln!("ip: {:?}", packet.ip);
+
+                    if packet.ip.is_none() {
+                        eprintln!("Packet has no IP fields");
+                        continue;
+                    }
+                    let ip = packet.ip.unwrap();
+                    match ip {
+                        InternetSlice::Ipv4(headers, _) => {}
+                        InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
+                    };
+                }
+            }
         }
     }
 }
