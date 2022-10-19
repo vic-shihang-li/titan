@@ -87,10 +87,7 @@ impl Message for RipMessage {
         let num_entries: u8 = bytes[1];
 
         if command == Command::Request {
-            assert!(
-                num_entries == 0,
-                "request RIP message cannot have any entries"
-            );
+            assert_eq!(num_entries, 0, "request RIP message cannot have any entries");
         }
 
         assert!(
