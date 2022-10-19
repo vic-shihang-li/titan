@@ -48,3 +48,9 @@ impl ProtocolPayload {
         }
     }
 }
+
+impl From<RipMessage> for ProtocolPayload {
+    fn from(m: RipMessage) -> Self {
+        ProtocolPayload::Rip(m)
+    }
+}

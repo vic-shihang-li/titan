@@ -1,8 +1,16 @@
-use crate::route::ProtocolHandler;
+use async_trait::async_trait;
+use etherparse::Ipv4HeaderSlice;
+
+use crate::{
+    net::iter_links,
+    route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
+};
 
 use std::net::Ipv4Addr;
 
 use crate::Message;
+
+const MAX_COST: u32 = 16;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
@@ -56,6 +64,30 @@ impl TryFrom<u8> for Command {
             1 => Ok(Command::Request),
             2 => Ok(Command::Response),
             _ => Err(ParseCommandError::BadValue(value)),
+        }
+    }
+}
+
+impl RipMessage {
+    fn from_route_updates(updates: Vec<RoutingEntry>, update_originator: Ipv4Addr) -> Self {
+        let cmd = Command::Response;
+        let entries = updates
+            .iter()
+            .map(|update| {
+                // poisoned reverse
+                let cost = if update.next_hop() == update_originator {
+                    MAX_COST
+                } else {
+                    update.cost()
+                };
+
+                Entry::with_default_mask(cost, update.destination())
+            })
+            .collect();
+
+        Self {
+            command: cmd,
+            entries,
         }
     }
 }
@@ -145,13 +177,45 @@ impl Entry {
 #[derive(Default)]
 pub struct RipHandler {}
 
+#[async_trait]
 impl ProtocolHandler for RipHandler {
-    fn handle_packet(&self, payload: &[u8]) {
-        // TODO:
-        // 1. update the routing table (what APIs does the routing module need to provide?)
-        // 2. send out triggered updates (use `net::iter_links()` and `link.send(rip_message)`)
-
+    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let message = RipMessage::from_bytes(payload);
+        let next_hop = header.source_addr();
+
+        let mut rt = get_routing_table_mut().await;
+
+        let mut updates = Vec::new();
+
+        // RIP protocol implementation.
+        // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
+        for entry in &message.entries {
+            match rt.find_mut_entry_for(entry.address) {
+                Some(found) => {
+                    if entry.cost < found.cost() {
+                        found.update(next_hop, entry.cost);
+                        updates.push(*found);
+                    } else if entry.cost > found.cost() {
+                        if found.next_hop() == next_hop {
+                            found.update(next_hop, entry.cost);
+                            updates.push(*found);
+                        }
+                    }
+                }
+                None => {
+                    let dest = entry.address;
+                    let cost = entry.cost + 1;
+                    let entry = RoutingEntry::new(dest, next_hop, cost);
+                    rt.add_entry(entry);
+                    updates.push(entry);
+                }
+            }
+        }
+
+        let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
+        for link in &*iter_links().await {
+            link.send(update_msg.clone().into()).await.ok();
+        }
     }
 }
 

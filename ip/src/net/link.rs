@@ -5,7 +5,6 @@ use std::sync::Arc;
 use etherparse::Ipv4Header;
 use tokio::net::UdpSocket;
 
-use crate::protocol::rip::RipMessage;
 use crate::protocol::ProtocolPayload;
 
 use super::utils::localhost_with_port;
