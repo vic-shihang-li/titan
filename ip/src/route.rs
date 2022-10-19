@@ -134,7 +134,7 @@ impl fmt::Display for Entry {
 }
 
 pub trait ProtocolHandler: Send {
-    fn handle_packet(&self, packet: &[u8]);
+    fn handle_packet(&self, payload: &[u8]);
 }
 
 /// Provide a handler for a protocol.
