@@ -1,6 +1,6 @@
 pub mod cli;
 pub mod net;
-mod protocol;
+pub mod protocol;
 mod rip;
 pub mod route;
 

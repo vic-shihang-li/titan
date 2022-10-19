@@ -1,6 +1,8 @@
+use crate::protocol::Protocol;
 use crate::{net, net::LinkDefinition, Args};
-use etherparse::{InternetSlice, SlicedPacket};
+use etherparse::{InternetSlice, Ipv4HeaderSlice, PacketHeaders, SlicedPacket};
 use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt;
 use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard};
@@ -8,7 +10,6 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 lazy_static! {
     static ref ROUTING_TABLE: RwLock<Vec<Entry>> = RwLock::new(Vec::new());
 }
-
 
 pub async fn get_routing_table() -> RwLockReadGuard<'static, Vec<Entry>> {
     ROUTING_TABLE.read().await
@@ -38,21 +39,43 @@ impl fmt::Display for Entry {
     }
 }
 
-pub trait ProtocolHandler: Send {
+pub trait ProtocolHandler: Send + Sync {
     fn handle_packet(&self, payload: &[u8]);
 }
 
-/// Provide a handler for a protocol.
-///
-/// Replaces any handler that is associated with the protocol.
-pub fn register_handler<H: ProtocolHandler + 'static>(protocol: u8, handler: H) {
-    todo!()
+enum PacketDecision {
+    Drop,
+    Forward,
+    Consume,
 }
 
-pub struct Router {}
+pub struct Router {
+    addrs: Vec<Ipv4Addr>,
+    protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
+}
 
 impl Router {
-    async fn run(&self) {
+    pub fn new(addrs: &[Ipv4Addr]) -> Self {
+        // TODO: spawn thread for cleaning up old routing table entries.
+
+        Self {
+            addrs: addrs.into(),
+            protocol_handlers: HashMap::new(),
+        }
+    }
+
+    /// Provide a handler for a protocol.
+    ///
+    /// Replaces any handler that is associated with the protocol.
+    pub fn register_handler<H: ProtocolHandler + 'static>(
+        &mut self,
+        protocol: Protocol,
+        handler: H,
+    ) {
+        self.protocol_handlers.insert(protocol, Box::new(handler));
+    }
+
+    pub async fn run(&self) {
         while let Ok(bytes) = net::listen().await.recv().await {
             // 0. parse bytes to packet
             // 1. drop if packet is not valid or TTL = 0
@@ -70,12 +93,34 @@ impl Router {
                     }
                     let ip = packet.ip.unwrap();
                     match ip {
-                        InternetSlice::Ipv4(headers, _) => {}
+                        InternetSlice::Ipv4(header, _) => match self.decide_packet(header) {
+                            PacketDecision::Drop => {}
+                            PacketDecision::Consume => {}
+                            PacketDecision::Forward => {}
+                        },
                         InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
                     };
                 }
             }
         }
+    }
+
+    fn decide_packet<'a>(&self, header: Ipv4HeaderSlice<'a>) -> PacketDecision {
+        if header.ttl() == 0 {
+            return PacketDecision::Drop;
+        }
+
+        // TODO: if checksum is incorrect, drop.
+
+        if self.is_my_addr(&header.destination_addr()) {
+            return PacketDecision::Consume;
+        }
+
+        PacketDecision::Forward
+    }
+
+    fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
+        self.addrs.iter().any(|a| a == addr)
     }
 }
 

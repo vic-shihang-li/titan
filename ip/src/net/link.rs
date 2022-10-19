@@ -1,28 +1,14 @@
 use std::fmt;
-use crate::Message;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use etherparse::Ipv4Header;
 use tokio::net::UdpSocket;
 
+use crate::protocol::ProtocolPayload;
 use crate::rip::RipMessage;
 
 use super::utils::localhost_with_port;
-
-pub enum ProtocolPayload {
-    Rip(RipMessage),
-    Test(String),
-}
-
-impl ProtocolPayload {
-    fn into_bytes(self) -> (u8, Vec<u8>) {
-        match self {
-            ProtocolPayload::Rip(msg) => (200, msg.into_bytes()),
-            ProtocolPayload::Test(s) => (0, s.into_bytes()),
-        }
-    }
-}
 
 const TTL: u8 = 15;
 
@@ -158,7 +144,7 @@ impl fmt::Display for Link {
         write!(
             f,
             "{}\t{}\t{}\t{}",
-            state, self.src_virtual_ip, self.dest_virtual_ip,  self.dest_port
+            state, self.src_virtual_ip, self.dest_virtual_ip, self.dest_port
         )
     }
 }

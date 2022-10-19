@@ -2,8 +2,9 @@ mod args;
 mod link;
 mod utils;
 
+use crate::protocol::ProtocolPayload;
 pub use args::Args;
-pub use link::{Link, LinkDefinition, ProtocolPayload};
+pub use link::{Link, LinkDefinition};
 use std::ops::Deref;
 use std::time::Duration;
 use utils::localhost_with_port;

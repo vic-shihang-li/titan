@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     fs::File,
     io::{BufRead, BufReader},
+    net::Ipv4Addr,
 };
 
 use crate::net::link::{LinkDefinition, ParseLinkError};
@@ -65,6 +66,10 @@ impl Args {
             host_port: port,
             links,
         })
+    }
+
+    pub fn get_ip_addrs(&self) -> Vec<Ipv4Addr> {
+        self.links.iter().map(|l| l.interface_ip).collect()
     }
 }
 
