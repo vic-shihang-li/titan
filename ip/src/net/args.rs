@@ -7,7 +7,7 @@ use std::{
 use crate::net::link::{LinkDefinition, ParseLinkError};
 
 /// Input to a router; used to establish a router's interfaces.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Args {
     /// The port where this host runs.
     pub host_port: u16,

@@ -1,5 +1,6 @@
 use ip::cli;
 use ip::net;
+use ip::route;
 use ip::Args;
 
 #[tokio::main]
@@ -16,7 +17,8 @@ async fn main() {
         }
     };
 
-    net::bootstrap(args);
+    net::bootstrap(&args).await;
+    route::bootstrap(&args).await;
 
     let cli = cli::Cli::new();
     cli.run().await;

@@ -3,7 +3,8 @@ mod link;
 mod utils;
 
 pub use args::Args;
-use link::{Link, LinkDefinition, ProtocolPayload};
+pub use link::{Link, LinkDefinition};
+use link::{Link, ProtocolPayload};
 use std::ops::Deref;
 use std::time::Duration;
 use utils::localhost_with_port;
@@ -107,13 +108,8 @@ async fn bootstrap_net(args: &Args) {
     }
 }
 
-pub fn bootstrap(args: Args) {
-    tokio::spawn(async move {
-        bootstrap_net(&args).await;
-        tokio::spawn(async {
-            send_periodic_updates().await;
-        });
-    });
+pub async fn bootstrap(args: &Args) {
+    bootstrap_net(args).await;
 }
 
 async fn send_periodic_updates() {

@@ -1,6 +1,12 @@
-use crate::net;
+use crate::{net, net::LinkDefinition, Args};
+use lazy_static::lazy_static;
 use std::fmt;
 use std::{net::Ipv4Addr, time::Instant};
+use tokio::sync::RwLock;
+
+lazy_static! {
+    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::new());
+}
 
 pub struct InterfaceTable {
     interfaces: Vec<Interface>,
@@ -157,59 +163,14 @@ impl Router {
     }
 }
 
-// For testing only, not part of the API
-pub fn bootstrap_routing_table() -> RoutingTable {
-    let mut rt = RoutingTable::new();
-    rt.add_route(Entry::new(
-        Ipv4Addr::new(10, 0, 0, 0),
-        Ipv4Addr::new(10, 0, 0, 0),
-        1,
-    ));
-    rt.add_route(Entry::new(
-        Ipv4Addr::new(10, 0, 0, 1),
-        Ipv4Addr::new(10, 0, 0, 1),
-        1,
-    ));
-    rt.add_route(Entry::new(
-        Ipv4Addr::new(10, 0, 0, 2),
-        Ipv4Addr::new(10, 0, 0, 2),
-        1,
-    ));
-    rt.add_route(Entry::new(
-        Ipv4Addr::new(10, 0, 0, 3),
-        Ipv4Addr::new(10, 0, 0, 3),
-        1,
-    ));
-    rt
-    // TODO: delete before submission
-}
+pub async fn bootstrap(args: &Args) {
+    let mut rt = ROUTING_TABLE.write().await;
 
-pub fn bootstrap_interface_table() -> InterfaceTable {
-    let mut it = InterfaceTable::new();
-    it.add_interface(Interface::new(
-        0,
-        Ipv4Addr::new(10, 0, 0, 0),
-        Ipv4Addr::new(10, 0, 0, 1),
-        0,
-    ));
-    it.add_interface(Interface::new(
-        1,
-        Ipv4Addr::new(10, 0, 0, 1),
-        Ipv4Addr::new(10, 0, 0, 0),
-        0,
-    ));
-    it.add_interface(Interface::new(
-        2,
-        Ipv4Addr::new(10, 0, 0, 2),
-        Ipv4Addr::new(10, 0, 0, 3),
-        0,
-    ));
-    it.add_interface(Interface::new(
-        3,
-        Ipv4Addr::new(10, 0, 0, 3),
-        Ipv4Addr::new(10, 0, 0, 2),
-        0,
-    ));
-    it
-    // TODO delete before submission
+    for link in &args.links {
+        // Add entry to my interface with a cost of 0.
+        rt.add_route(Entry::new(link.interface_ip, link.interface_ip, 0));
+
+        // Add entry to my neighbor with a cost of 1.
+        rt.add_route(Entry::new(link.dest_ip, link.dest_ip, 1));
+    }
 }
