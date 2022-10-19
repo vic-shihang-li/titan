@@ -97,6 +97,7 @@ impl Display for Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn parse_link_file() {

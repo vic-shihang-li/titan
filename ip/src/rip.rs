@@ -1,10 +1,159 @@
-struct Entry {
+use std::net::Ipv4Addr;
+
+use crate::Message;
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub struct Entry {
     cost: u32,
     address: u32,
     mask: u32,
 }
 
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub enum Command {
+    Request,
+    Response,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct RipMessage {
-    command: u16,
+    command: Command,
     entries: Vec<Entry>,
+}
+
+impl Into<u8> for Command {
+    fn into(self) -> u8 {
+        match self {
+            Command::Request => 1,
+            Command::Response => 2,
+        }
+    }
+}
+
+impl Entry {
+    /// Constructs a RIP message entry with a mask of 255.255.255.255.
+    pub fn with_default_mask(cost: u32, address: Ipv4Addr) -> Self {
+        Self {
+            cost,
+            address: u32::from_be_bytes(address.octets()),
+            mask: u32::MAX,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ParseCommandError {
+    BadValue(u8),
+}
+
+impl TryFrom<u8> for Command {
+    type Error = ParseCommandError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Command::Request),
+            2 => Ok(Command::Response),
+            _ => Err(ParseCommandError::BadValue(value)),
+        }
+    }
+}
+
+impl Message for RipMessage {
+    fn into_bytes(self) -> Vec<u8> {
+        let mut v = Vec::new();
+
+        v.push(self.command.into());
+        v.push(
+            self.entries
+                .len()
+                .try_into()
+                .expect("RIP message has too many entries"),
+        );
+
+        for entry in self.entries {
+            v.append(&mut entry.into_bytes());
+        }
+
+        v
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        assert!(bytes.len() >= 1, "Missing command byte");
+        let command = Command::try_from(bytes[0]).expect("Bad command type");
+
+        assert!(bytes.len() >= 2, "Missing num entries byte");
+        let num_entries: u8 = bytes[1];
+
+        assert!(
+            bytes.len() >= 2 + num_entries as usize * Entry::serialized_size(),
+            "Missing entry bytes"
+        );
+
+        let mut entries = Vec::new();
+        let mut start = 2;
+        let mut remaining_entries = num_entries;
+        while remaining_entries > 0 {
+            let entry = Entry::from_bytes(&bytes[start..start + Entry::serialized_size()]);
+            entries.push(entry);
+            remaining_entries -= 1;
+            start += Entry::serialized_size();
+        }
+
+        Self { command, entries }
+    }
+}
+
+impl Message for Entry {
+    fn into_bytes(self) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&self.cost.to_be_bytes());
+        v.extend_from_slice(&self.address.to_be_bytes());
+        v.extend_from_slice(&self.mask.to_be_bytes());
+        v
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        assert!(
+            bytes.len() >= Entry::serialized_size(),
+            "Not enough bytes for Entry"
+        );
+
+        let cost = u32::from_be_bytes(bytes[..4].try_into().unwrap());
+        let address = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
+        let mask = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+
+        Self {
+            cost,
+            address,
+            mask,
+        }
+    }
+}
+
+impl Entry {
+    fn serialized_size() -> usize {
+        12
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rip_message_serde() {
+        let msg = RipMessage {
+            command: Command::Request,
+            entries: vec![
+                Entry::with_default_mask(1, Ipv4Addr::new(127, 0, 1, 2)),
+                Entry::with_default_mask(8, Ipv4Addr::new(3, 4, 5, 6)),
+            ],
+        };
+        let m = msg.clone();
+
+        let bytes = msg.into_bytes();
+        let parsed = RipMessage::from_bytes(&bytes);
+
+        assert_eq!(m, parsed);
+    }
 }

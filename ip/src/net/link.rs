@@ -1,3 +1,4 @@
+use crate::Message;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -17,8 +18,8 @@ impl ProtocolPayload {
     fn into_bytes(self) -> (u8, Vec<u8>) {
         // TODO: handle rip and test protocol message serialization here
         match self {
-            ProtocolPayload::RIP(_) => (200, Vec::new()),
-            ProtocolPayload::Test(_) => (0, Vec::new()),
+            ProtocolPayload::RIP(msg) => (200, msg.into_bytes()),
+            ProtocolPayload::Test(s) => (0, s.into_bytes()),
         }
     }
 }
