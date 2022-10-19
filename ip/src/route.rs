@@ -82,37 +82,35 @@ impl Router {
             // 2. if packet is for "me", pass packet to the correct protocol handler
             // 3. if forwarding table has rule for packet, send to the next-hop interface
 
-            match SlicedPacket::from_ip(&bytes) {
-                Err(value) => eprintln!("Err {:?}", value),
-                Ok(packet) => {
-                    eprintln!("ip: {:?}", packet.ip);
+            self.handle_packet_bytes(&bytes);
+        }
+    }
 
-                    if packet.ip.is_none() {
-                        eprintln!("Packet has no IP fields");
-                        continue;
-                    }
-                    let ip = packet.ip.unwrap();
-                    match ip {
-                        InternetSlice::Ipv4(header, _) => match self.decide_packet(&header) {
-                            PacketDecision::Drop => {}
-                            PacketDecision::Consume => match header.protocol().try_into() {
-                                Ok(protocol) => match self.protocol_handlers.get(&protocol) {
-                                    Some(handler) => {
-                                        handler.handle_packet(&bytes);
-                                    }
-                                    None => eprintln!(
-                                        "Warning: no protocol handler for protocol {:?}",
-                                        protocol
-                                    ),
-                                },
-                                Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
-                            },
-                            PacketDecision::Forward => {}
-                        },
-                        InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
-                    };
+    fn handle_packet_bytes(&self, bytes: &[u8]) {
+        match SlicedPacket::from_ip(bytes) {
+            Err(value) => eprintln!("Err {:?}", value),
+            Ok(packet) => {
+                eprintln!("ip: {:?}", packet.ip);
+
+                if packet.ip.is_none() {
+                    eprintln!("Packet has no IP fields");
+                    return;
                 }
+
+                let ip = packet.ip.unwrap();
+                match ip {
+                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, bytes),
+                    InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
+                };
             }
+        }
+    }
+
+    fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, packet_bytes: &[u8]) {
+        match self.decide_packet(&header) {
+            PacketDecision::Drop => {}
+            PacketDecision::Consume => self.consume_packet(header, packet_bytes),
+            PacketDecision::Forward => self.forward_packet(),
         }
     }
 
@@ -132,6 +130,22 @@ impl Router {
 
     fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
         self.addrs.iter().any(|a| a == addr)
+    }
+
+    fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, packet_bytes: &[u8]) {
+        match header.protocol().try_into() {
+            Ok(protocol) => match self.protocol_handlers.get(&protocol) {
+                Some(handler) => {
+                    handler.handle_packet(&packet_bytes);
+                }
+                None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
+            },
+            Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
+        }
+    }
+
+    fn forward_packet(&self) {
+        todo!()
     }
 }
 
