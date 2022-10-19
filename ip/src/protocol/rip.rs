@@ -1,11 +1,16 @@
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
-use crate::route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler};
+use crate::{
+    net::iter_links,
+    route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
+};
 
-use std::net::Ipv4Addr;
+use std::{error::Error, net::Ipv4Addr};
 
 use crate::Message;
+
+const MAX_COST: u32 = 16;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
@@ -59,6 +64,30 @@ impl TryFrom<u8> for Command {
             1 => Ok(Command::Request),
             2 => Ok(Command::Response),
             _ => Err(ParseCommandError::BadValue(value)),
+        }
+    }
+}
+
+impl RipMessage {
+    fn from_route_updates(updates: Vec<RoutingEntry>, update_originator: Ipv4Addr) -> Self {
+        let cmd = Command::Response;
+        let entries = updates
+            .iter()
+            .map(|update| {
+                // poisoned reverse
+                let cost = if update.next_hop() == update_originator {
+                    MAX_COST
+                } else {
+                    update.cost()
+                };
+
+                Entry::with_default_mask(cost, update.destination())
+            })
+            .collect();
+
+        Self {
+            command: cmd,
+            entries,
         }
     }
 }
@@ -163,6 +192,8 @@ impl ProtocolHandler for RipHandler {
 
         let mut rt = get_routing_table_mut().await;
 
+        let mut updates = Vec::new();
+
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
@@ -170,18 +201,27 @@ impl ProtocolHandler for RipHandler {
                 Some(found) => {
                     if entry.cost < found.cost() {
                         found.update(next_hop, entry.cost);
+                        updates.push(*found);
                     } else if entry.cost > found.cost() {
                         if found.next_hop() == next_hop {
                             found.update(next_hop, entry.cost);
+                            updates.push(*found);
                         }
                     }
                 }
                 None => {
                     let dest = entry.address;
                     let cost = entry.cost + 1;
-                    rt.add_entry(RoutingEntry::new(dest, next_hop, cost));
+                    let entry = RoutingEntry::new(dest, next_hop, cost);
+                    rt.add_entry(entry);
+                    updates.push(entry);
                 }
             }
+        }
+
+        let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
+        for link in &*iter_links().await {
+            link.send(update_msg.clone().into());
         }
     }
 }

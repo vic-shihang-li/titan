@@ -44,6 +44,7 @@ impl RoutingTable {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Entry {
     destination: Ipv4Addr,
     next_hop: Ipv4Addr,
@@ -59,6 +60,10 @@ impl Entry {
             cost,
             last_updated: Instant::now(),
         }
+    }
+
+    pub fn destination(&self) -> Ipv4Addr {
+        self.destination
     }
 
     pub fn cost(&self) -> u32 {
