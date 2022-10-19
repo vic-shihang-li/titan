@@ -33,7 +33,7 @@ pub enum Error {
 }
 
 pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
-    LINKS.read().await
+    NET.links.read().await
 }
 
 /// Send bytes to a destination.
