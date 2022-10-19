@@ -93,9 +93,20 @@ impl Router {
                     }
                     let ip = packet.ip.unwrap();
                     match ip {
-                        InternetSlice::Ipv4(header, _) => match self.decide_packet(header) {
+                        InternetSlice::Ipv4(header, _) => match self.decide_packet(&header) {
                             PacketDecision::Drop => {}
-                            PacketDecision::Consume => {}
+                            PacketDecision::Consume => match header.protocol().try_into() {
+                                Ok(protocol) => match self.protocol_handlers.get(&protocol) {
+                                    Some(handler) => {
+                                        handler.handle_packet(&bytes);
+                                    }
+                                    None => eprintln!(
+                                        "Warning: no protocol handler for protocol {:?}",
+                                        protocol
+                                    ),
+                                },
+                                Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
+                            },
                             PacketDecision::Forward => {}
                         },
                         InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
@@ -105,7 +116,7 @@ impl Router {
         }
     }
 
-    fn decide_packet<'a>(&self, header: Ipv4HeaderSlice<'a>) -> PacketDecision {
+    fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
         if header.ttl() == 0 {
             return PacketDecision::Drop;
         }

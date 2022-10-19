@@ -4,7 +4,7 @@ pub mod test;
 use crate::rip::RipMessage;
 use crate::Message;
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {
     Rip,
     Test,
