@@ -2,6 +2,7 @@ use std::io::Write;
 
 use crate::route::ProtocolHandler;
 
+#[derive(Default)]
 pub struct TestHandler {}
 
 impl ProtocolHandler for TestHandler {

@@ -1,5 +1,6 @@
 use crate::route::ProtocolHandler;
 
+#[derive(Default)]
 pub struct RipHandler {}
 
 impl ProtocolHandler for RipHandler {
