@@ -2,23 +2,22 @@ use crate::Message;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use etherparse::{Ipv4Header, PacketBuilder};
-use tokio::{net::UdpSocket, sync::Mutex};
+use etherparse::Ipv4Header;
+use tokio::net::UdpSocket;
 
 use crate::rip::RipMessage;
 
 use super::utils::localhost_with_port;
 
 pub enum ProtocolPayload {
-    RIP(RipMessage),
+    Rip(RipMessage),
     Test(String),
 }
 
 impl ProtocolPayload {
     fn into_bytes(self) -> (u8, Vec<u8>) {
-        // TODO: handle rip and test protocol message serialization here
         match self {
-            ProtocolPayload::RIP(msg) => (200, msg.into_bytes()),
+            ProtocolPayload::Rip(msg) => (200, msg.into_bytes()),
             ProtocolPayload::Test(s) => (0, s.into_bytes()),
         }
     }
