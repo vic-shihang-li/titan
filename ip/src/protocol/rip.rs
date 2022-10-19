@@ -183,10 +183,6 @@ pub struct RipHandler {}
 #[async_trait]
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        // TODO:
-        // 1. update the routing table (what APIs does the routing module need to provide?)
-        // 2. send out triggered updates (use `net::iter_links()` and `link.send(rip_message)`)
-
         let message = RipMessage::from_bytes(payload);
         let next_hop = header.source_addr();
 
