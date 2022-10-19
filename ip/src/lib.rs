@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod net;
 pub mod protocol;
-mod rip;
 pub mod route;
 
 pub use net::Args;

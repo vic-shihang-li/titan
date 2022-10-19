@@ -1,8 +1,8 @@
 pub mod rip;
 pub mod test;
 
-use crate::rip::RipMessage;
 use crate::Message;
+use rip::RipMessage;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {
