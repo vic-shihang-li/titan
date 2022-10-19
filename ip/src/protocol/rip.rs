@@ -7,8 +7,8 @@ use crate::Message;
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
     cost: u32,
-    address: u32,
-    mask: u32,
+    address: Ipv4Addr,
+    mask: Ipv4Addr,
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -37,8 +37,8 @@ impl Entry {
     pub fn with_default_mask(cost: u32, address: Ipv4Addr) -> Self {
         Self {
             cost,
-            address: u32::from_be_bytes(address.octets()),
-            mask: u32::MAX,
+            address,
+            mask: Ipv4Addr::new(255, 255, 255, 255),
         }
     }
 }
@@ -116,8 +116,8 @@ impl Message for Entry {
     fn into_bytes(self) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(&self.cost.to_be_bytes());
-        v.extend_from_slice(&self.address.to_be_bytes());
-        v.extend_from_slice(&self.mask.to_be_bytes());
+        v.extend_from_slice(&self.address.octets());
+        v.extend_from_slice(&self.mask.octets());
         v
     }
 
@@ -128,8 +128,8 @@ impl Message for Entry {
         );
 
         let cost = u32::from_be_bytes(bytes[..4].try_into().unwrap());
-        let address = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
-        let mask = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let address = Ipv4Addr::from(u32::from_be_bytes(bytes[4..8].try_into().unwrap()));
+        let mask = Ipv4Addr::from(u32::from_be_bytes(bytes[8..12].try_into().unwrap()));
 
         Self {
             cost,
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_rip_message_serde() {
         let msg = RipMessage {
-            command: Command::Request,
+            command: Command::Response,
             entries: vec![
                 Entry::with_default_mask(1, Ipv4Addr::new(127, 0, 1, 2)),
                 Entry::with_default_mask(8, Ipv4Addr::new(3, 4, 5, 6)),
