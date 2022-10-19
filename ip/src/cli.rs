@@ -1,7 +1,10 @@
-use crate::route::{bootstrap_interface_table, bootstrap_routing_table};
+use std::fs::File;
+use std::io::Write;
+use crate::route::{get_routing_table};
 use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
+use crate::net::{activate, deactivate, get_interfaces, send};
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -43,7 +46,7 @@ impl Cli {
                     }
                     match self.parse_command(line) {
                         Some(cmd) => {
-                            self.execute_command(cmd);
+                            self.execute_command(cmd).await;
                         }
                         None => {
                             eprintln!("Invalid command");
@@ -76,13 +79,13 @@ impl Cli {
         cmd_arg_handler(cmd, tokens)
     }
 
-    fn execute_command(&self, cmd: Command) {
+    async fn execute_command(&self, cmd: Command) {
         match cmd {
             Command::ListInterface(op) => {
-                self.print_interfaces(op);
+                self.print_interfaces(op).await;
             }
             Command::ListRoute(op) => {
-                self.print_routes(op);
+                self.print_routes(op).await;
             }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
@@ -102,34 +105,45 @@ impl Cli {
         }
     }
 
-    fn print_interfaces(&self, file: Option<String>) {
-        let it = bootstrap_interface_table();
+    async fn print_interfaces(&self, file: Option<String>) {
+        let li = get_interfaces().await;
         match file {
             Some(file) => {
-                eprintln!("Writing interface information to file {}", file);
-                // TODO: fetch and iterate through interfaces and print, optionally write to file.
+                let mut f = File::create(file).unwrap();
+                f.write(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
+                for x in 0..li.len() {
+                    f.write(format!("{}\t{}\n", x, li[x]).as_bytes()).unwrap();
+                }
             }
             None => {
                 println!("id\tstate\tlocal\t\tremote\t        port");
-                println!("{}", it);
+                for x in 0..li.len() {
+                    println!("{}\t{}",x, li[x])
+                }
             }
         }
     }
 
-    fn print_routes(&self, file: Option<String>) {
-        let rt = bootstrap_routing_table();
+    async fn print_routes(&self, file: Option<String>) {
+        let lr = get_routing_table().await;
         match file {
             Some(file) => {
-                eprintln!("Writing route information to file {}", file);
-                // TODO fetch and iterate through routes and print, optionally write to file.
+                let mut f = File::create(file).unwrap();
+                f.write(b"dest\t\tnext\t\tcost\n").unwrap();
+                for x in 0..lr.len() {
+                    f.write(format!("{}\n", lr[x]).as_bytes()).unwrap();
+                }
             }
             None => {
                 println!("dest\t\tnext\t\tcost");
-                println!("{}", rt);
+                for x in 0..lr.len() {
+                    println!("{}",lr[x])
+                }
             }
         }
     }
 }
+
 
 
 fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {

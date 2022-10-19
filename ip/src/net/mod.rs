@@ -3,8 +3,7 @@ mod link;
 mod utils;
 
 pub use args::Args;
-pub use link::{Link, LinkDefinition};
-use link::{Link, ProtocolPayload};
+pub use link::{Link, LinkDefinition, ProtocolPayload};
 use std::ops::Deref;
 use std::time::Duration;
 use utils::localhost_with_port;
@@ -28,6 +27,10 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub enum Error {
     LinkNotFound,
     LinkInactive,
+}
+
+pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
+    LINKS.read().await
 }
 
 /// Send bytes to a destination.

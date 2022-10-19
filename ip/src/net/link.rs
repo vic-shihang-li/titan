@@ -1,3 +1,4 @@
+use std::fmt;
 use crate::Message;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -124,6 +125,8 @@ impl Link {
 
         buf.extend_from_slice(&payload);
 
+        eprintln!("Sending {} bytes to {}", buf.len(), self.dest_port);
+
         self.sock
             .send_to(&buf[..], localhost_with_port(self.dest_port))
             .await
@@ -142,5 +145,16 @@ impl Link {
 
     pub fn dest(&self) -> Ipv4Addr {
         self.dest_virtual_ip
+    }
+}
+
+impl fmt::Display for Link {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = if self.activated { "up" } else { "down" };
+        write!(
+            f,
+            "{}\t{}\t{}\t{}",
+            state, self.src_virtual_ip, self.dest_virtual_ip,  self.dest_port
+        )
     }
 }
