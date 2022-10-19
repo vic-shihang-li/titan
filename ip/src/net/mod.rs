@@ -6,7 +6,6 @@ use crate::protocol::ProtocolPayload;
 pub use args::Args;
 pub use link::{Link, LinkDefinition};
 use std::ops::Deref;
-use std::time::Duration;
 use utils::localhost_with_port;
 
 use lazy_static::lazy_static;
@@ -172,15 +171,4 @@ impl Net {
 
 pub async fn bootstrap(args: &Args) {
     NET.init(args).await;
-}
-
-async fn send_periodic_updates() {
-    let interval = Duration::from_secs(5);
-
-    loop {
-        for link in &*iter_links().await {
-            // TODO: send periodic update payload
-        }
-        tokio::time::sleep(interval).await;
-    }
 }

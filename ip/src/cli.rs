@@ -1,4 +1,4 @@
-use crate::net::{activate, deactivate, get_interfaces, send};
+use crate::net::get_interfaces;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;

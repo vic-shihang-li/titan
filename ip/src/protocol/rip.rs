@@ -6,7 +6,7 @@ use crate::{
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
-use std::{error::Error, net::Ipv4Addr};
+use std::net::Ipv4Addr;
 
 use crate::Message;
 
@@ -217,7 +217,7 @@ impl ProtocolHandler for RipHandler {
 
         let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
         for link in &*iter_links().await {
-            link.send(update_msg.clone().into()).await;
+            link.send(update_msg.clone().into()).await.ok();
         }
     }
 }

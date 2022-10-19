@@ -1,10 +1,9 @@
 use crate::protocol::Protocol;
 use crate::{net, Args};
 use async_trait::async_trait;
-use etherparse::{InternetSlice, Ipv4HeaderSlice, PacketHeaders, SlicedPacket};
+use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt;
 use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -168,7 +167,7 @@ impl Router {
         match self.decide_packet(header) {
             PacketDecision::Drop => {}
             PacketDecision::Consume => self.consume_packet(header, payload).await,
-            PacketDecision::Forward => self.forward_packet(),
+            PacketDecision::Forward => self.forward_packet(header, packet_bytes).await,
         }
     }
 
@@ -202,7 +201,7 @@ impl Router {
         }
     }
 
-    fn forward_packet(&self) {
+    async fn forward_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, _packet_bytes: &[u8]) {
         todo!()
     }
 }
