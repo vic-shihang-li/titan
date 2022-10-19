@@ -1,6 +1,7 @@
 use crate::route::{bootstrap_interface_table, bootstrap_routing_table};
 use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
+use std::str::SplitWhitespace;
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -72,47 +73,7 @@ impl Cli {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
         eprintln!("cmd: {}", cmd);
-        return match cmd {
-            "li" => {
-                eprintln!("matched li");
-                let arg = tokens.next();
-                Some(Command::ListInterface(arg.map(|s| s.to_string())))
-            }
-            "interfaces" => {
-                let arg = tokens.next();
-                Some(Command::ListInterface(arg.map(|s| s.to_string())))
-            }
-            "lr" => {
-                let arg = tokens.next();
-                Some(Command::ListRoute(arg.map(|s| s.to_string())))
-            }
-            "routes" => {
-                let arg = tokens.next();
-                Some(Command::ListRoute(arg.map(|s| s.to_string())))
-            }
-            "down" => {
-                let arg = tokens.next().unwrap();
-                let link_no = arg.parse::<u16>().unwrap();
-                Some(Command::InterfaceDown(link_no))
-            }
-            "up" => {
-                let arg = tokens.next().unwrap();
-                let link_no = arg.parse::<u16>().unwrap();
-                Some(Command::InterfaceUp(link_no))
-            }
-            "send" => {
-                let virtual_ip = tokens.next().unwrap();
-                let protocol = tokens.next().unwrap();
-                let payload = tokens.next().unwrap();
-                Some(Command::Send(SendCmd {
-                    virtual_ip: virtual_ip.parse().unwrap(),
-                    protocol: protocol.parse().unwrap(),
-                    payload: payload.to_string(),
-                }))
-            }
-            "q" => Some(Command::Quit),
-            _ => None,
-        };
+        cmd_arg_handler(cmd, tokens)
     }
 
     fn execute_command(&self, cmd: Command) {
@@ -167,5 +128,90 @@ impl Cli {
                 println!("{}", rt);
             }
         }
+    }
+}
+
+
+fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
+    match cmd {
+        "li" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => Some(Command::ListInterface(Some(arg.to_string()))),
+                None => Some(Command::ListInterface(None)),
+            }
+        }
+        "interfaces" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => Some(Command::ListInterface(Some(arg.to_string()))),
+                None => Some(Command::ListInterface(None)),
+            }
+        }
+        "lr" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => Some(Command::ListRoute(Some(arg.to_string()))),
+                None => Some(Command::ListRoute(None)),
+            }
+        }
+        "routes" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => Some(Command::ListRoute(Some(arg.to_string()))),
+                None => Some(Command::ListRoute(None)),
+            }
+        }
+        "down" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => {
+                    let link_no = arg.parse::<u16>();
+                    match link_no {
+                        Ok(link_no) => Some(Command::InterfaceDown(link_no)),
+                        Err(_) => None, // TODO replace with error
+                    }
+                }
+                None => None, //TODO replace with error
+            }
+        }
+        "up" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => {
+                    let link_no = arg.parse::<u16>();
+                    match link_no {
+                        Ok(link_no) => Some(Command::InterfaceUp(link_no)),
+                        Err(_) => None, // TODO replace with error
+                    }
+                }
+                None => None, //TODO replace with error
+            }
+        }
+        "send" => {
+            let virtual_ip = tokens.next();
+            let protocol = tokens.next();
+            let payload = tokens.next();
+            match (virtual_ip, protocol, payload) {
+                (Some(virtual_ip), Some(protocol), Some(payload)) => {
+                    let virtual_ip = virtual_ip.parse();
+                    let protocol = protocol.parse::<u16>();
+
+                    match (virtual_ip, protocol) {
+                        (Ok(virtual_ip), Ok(protocol)) => {
+                            Some(Command::Send(SendCmd {
+                                virtual_ip,
+                                protocol,
+                                payload: payload.to_string(),
+                            }))
+                        }
+                        _ => None, // TODO replace with error
+                    }
+                }
+                _ => None, // TODO replace with error
+            }
+        }
+        "q" => Some(Command::Quit),
+        _ => None,
     }
 }

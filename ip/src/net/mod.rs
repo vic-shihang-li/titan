@@ -49,7 +49,7 @@ pub async fn activate(link_no: u16) -> Result<()> {
     if link_no >= links.len() {
         Err(Error::LinkNotFound)
     } else {
-        links[link_no].deactivate();
+        links[link_no].activate();
         Ok(())
     }
 }
@@ -61,7 +61,7 @@ pub async fn deactivate(link_no: u16) -> Result<()> {
     if link_no >= links.len() {
         Err(Error::LinkNotFound)
     } else {
-        links[link_no].activate();
+        links[link_no].deactivate();
         Ok(())
     }
 }
