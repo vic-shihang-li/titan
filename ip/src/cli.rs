@@ -1,10 +1,10 @@
+use crate::net::{activate, deactivate, get_interfaces, send};
+use crate::route::get_routing_table;
+use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
 use std::io::Write;
-use crate::route::{get_routing_table};
-use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
-use crate::net::{activate, deactivate, get_interfaces, send};
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -118,26 +118,26 @@ impl Cli {
             None => {
                 println!("id\tstate\tlocal\t\tremote\t        port");
                 for x in 0..li.len() {
-                    println!("{}\t{}",x, li[x])
+                    println!("{}\t{}", x, li[x])
                 }
             }
         }
     }
 
     async fn print_routes(&self, file: Option<String>) {
-        let lr = get_routing_table().await;
+        let rt = get_routing_table().await;
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
                 f.write(b"dest\t\tnext\t\tcost\n").unwrap();
-                for x in 0..lr.len() {
-                    f.write(format!("{}\n", lr[x]).as_bytes()).unwrap();
+                for route in rt.entries() {
+                    f.write(format!("{}\n", route).as_bytes()).unwrap();
                 }
             }
             None => {
                 println!("dest\t\tnext\t\tcost");
-                for x in 0..lr.len() {
-                    println!("{}", lr[x])
+                for route in rt.entries() {
+                    println!("{}", route)
                 }
             }
         }

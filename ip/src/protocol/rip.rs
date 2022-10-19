@@ -1,4 +1,7 @@
-use crate::route::ProtocolHandler;
+use async_trait::async_trait;
+use etherparse::Ipv4HeaderSlice;
+
+use crate::route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler};
 
 use std::net::Ipv4Addr;
 
@@ -148,13 +151,38 @@ impl Entry {
 #[derive(Default)]
 pub struct RipHandler {}
 
+#[async_trait]
 impl ProtocolHandler for RipHandler {
-    fn handle_packet(&self, payload: &[u8]) {
+    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         // TODO:
         // 1. update the routing table (what APIs does the routing module need to provide?)
         // 2. send out triggered updates (use `net::iter_links()` and `link.send(rip_message)`)
 
         let message = RipMessage::from_bytes(payload);
+        let next_hop = header.source_addr();
+
+        let mut rt = get_routing_table_mut().await;
+
+        // RIP protocol implementation.
+        // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
+        for entry in &message.entries {
+            match rt.find_mut_entry_for(entry.address) {
+                Some(found) => {
+                    if entry.cost < found.cost() {
+                        found.update(next_hop, entry.cost);
+                    } else if entry.cost > found.cost() {
+                        if found.next_hop() == next_hop {
+                            found.update(next_hop, entry.cost);
+                        }
+                    }
+                }
+                None => {
+                    let dest = entry.address;
+                    let cost = entry.cost + 1;
+                    rt.add_entry(RoutingEntry::new(dest, next_hop, cost));
+                }
+            }
+        }
     }
 }
 

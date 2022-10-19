@@ -1,35 +1,78 @@
 use crate::protocol::Protocol;
 use crate::{net, Args};
+use async_trait::async_trait;
 use etherparse::{InternetSlice, Ipv4HeaderSlice, PacketHeaders, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
 use std::{net::Ipv4Addr, time::Instant};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref ROUTING_TABLE: RwLock<Vec<Entry>> = RwLock::new(Vec::new());
+    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
 }
 
-pub async fn get_routing_table() -> RwLockReadGuard<'static, Vec<Entry>> {
+pub async fn get_routing_table() -> RwLockReadGuard<'static, RoutingTable> {
     ROUTING_TABLE.read().await
+}
+
+pub async fn get_routing_table_mut() -> RwLockWriteGuard<'static, RoutingTable> {
+    ROUTING_TABLE.write().await
+}
+
+#[derive(Default)]
+pub struct RoutingTable {
+    entries: Vec<Entry>,
+}
+
+impl RoutingTable {
+    pub fn has_entry_for(&self, addr: Ipv4Addr) -> bool {
+        self.entries.iter().any(|e| e.destination == addr)
+    }
+
+    pub fn find_mut_entry_for(&mut self, addr: Ipv4Addr) -> Option<&mut Entry> {
+        self.entries.iter_mut().find(|e| e.destination == addr)
+    }
+
+    pub fn add_entry(&mut self, entry: Entry) {
+        self.entries.push(entry);
+    }
+
+    pub fn entries(&self) -> &[Entry] {
+        self.entries.as_slice()
+    }
 }
 
 pub struct Entry {
     destination: Ipv4Addr,
     next_hop: Ipv4Addr,
-    cost: u16,
+    cost: u32,
     last_updated: Instant,
 }
 
 impl Entry {
-    pub fn new(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u16) -> Self {
+    pub fn new(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
         Self {
             destination,
             next_hop,
             cost,
             last_updated: Instant::now(),
         }
+    }
+
+    pub fn cost(&self) -> u32 {
+        self.cost
+    }
+
+    pub fn next_hop(&self) -> Ipv4Addr {
+        self.next_hop
+    }
+
+    pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
+        self.next_hop = next_hop;
+        self.cost = cost;
+        self.last_updated = Instant::now();
     }
 }
 
@@ -39,8 +82,9 @@ impl fmt::Display for Entry {
     }
 }
 
+#[async_trait]
 pub trait ProtocolHandler: Send + Sync {
-    fn handle_packet(&self, payload: &[u8]);
+    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]);
 }
 
 enum PacketDecision {
@@ -138,7 +182,7 @@ impl Router {
         match header.protocol().try_into() {
             Ok(protocol) => match self.protocol_handlers.get(&protocol) {
                 Some(handler) => {
-                    handler.handle_packet(&payload);
+                    handler.handle_packet(header, payload);
                 }
                 None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
             },
@@ -156,9 +200,9 @@ pub async fn bootstrap(args: &Args) {
 
     for link in &args.links {
         // Add entry to my interface with a cost of 0.
-        rt.push(Entry::new(link.interface_ip, link.interface_ip, 0));
+        rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
 
         // Add entry to my neighbor with a cost of 1.
-        rt.push(Entry::new(link.dest_ip, link.dest_ip, 1));
+        rt.add_entry(Entry::new(link.dest_ip, link.dest_ip, 1));
     }
 }
