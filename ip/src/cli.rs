@@ -1,4 +1,3 @@
-use crate::route::{bootstrap_interface_table, bootstrap_routing_table};
 use rustyline::{error::ReadlineError, Editor};
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
@@ -103,7 +102,6 @@ impl Cli {
     }
 
     fn print_interfaces(&self, file: Option<String>) {
-        let it = bootstrap_interface_table();
         match file {
             Some(file) => {
                 eprintln!("Writing interface information to file {}", file);
@@ -111,13 +109,12 @@ impl Cli {
             }
             None => {
                 println!("id\tstate\tlocal\t\tremote\t        port");
-                println!("{}", it);
+                // println!("{}", it);
             }
         }
     }
 
     fn print_routes(&self, file: Option<String>) {
-        let rt = bootstrap_routing_table();
         match file {
             Some(file) => {
                 eprintln!("Writing route information to file {}", file);
@@ -125,12 +122,11 @@ impl Cli {
             }
             None => {
                 println!("dest\t\tnext\t\tcost");
-                println!("{}", rt);
+                // println!("{}", rt);
             }
         }
     }
 }
-
 
 fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
     match cmd {
@@ -198,13 +194,11 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
                     let protocol = protocol.parse::<u16>();
 
                     match (virtual_ip, protocol) {
-                        (Ok(virtual_ip), Ok(protocol)) => {
-                            Some(Command::Send(SendCmd {
-                                virtual_ip,
-                                protocol,
-                                payload: payload.to_string(),
-                            }))
-                        }
+                        (Ok(virtual_ip), Ok(protocol)) => Some(Command::Send(SendCmd {
+                            virtual_ip,
+                            protocol,
+                            payload: payload.to_string(),
+                        })),
                         _ => None, // TODO replace with error
                     }
                 }

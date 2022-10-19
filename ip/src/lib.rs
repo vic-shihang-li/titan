@@ -2,7 +2,7 @@ pub mod cli;
 pub mod net;
 mod protocol;
 mod rip;
-mod route;
+pub mod route;
 
 pub use net::Args;
 

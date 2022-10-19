@@ -154,7 +154,7 @@ pub struct Router {}
 
 impl Router {
     async fn run(&self) {
-        while let Ok(bytes) = net::listen().recv().await {
+        while let Ok(bytes) = net::listen().await.recv().await {
             // 0. parse bytes to packet
             // 1. drop if packet is not valid or TTL = 0
             // 2. if packet is for "me", pass packet to the correct protocol handler
