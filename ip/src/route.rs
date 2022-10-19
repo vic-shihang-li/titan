@@ -57,6 +57,8 @@ pub struct Router {
 
 impl Router {
     pub fn new(addrs: &[Ipv4Addr]) -> Self {
+        // TODO: spawn thread for cleaning up old routing table entries.
+
         Self {
             addrs: addrs.into(),
             protocol_handlers: HashMap::new(),
