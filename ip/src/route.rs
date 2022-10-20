@@ -1,3 +1,5 @@
+use crate::net::iter_links;
+use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::{net, Args};
 use async_trait::async_trait;
@@ -5,11 +7,22 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
+use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
+    static ref ROUTING_TABLE: RwLock<RoutingTable> = {
+        tokio::spawn(async {
+            prune_routing_table().await;
+        });
+        tokio::spawn(async {
+            periodic_rip_update().await;
+        });
+
+        RwLock::new(RoutingTable::default())
+    };
 }
 
 pub async fn get_routing_table() -> RwLockReadGuard<'static, RoutingTable> {
@@ -40,6 +53,11 @@ impl RoutingTable {
 
     pub fn entries(&self) -> &[Entry] {
         self.entries.as_slice()
+    }
+
+    pub fn prune(&mut self) {
+        let max_age = Duration::from_secs(12);
+        self.entries.retain(|e| e.last_updated.elapsed() < max_age);
     }
 }
 
@@ -86,6 +104,25 @@ impl fmt::Display for Entry {
     }
 }
 
+async fn prune_routing_table() {
+    loop_with_interval(Duration::from_secs(1), || async {
+        let mut table = ROUTING_TABLE.write().await;
+        table.prune();
+    })
+    .await;
+}
+
+async fn periodic_rip_update() {
+    loop_with_interval(Duration::from_secs(5), || async {
+        let table = ROUTING_TABLE.read().await;
+        let msg = RipMessage::from_entries(table.entries());
+        for link in &*iter_links().await {
+            link.send(msg.clone().into()).await.ok();
+        }
+    })
+    .await;
+}
+
 #[async_trait]
 pub trait ProtocolHandler: Send + Sync {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]);
@@ -104,8 +141,6 @@ pub struct Router {
 
 impl Router {
     pub fn new(addrs: &[Ipv4Addr]) -> Self {
-        // TODO: spawn thread for cleaning up old routing table entries.
-
         Self {
             addrs: addrs.into(),
             protocol_handlers: HashMap::new(),
@@ -215,5 +250,12 @@ pub async fn bootstrap(args: &Args) {
 
         // Add entry to my neighbor with a cost of 1.
         rt.add_entry(Entry::new(link.dest_ip, link.dest_ip, 1));
+    }
+}
+
+async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: impl Fn() -> Fut) {
+    loop {
+        f().await;
+        tokio::time::sleep(interval).await;
     }
 }

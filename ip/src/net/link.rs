@@ -110,7 +110,12 @@ impl Link {
 
         buf.extend_from_slice(&payload);
 
-        eprintln!("Sending {} bytes to {}", buf.len(), self.dest_port);
+        eprintln!(
+            "Sending {} bytes to {}, payload len {}",
+            buf.len(),
+            self.dest_port,
+            payload.len()
+        );
 
         self.sock
             .send_to(&buf[..], localhost_with_port(self.dest_port))
