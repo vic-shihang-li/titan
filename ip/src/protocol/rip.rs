@@ -32,8 +32,8 @@ pub struct RipMessage {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<u8> for Command {
-    fn into(self) -> u8 {
+impl Into<u16> for Command {
+    fn into(self) -> u16 {
         match self {
             Command::Request => 1,
             Command::Response => 2,
@@ -54,13 +54,13 @@ impl Entry {
 
 #[derive(Debug)]
 pub enum ParseCommandError {
-    BadValue(u8),
+    BadValue(u16),
 }
 
-impl TryFrom<u8> for Command {
+impl TryFrom<u16> for Command {
     type Error = ParseCommandError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Command::Request),
             2 => Ok(Command::Response),
@@ -70,20 +70,11 @@ impl TryFrom<u8> for Command {
 }
 
 impl RipMessage {
-    fn from_route_updates(updates: Vec<RoutingEntry>, update_originator: Ipv4Addr) -> Self {
+    pub fn from_entries(entries: &[RoutingEntry]) -> Self {
         let cmd = Command::Response;
-        let entries = updates
+        let entries = entries
             .iter()
-            .map(|update| {
-                // poisoned reverse
-                let cost = if update.next_hop() == update_originator {
-                    MAX_COST
-                } else {
-                    update.cost()
-                };
-
-                Entry::with_default_mask(cost, update.destination())
-            })
+            .map(|e| Entry::with_default_mask(e.cost(), e.destination()))
             .collect();
 
         Self {
@@ -95,13 +86,17 @@ impl RipMessage {
 
 impl Message for RipMessage {
     fn into_bytes(self) -> Vec<u8> {
-        let mut v = vec![
-            self.command.into(),
-            self.entries
-                .len()
-                .try_into()
-                .expect("RIP message has too many entries"),
-        ];
+        let cmd: u16 = self.command.into();
+        let num_entries: u16 = self
+            .entries
+            .len()
+            .try_into()
+            .expect("RIP message has too many entries");
+
+        let mut v = Vec::new();
+
+        v.extend_from_slice(&cmd.to_be_bytes());
+        v.extend_from_slice(&num_entries.to_be_bytes());
 
         for entry in self.entries {
             v.append(&mut entry.into_bytes());
@@ -111,11 +106,13 @@ impl Message for RipMessage {
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
-        assert!(!bytes.is_empty(), "Missing command byte");
-        let command = Command::try_from(bytes[0]).expect("Bad command type");
+        assert!(bytes.len() >= 2, "Missing command byte");
 
-        assert!(bytes.len() >= 2, "Missing num entries byte");
-        let num_entries: u8 = bytes[1];
+        let cmd: u16 = u16::from_be_bytes(bytes[0..2].try_into().unwrap());
+        let command = Command::try_from(cmd).expect("Bad command type");
+
+        assert!(bytes.len() >= 4, "Missing num entries byte");
+        let num_entries: u16 = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
 
         if command == Command::Request {
             assert!(
@@ -202,7 +199,10 @@ impl ProtocolHandler for RipHandler {
                         Ordering::Greater => {
                             if found.next_hop() == next_hop {
                                 found.update(next_hop, entry.cost);
-                                updates.push(*found);
+                                // poisoned reverse
+                                let mut copy = *found;
+                                copy.update(next_hop, MAX_COST);
+                                updates.push(copy);
                             }
                         }
                         Ordering::Equal => {
@@ -222,7 +222,7 @@ impl ProtocolHandler for RipHandler {
             }
         }
 
-        let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
+        let update_msg = RipMessage::from_entries(&updates);
         for link in &*iter_links().await {
             link.send(update_msg.clone().into()).await.ok();
         }
