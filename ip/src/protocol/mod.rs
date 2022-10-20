@@ -26,6 +26,7 @@ impl TryFrom<u8> for Protocol {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<u8> for Protocol {
     fn into(self) -> u8 {
         match self {

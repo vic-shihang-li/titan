@@ -136,6 +136,7 @@ impl Net {
         }
     }
 
+    #[allow(clippy::needless_lifetimes)]
     async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
         LinkIter {
             inner: self.links.read().await,

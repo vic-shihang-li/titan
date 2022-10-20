@@ -6,7 +6,7 @@ use crate::{
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
-use std::net::Ipv4Addr;
+use std::{cmp::Ordering, net::Ipv4Addr};
 
 use crate::Message;
 
@@ -31,6 +31,7 @@ pub struct RipMessage {
     entries: Vec<Entry>,
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<u8> for Command {
     fn into(self) -> u8 {
         match self {
@@ -94,15 +95,13 @@ impl RipMessage {
 
 impl Message for RipMessage {
     fn into_bytes(self) -> Vec<u8> {
-        let mut v = Vec::new();
-
-        v.push(self.command.into());
-        v.push(
+        let mut v = vec![
+            self.command.into(),
             self.entries
                 .len()
                 .try_into()
                 .expect("RIP message has too many entries"),
-        );
+        ];
 
         for entry in self.entries {
             v.append(&mut entry.into_bytes());
@@ -112,7 +111,7 @@ impl Message for RipMessage {
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
-        assert!(bytes.len() >= 1, "Missing command byte");
+        assert!(!bytes.is_empty(), "Missing command byte");
         let command = Command::try_from(bytes[0]).expect("Bad command type");
 
         assert!(bytes.len() >= 2, "Missing num entries byte");
@@ -192,13 +191,21 @@ impl ProtocolHandler for RipHandler {
         for entry in &message.entries {
             match rt.find_mut_entry_for(entry.address) {
                 Some(found) => {
-                    if entry.cost < found.cost() {
-                        found.update(next_hop, entry.cost);
-                        updates.push(*found);
-                    } else if entry.cost > found.cost() {
-                        if found.next_hop() == next_hop {
+                    match entry.cost.cmp(&found.cost()) {
+                        Ordering::Less => {
                             found.update(next_hop, entry.cost);
                             updates.push(*found);
+                        }
+                        Ordering::Greater => {
+                            if found.next_hop() == next_hop {
+                                found.update(next_hop, entry.cost);
+                                updates.push(*found);
+                            }
+                        }
+                        Ordering::Equal => {
+                            // If new cost == old cost, we ignore the new report.
+                            // Accepting the new report could destabilize the network (see Ex. 8
+                            // in the Chapter 13 of Dordal).
                         }
                     }
                 }
