@@ -110,9 +110,10 @@ impl Cli {
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
-                f.write(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
+                f.write_all(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
                 for x in 0..li.len() {
-                    f.write(format!("{}\t{}\n", x, li[x]).as_bytes()).unwrap();
+                    f.write_all(format!("{}\t{}\n", x, li[x]).as_bytes())
+                        .unwrap();
                 }
             }
             None => {
@@ -129,9 +130,9 @@ impl Cli {
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
-                f.write(b"dest\t\tnext\t\tcost\n").unwrap();
+                f.write_all(b"dest\t\tnext\t\tcost\n").unwrap();
                 for route in rt.entries() {
-                    f.write(format!("{}\n", route).as_bytes()).unwrap();
+                    f.write_all(format!("{}\n", route).as_bytes()).unwrap();
                 }
             }
             None => {
