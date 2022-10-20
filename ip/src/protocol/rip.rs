@@ -31,6 +31,7 @@ pub struct RipMessage {
     entries: Vec<Entry>,
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<u8> for Command {
     fn into(self) -> u8 {
         match self {
@@ -94,15 +95,13 @@ impl RipMessage {
 
 impl Message for RipMessage {
     fn into_bytes(self) -> Vec<u8> {
-        let mut v = Vec::new();
-
-        v.push(self.command.into());
-        v.push(
+        let mut v = vec![
+            self.command.into(),
             self.entries
                 .len()
                 .try_into()
                 .expect("RIP message has too many entries"),
-        );
+        ];
 
         for entry in self.entries {
             v.append(&mut entry.into_bytes());
