@@ -23,6 +23,12 @@ pub struct SendCmd {
 
 pub struct Cli {}
 
+impl Default for Cli {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Cli {
     pub fn new() -> Self {
         eprintln!("Starting CLI");
@@ -37,7 +43,7 @@ impl Cli {
             match readline {
                 Ok(mut line) => {
                     line = line.trim().to_string();
-                    if line == "" {
+                    if line.is_empty() {
                         continue;
                     }
                     if line == "q" {
