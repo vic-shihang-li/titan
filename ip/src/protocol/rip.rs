@@ -195,9 +195,15 @@ impl ProtocolHandler for RipHandler {
                     match entry_cost.cmp(&found.cost()) {
                         Ordering::Less => {
                             log::info!("Found a cheaper entry; old: {:?}, new: {:?}", found, entry);
-                            assert!(!found.is_local(), "RIP packet from another router cannot update entries created from this router's link");
-                            found.update(sender, entry_cost);
-                            updates.push(*found);
+                            if found.is_local() {
+                                // a neighbor router can advertise a lower cost when a link of our
+                                // own has been deactivated, but its cost has yet been advertised
+                                // to this neighbor.
+                                log::warn!("Update skipped; neighbor is advertising stale cost");
+                            } else {
+                                found.update(sender, entry_cost);
+                                updates.push(*found);
+                            }
                         }
                         Ordering::Greater => {
                             if found.next_hop() == sender {
