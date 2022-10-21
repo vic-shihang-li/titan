@@ -1,4 +1,4 @@
-use crate::net::get_interfaces;
+use crate::net::{activate, deactivate, get_interfaces};
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
@@ -95,9 +95,15 @@ impl Cli {
             }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
+                if let Err(e) = deactivate(interface).await {
+                    eprintln!("Failed to turn interface {} down: {:?}", interface, e);
+                }
             }
             Command::InterfaceUp(interface) => {
                 eprintln!("Turning up interface {}", interface);
+                if let Err(e) = activate(interface).await {
+                    eprintln!("Failed to turn interface {} up: {:?}", interface, e);
+                }
             }
             Command::Send(cmd) => {
                 eprintln!(
