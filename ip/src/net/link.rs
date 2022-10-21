@@ -123,8 +123,6 @@ impl Link {
         self.activated = true;
 
         let mut table = get_routing_table_mut().await;
-        let e = table.find_mut_entry_for(self.src_virtual_ip).unwrap();
-        e.update_cost(0);
         let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
         e.update_cost(0);
     }
@@ -133,8 +131,6 @@ impl Link {
         self.activated = false;
 
         let mut table = get_routing_table_mut().await;
-        let e = table.find_mut_entry_for(self.src_virtual_ip).unwrap();
-        e.mark_unreachable();
         let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
         e.mark_unreachable();
     }
