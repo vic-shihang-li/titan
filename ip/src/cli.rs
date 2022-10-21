@@ -1,4 +1,4 @@
-use crate::net::{self, activate, deactivate, get_interfaces};
+use crate::net::{self, get_interfaces};
 use crate::protocol::ProtocolPayload;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
@@ -96,13 +96,13 @@ impl Cli {
             }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
-                if let Err(e) = deactivate(interface).await {
+                if let Err(e) = net::deactivate(interface).await {
                     eprintln!("Failed to turn interface {} down: {:?}", interface, e);
                 }
             }
             Command::InterfaceUp(interface) => {
                 eprintln!("Turning up interface {}", interface);
-                if let Err(e) = activate(interface).await {
+                if let Err(e) = net::activate(interface).await {
                     eprintln!("Failed to turn interface {} up: {:?}", interface, e);
                 }
             }
