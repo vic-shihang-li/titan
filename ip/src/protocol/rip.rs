@@ -221,6 +221,8 @@ impl ProtocolHandler for RipHandler {
                             // in the Chapter 13 of Dordal).
                         }
                     }
+                    // Any entry matched by the incoming RIP packet is not stale.
+                    found.restart_delete_timer();
                 }
                 None => {
                     log::info!("Adding new entry: {:?}", entry);

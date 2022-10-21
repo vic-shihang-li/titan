@@ -125,7 +125,7 @@ impl Entry {
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
         self.next_hop = next_hop;
         self.cost = cost;
-        self.last_updated = Instant::now();
+        self.restart_delete_timer();
     }
 
     pub fn mark_unreachable(&mut self) {
@@ -134,6 +134,10 @@ impl Entry {
 
     pub fn update_cost(&mut self, cost: u32) {
         self.update(self.next_hop, cost);
+    }
+
+    pub fn restart_delete_timer(&mut self) {
+        self.last_updated = Instant::now();
     }
 
     pub fn max_cost() -> u32 {
