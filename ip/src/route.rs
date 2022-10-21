@@ -57,12 +57,20 @@ impl RoutingTable {
 
     pub fn prune(&mut self) {
         let max_age = Duration::from_secs(12);
-        self.entries
-            .retain(|e| e.is_local || e.last_updated.elapsed() < max_age);
+        let num_deleted = {
+            let len_before = self.entries.len();
+            self.entries
+                .retain(|e| e.is_local || e.last_updated.elapsed() < max_age);
+            let len_after = self.entries().len();
+            len_before - len_after
+        };
+        if num_deleted > 0 {
+            log::info!("Table pruned, {num_deleted} entries deleted");
+        }
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Entry {
     destination: Ipv4Addr,
     next_hop: Ipv4Addr,
@@ -110,6 +118,10 @@ impl Entry {
         self.next_hop
     }
 
+    pub fn is_local(&self) -> bool {
+        self.is_local
+    }
+
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
         self.next_hop = next_hop;
         self.cost = cost;
@@ -147,6 +159,7 @@ async fn periodic_rip_update() {
     loop_with_interval(Duration::from_secs(5), || async {
         let table = ROUTING_TABLE.read().await;
         let msg = RipMessage::from_entries(table.entries());
+        log::info!("Periodic RIP update: {:?}", msg);
         for link in &*iter_links().await {
             link.send(msg.clone().into()).await.ok();
         }

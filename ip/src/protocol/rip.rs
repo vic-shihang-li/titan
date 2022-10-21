@@ -178,26 +178,35 @@ pub struct RipHandler {}
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let message = RipMessage::from_bytes(payload);
+
+        log::info!("Received RIP packet");
+
         let sender = header.source_addr();
 
         let mut rt = get_routing_table_mut().await;
-
         let mut updates = Vec::new();
 
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
+            let entry_cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
             match rt.find_mut_entry_for(entry.address) {
                 Some(found) => {
-                    match entry.cost.cmp(&found.cost()) {
+                    match entry_cost.cmp(&found.cost()) {
                         Ordering::Less => {
-                            found
-                                .update(sender, cmp::min(entry.cost + 1, RoutingEntry::max_cost()));
+                            log::info!("Found a cheaper entry; old: {:?}, new: {:?}", found, entry);
+                            assert!(!found.is_local(), "RIP packet from another router cannot update entries created from this router's link");
+                            found.update(sender, entry_cost);
                             updates.push(*found);
                         }
                         Ordering::Greater => {
                             if found.next_hop() == sender {
-                                found.update(found.next_hop(), entry.cost);
+                                log::info!(
+                                    "Updating entry cost; old: {:?}, new: {:?}",
+                                    found,
+                                    entry
+                                );
+                                found.update(found.next_hop(), entry_cost);
                                 // poisoned reverse
                                 updates.push(RoutingEntry::new(
                                     entry.address,
@@ -214,10 +223,10 @@ impl ProtocolHandler for RipHandler {
                     }
                 }
                 None => {
-                    let dest = entry.address;
-                    let cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
+                    log::info!("Adding new entry: {:?}", entry);
 
-                    let entry = RoutingEntry::new(dest, sender, cost);
+                    let dest = entry.address;
+                    let entry = RoutingEntry::new(dest, sender, entry_cost);
                     rt.add_entry(entry);
                     updates.push(entry);
                 }
@@ -226,6 +235,7 @@ impl ProtocolHandler for RipHandler {
 
         if !updates.is_empty() {
             let update_msg = RipMessage::from_entries(&updates);
+            log::info!("Sending triggered update RIP packet: {:?}", update_msg);
             for link in &*iter_links().await {
                 link.send(update_msg.clone().into()).await.ok();
             }
