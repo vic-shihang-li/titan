@@ -6,7 +6,7 @@ use crate::{
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
-use std::{cmp::Ordering, net::Ipv4Addr};
+use std::{cmp, cmp::Ordering, net::Ipv4Addr};
 
 use crate::Message;
 
@@ -189,7 +189,6 @@ impl ProtocolHandler for RipHandler {
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
-            println!("entry: {:?}", entry);
             match rt.find_mut_entry_for(entry.address) {
                 Some(found) => {
                     match entry.cost.cmp(&found.cost()) {
@@ -215,7 +214,8 @@ impl ProtocolHandler for RipHandler {
                 }
                 None => {
                     let dest = entry.address;
-                    let cost = entry.cost + 1;
+                    let cost = cmp::min(entry.cost + 1, MAX_COST);
+
                     let entry = RoutingEntry::new(dest, next_hop, cost);
                     rt.add_entry(entry);
                     updates.push(entry);
