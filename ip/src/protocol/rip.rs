@@ -122,12 +122,12 @@ impl Message for RipMessage {
         }
 
         assert!(
-            bytes.len() >= 2 + num_entries as usize * Entry::serialized_size(),
+            bytes.len() >= 4 + num_entries as usize * Entry::serialized_size(),
             "Missing entry bytes"
         );
 
         let mut entries = Vec::new();
-        let mut start = 2;
+        let mut start = 4;
         let mut remaining_entries = num_entries;
         while remaining_entries > 0 {
             let entry = Entry::from_bytes(&bytes[start..start + Entry::serialized_size()]);
@@ -189,6 +189,7 @@ impl ProtocolHandler for RipHandler {
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
+            println!("entry: {:?}", entry);
             match rt.find_mut_entry_for(entry.address) {
                 Some(found) => {
                     match entry.cost.cmp(&found.cost()) {
