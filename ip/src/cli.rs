@@ -1,4 +1,5 @@
-use crate::net::{activate, deactivate, get_interfaces};
+use crate::net::{self, activate, deactivate, get_interfaces};
+use crate::protocol::ProtocolPayload;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
@@ -110,6 +111,11 @@ impl Cli {
                     "Sending packet {} with protocol {} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
+                // TODO: assume test protocol for now
+                let payload = ProtocolPayload::Test(cmd.payload);
+                if let Err(e) = net::send(payload, cmd.virtual_ip).await {
+                    eprintln!("Failed to send packet: {:?}", e);
+                }
             }
             Command::Quit => {
                 eprintln!("Quitting");
