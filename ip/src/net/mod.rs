@@ -121,7 +121,7 @@ impl Net {
         if link_no >= links.len() {
             Err(Error::LinkNotFound)
         } else {
-            links[link_no].activate();
+            links[link_no].activate().await;
             Ok(())
         }
     }
@@ -132,7 +132,7 @@ impl Net {
         if link_no >= links.len() {
             Err(Error::LinkNotFound)
         } else {
-            links[link_no].deactivate();
+            links[link_no].deactivate().await;
             Ok(())
         }
     }

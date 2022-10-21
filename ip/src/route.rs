@@ -57,7 +57,8 @@ impl RoutingTable {
 
     pub fn prune(&mut self) {
         let max_age = Duration::from_secs(12);
-        self.entries.retain(|e| e.last_updated.elapsed() < max_age);
+        self.entries
+            .retain(|e| e.is_local || e.last_updated.elapsed() < max_age);
     }
 }
 
@@ -67,6 +68,9 @@ pub struct Entry {
     next_hop: Ipv4Addr,
     cost: u32,
     last_updated: Instant,
+    /// `true` if this is an entry formed by this router's links (i.e. entries
+    /// with a cost of 0 or 1). `false` if this is an entry advertised by other routers.
+    is_local: bool,
 }
 
 impl Entry {
@@ -76,6 +80,21 @@ impl Entry {
             next_hop,
             cost,
             last_updated: Instant::now(),
+            is_local: false,
+        }
+    }
+
+    pub fn new_local(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
+        assert!(
+            cost == 0 || cost == 1,
+            "local routing table entry must have a cost of 0 or 1"
+        );
+        Self {
+            destination,
+            next_hop,
+            cost,
+            last_updated: Instant::now(),
+            is_local: true,
         }
     }
 
@@ -95,6 +114,18 @@ impl Entry {
         self.next_hop = next_hop;
         self.cost = cost;
         self.last_updated = Instant::now();
+    }
+
+    pub fn mark_unreachable(&mut self) {
+        self.update(self.next_hop, Entry::max_cost());
+    }
+
+    pub fn update_cost(&mut self, cost: u32) {
+        self.update(self.next_hop, cost);
+    }
+
+    pub fn max_cost() -> u32 {
+        16
     }
 }
 
@@ -244,10 +275,10 @@ pub async fn bootstrap(args: &Args) {
 
     for link in &args.links {
         // Add entry to my interface with a cost of 0.
-        rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
+        rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
 
         // Add entry to my neighbor with a cost of 1.
-        rt.add_entry(Entry::new(link.dest_ip, link.dest_ip, 1));
+        rt.add_entry(Entry::new_local(link.dest_ip, link.dest_ip, 1));
     }
 }
 

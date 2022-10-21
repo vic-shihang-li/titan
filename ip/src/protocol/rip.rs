@@ -10,8 +10,6 @@ use std::{cmp, cmp::Ordering, net::Ipv4Addr};
 
 use crate::Message;
 
-const MAX_COST: u32 = 16;
-
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
     cost: u32,
@@ -180,7 +178,7 @@ pub struct RipHandler {}
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let message = RipMessage::from_bytes(payload);
-        let next_hop = header.source_addr();
+        let sender = header.source_addr();
 
         let mut rt = get_routing_table_mut().await;
 
@@ -193,16 +191,19 @@ impl ProtocolHandler for RipHandler {
                 Some(found) => {
                     match entry.cost.cmp(&found.cost()) {
                         Ordering::Less => {
-                            found.update(next_hop, entry.cost);
+                            found
+                                .update(sender, cmp::min(entry.cost + 1, RoutingEntry::max_cost()));
                             updates.push(*found);
                         }
                         Ordering::Greater => {
-                            if found.next_hop() == next_hop {
-                                found.update(next_hop, entry.cost);
+                            if found.next_hop() == sender {
+                                found.update(found.next_hop(), entry.cost);
                                 // poisoned reverse
-                                let mut copy = *found;
-                                copy.update(next_hop, MAX_COST);
-                                updates.push(copy);
+                                updates.push(RoutingEntry::new(
+                                    entry.address,
+                                    header.destination_addr(),
+                                    RoutingEntry::max_cost(),
+                                ));
                             }
                         }
                         Ordering::Equal => {
@@ -214,9 +215,9 @@ impl ProtocolHandler for RipHandler {
                 }
                 None => {
                     let dest = entry.address;
-                    let cost = cmp::min(entry.cost + 1, MAX_COST);
+                    let cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
 
-                    let entry = RoutingEntry::new(dest, next_hop, cost);
+                    let entry = RoutingEntry::new(dest, sender, cost);
                     rt.add_entry(entry);
                     updates.push(entry);
                 }
