@@ -223,9 +223,11 @@ impl ProtocolHandler for RipHandler {
             }
         }
 
-        let update_msg = RipMessage::from_entries(&updates);
-        for link in &*iter_links().await {
-            link.send(update_msg.clone().into()).await.ok();
+        if !updates.is_empty() {
+            let update_msg = RipMessage::from_entries(&updates);
+            for link in &*iter_links().await {
+                link.send(update_msg.clone().into()).await.ok();
+            }
         }
     }
 }

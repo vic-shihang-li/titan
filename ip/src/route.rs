@@ -173,8 +173,6 @@ impl Router {
         match SlicedPacket::from_ip(bytes) {
             Err(value) => eprintln!("Err {:?}", value),
             Ok(packet) => {
-                eprintln!("ip: {:?}", packet.ip);
-
                 if packet.ip.is_none() {
                     eprintln!("Packet has no IP fields");
                     return;
