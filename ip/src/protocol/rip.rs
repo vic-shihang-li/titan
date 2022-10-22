@@ -242,7 +242,7 @@ impl ProtocolHandler for RipHandler {
             let update_msg = RipMessage::from_entries(&updates);
             log::info!("Sending triggered update RIP packet: {:?}", update_msg);
             for link in &*iter_links().await {
-                link.send(update_msg.clone().into()).await.ok();
+                link.send(update_msg.clone().into(), link.dest()).await.ok();
             }
         }
     }

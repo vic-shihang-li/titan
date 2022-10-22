@@ -1,5 +1,4 @@
 use std::fmt;
-use std::io::Write;
 use std::net::Ipv4Addr;
 
 use async_trait::async_trait;
@@ -60,8 +59,6 @@ impl ProtocolHandler for TestHandler {
 
 impl fmt::Display for TestMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = String::new();
-
         write!(f, "---Node received packet!---\n\
         \tsource IP\t:\t{:?}\n\
         \tdestination IP\t:\t{:?}\n\

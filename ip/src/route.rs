@@ -1,6 +1,6 @@
-use crate::net::{iter_links, send};
+use crate::net::{Error, iter_links};
 use crate::protocol::rip::RipMessage;
-use crate::protocol::Protocol;
+use crate::protocol::{Protocol, ProtocolPayload};
 use crate::{net, Args};
 use async_trait::async_trait;
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
@@ -172,7 +172,7 @@ async fn periodic_rip_update() {
         let msg = RipMessage::from_entries(table.entries());
         log::info!("Periodic RIP update: {:?}", msg);
         for link in &*iter_links().await {
-            link.send(msg.clone().into()).await.ok();
+            link.send(msg.clone().into(), link.dest()).await.ok();
         }
     })
     .await;
@@ -296,7 +296,7 @@ impl Router {
         if rt.has_entry_for(dest) {
             let entry = rt.find_entry_for(dest).unwrap();
             let next_hop = entry.next_hop;
-            send(tm, next_hop).await.expect("TODO: panic message");
+            send(tm, next_hop).await.expect("Error forwarding packet");
         } else {
             eprintln!("No route to {}", dest);
         }
@@ -320,4 +320,9 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
         f().await;
         tokio::time::sleep(interval).await;
     }
+}
+
+pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Error>{
+    let next_hop = ROUTING_TABLE.read().await.find_entry_for(dest_vip).unwrap().next_hop;
+    net::send(payload, dest_vip, next_hop).await
 }

@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
+use crate::route;
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -113,10 +114,7 @@ impl Cli {
                 );
                 // TODO: assume test protocol for now
                 let payload = ProtocolPayload::Test(cmd.payload.into_bytes());
-                let rt = get_routing_table().await;
-                let next_hop = rt.find_entry_for(cmd.virtual_ip).unwrap().next_hop();
-
-                if let Err(e) = net::send(payload, cmd.virtual_ip).await {
+                if let Err(e) = route::send(payload, cmd.virtual_ip).await {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }

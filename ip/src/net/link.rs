@@ -88,7 +88,7 @@ pub enum SendError {
 
 impl Link {
     /// On this link, send a message conforming to one of the supported protocols.
-    pub async fn send(&self, payload: ProtocolPayload) -> Result<(), SendError> {
+    pub async fn send(&self, payload: ProtocolPayload, dest: Ipv4Addr) -> Result<(), SendError> {
         if !self.activated {
             return Err(SendError::LinkInactive);
         }
@@ -102,7 +102,7 @@ impl Link {
             TTL,
             protocol,
             self.src_virtual_ip.octets(),
-            self.dest_virtual_ip.octets(),
+            dest.octets(),
         );
 
         ip_header
