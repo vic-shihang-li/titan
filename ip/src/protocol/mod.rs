@@ -3,6 +3,7 @@ pub mod test;
 
 use crate::Message;
 use rip::RipMessage;
+use crate::protocol::test::TestMessage;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {
@@ -38,14 +39,14 @@ impl Into<u8> for Protocol {
 
 pub enum ProtocolPayload {
     Rip(RipMessage),
-    Test(String),
+    Test(Vec<u8>),
 }
 
 impl ProtocolPayload {
     pub fn into_bytes(self) -> (u8, Vec<u8>) {
         match self {
             ProtocolPayload::Rip(msg) => (Protocol::Rip.into(), msg.into_bytes()),
-            ProtocolPayload::Test(s) => (Protocol::Test.into(), s.into_bytes()),
+            ProtocolPayload::Test(msg) => (Protocol::Test.into(), msg),
         }
     }
 }
@@ -53,5 +54,11 @@ impl ProtocolPayload {
 impl From<RipMessage> for ProtocolPayload {
     fn from(m: RipMessage) -> Self {
         ProtocolPayload::Rip(m)
+    }
+}
+
+impl From<TestMessage> for ProtocolPayload {
+    fn from(m: TestMessage) -> Self {
+        ProtocolPayload::Test(m.into_bytes())
     }
 }

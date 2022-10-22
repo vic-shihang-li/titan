@@ -18,6 +18,7 @@ use tokio::{
         Mutex, RwLock, RwLockReadGuard,
     },
 };
+use crate::route::get_routing_table;
 
 use self::link::SendError;
 
@@ -138,7 +139,7 @@ impl Net {
     }
 
     #[allow(clippy::needless_lifetimes)]
-    async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
+    async fn iter_links(&self) -> LinkIter {
         LinkIter {
             inner: self.links.read().await,
         }

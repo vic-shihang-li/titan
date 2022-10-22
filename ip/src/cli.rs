@@ -112,7 +112,10 @@ impl Cli {
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
                 // TODO: assume test protocol for now
-                let payload = ProtocolPayload::Test(cmd.payload);
+                let payload = ProtocolPayload::Test(cmd.payload.into_bytes());
+                let rt = get_routing_table().await;
+                let next_hop = rt.find_entry_for(cmd.virtual_ip).unwrap().next_hop();
+
                 if let Err(e) = net::send(payload, cmd.virtual_ip).await {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
@@ -222,9 +225,13 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
         "send" => {
             let virtual_ip = tokens.next();
             let protocol = tokens.next();
-            let payload = tokens.next();
+            let mut payload = String::new();
+            for token in tokens {
+                payload.push_str(token);
+                payload.push_str(" ");
+            }
             match (virtual_ip, protocol, payload) {
-                (Some(virtual_ip), Some(protocol), Some(payload)) => {
+                (Some(virtual_ip), Some(protocol), p) => {
                     let virtual_ip = virtual_ip.parse();
                     let protocol = protocol.parse::<u16>();
 
@@ -232,7 +239,7 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
                         (Ok(virtual_ip), Ok(protocol)) => Some(Command::Send(SendCmd {
                             virtual_ip,
                             protocol,
-                            payload: payload.to_string(),
+                            payload: p,
                         })),
                         _ => None, // TODO replace with error
                     }

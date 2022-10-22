@@ -1,4 +1,4 @@
-use crate::net::iter_links;
+use crate::net::{iter_links, send};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::{net, Args};
@@ -10,7 +10,10 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
+
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::protocol::ProtocolPayload::Test;
+
 
 lazy_static! {
     static ref ROUTING_TABLE: RwLock<RoutingTable> = {
@@ -45,6 +48,10 @@ impl RoutingTable {
 
     pub fn find_mut_entry_for(&mut self, addr: Ipv4Addr) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|e| e.destination == addr)
+    }
+
+    pub fn find_entry_for(&self, addr: Ipv4Addr) -> Option<&Entry> {
+        self.entries.iter().find(|e| e.destination == addr)
     }
 
     pub fn add_entry(&mut self, entry: Entry) {
@@ -283,7 +290,16 @@ impl Router {
     }
 
     async fn forward_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, _packet_bytes: &[u8]) {
-        todo!()
+        let dest = _header.destination_addr();
+        let tm = Test(_packet_bytes.to_vec());
+        let rt = ROUTING_TABLE.read().await;
+        if rt.has_entry_for(dest) {
+            let entry = rt.find_entry_for(dest).unwrap();
+            let next_hop = entry.next_hop;
+            send(tm, next_hop).await.expect("TODO: panic message");
+        } else {
+            eprintln!("No route to {}", dest);
+        }
     }
 }
 

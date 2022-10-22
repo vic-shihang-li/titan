@@ -12,7 +12,7 @@ async fn main() {
 
     let args = match Args::try_from(std::env::args()) {
         Ok(a) => {
-            eprintln!("Args: {}", a);
+            // eprintln!("Args: {}", a);
             a
         }
         Err(e) => {
