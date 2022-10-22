@@ -1,3 +1,5 @@
+use crate::net::iter_links;
+use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::{net, Args};
 use async_trait::async_trait;
@@ -5,11 +7,22 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
+use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
+    static ref ROUTING_TABLE: RwLock<RoutingTable> = {
+        tokio::spawn(async {
+            prune_routing_table().await;
+        });
+        tokio::spawn(async {
+            periodic_rip_update().await;
+        });
+
+        RwLock::new(RoutingTable::default())
+    };
 }
 
 pub async fn get_routing_table() -> RwLockReadGuard<'static, RoutingTable> {
@@ -41,14 +54,31 @@ impl RoutingTable {
     pub fn entries(&self) -> &[Entry] {
         self.entries.as_slice()
     }
+
+    pub fn prune(&mut self) {
+        let max_age = Duration::from_secs(12);
+        let num_deleted = {
+            let len_before = self.entries.len();
+            self.entries
+                .retain(|e| e.is_local || e.last_updated.elapsed() < max_age);
+            let len_after = self.entries().len();
+            len_before - len_after
+        };
+        if num_deleted > 0 {
+            log::info!("Table pruned, {num_deleted} entries deleted");
+        }
+    }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Entry {
     destination: Ipv4Addr,
     next_hop: Ipv4Addr,
     cost: u32,
     last_updated: Instant,
+    /// `true` if this is an entry formed by this router's links (i.e. entries
+    /// with a cost of 0 or 1). `false` if this is an entry advertised by other routers.
+    is_local: bool,
 }
 
 impl Entry {
@@ -58,6 +88,21 @@ impl Entry {
             next_hop,
             cost,
             last_updated: Instant::now(),
+            is_local: false,
+        }
+    }
+
+    pub fn new_local(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
+        assert!(
+            cost == 0 || cost == 1,
+            "local routing table entry must have a cost of 0 or 1"
+        );
+        Self {
+            destination,
+            next_hop,
+            cost,
+            last_updated: Instant::now(),
+            is_local: true,
         }
     }
 
@@ -73,10 +118,30 @@ impl Entry {
         self.next_hop
     }
 
+    pub fn is_local(&self) -> bool {
+        self.is_local
+    }
+
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
         self.next_hop = next_hop;
         self.cost = cost;
+        self.restart_delete_timer();
+    }
+
+    pub fn mark_unreachable(&mut self) {
+        self.update(self.next_hop, Entry::max_cost());
+    }
+
+    pub fn update_cost(&mut self, cost: u32) {
+        self.update(self.next_hop, cost);
+    }
+
+    pub fn restart_delete_timer(&mut self) {
         self.last_updated = Instant::now();
+    }
+
+    pub fn max_cost() -> u32 {
+        16
     }
 }
 
@@ -84,6 +149,26 @@ impl fmt::Display for Entry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}\t{}\t{}", self.destination, self.next_hop, self.cost)
     }
+}
+
+async fn prune_routing_table() {
+    loop_with_interval(Duration::from_secs(1), || async {
+        let mut table = ROUTING_TABLE.write().await;
+        table.prune();
+    })
+    .await;
+}
+
+async fn periodic_rip_update() {
+    loop_with_interval(Duration::from_secs(5), || async {
+        let table = ROUTING_TABLE.read().await;
+        let msg = RipMessage::from_entries(table.entries());
+        log::info!("Periodic RIP update: {:?}", msg);
+        for link in &*iter_links().await {
+            link.send(msg.clone().into()).await.ok();
+        }
+    })
+    .await;
 }
 
 #[async_trait]
@@ -104,8 +189,6 @@ pub struct Router {
 
 impl Router {
     pub fn new(addrs: &[Ipv4Addr]) -> Self {
-        // TODO: spawn thread for cleaning up old routing table entries.
-
         Self {
             addrs: addrs.into(),
             protocol_handlers: HashMap::new(),
@@ -138,8 +221,6 @@ impl Router {
         match SlicedPacket::from_ip(bytes) {
             Err(value) => eprintln!("Err {:?}", value),
             Ok(packet) => {
-                eprintln!("ip: {:?}", packet.ip);
-
                 if packet.ip.is_none() {
                     eprintln!("Packet has no IP fields");
                     return;
@@ -211,9 +292,16 @@ pub async fn bootstrap(args: &Args) {
 
     for link in &args.links {
         // Add entry to my interface with a cost of 0.
-        rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
+        rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
 
         // Add entry to my neighbor with a cost of 1.
-        rt.add_entry(Entry::new(link.dest_ip, link.dest_ip, 1));
+        rt.add_entry(Entry::new_local(link.dest_ip, link.dest_ip, 1));
+    }
+}
+
+async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: impl Fn() -> Fut) {
+    loop {
+        f().await;
+        tokio::time::sleep(interval).await;
     }
 }

@@ -6,6 +6,7 @@ use etherparse::Ipv4Header;
 use tokio::net::UdpSocket;
 
 use crate::protocol::ProtocolPayload;
+use crate::route::get_routing_table_mut;
 
 use super::utils::localhost_with_port;
 
@@ -110,8 +111,6 @@ impl Link {
 
         buf.extend_from_slice(&payload);
 
-        eprintln!("Sending {} bytes to {}", buf.len(), self.dest_port);
-
         self.sock
             .send_to(&buf[..], localhost_with_port(self.dest_port))
             .await
@@ -120,12 +119,20 @@ impl Link {
         Ok(())
     }
 
-    pub fn activate(&mut self) {
+    pub async fn activate(&mut self) {
         self.activated = true;
+
+        let mut table = get_routing_table_mut().await;
+        let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
+        e.update_cost(0);
     }
 
-    pub fn deactivate(&mut self) {
+    pub async fn deactivate(&mut self) {
         self.activated = false;
+
+        let mut table = get_routing_table_mut().await;
+        let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
+        e.mark_unreachable();
     }
 
     pub fn dest(&self) -> Ipv4Addr {

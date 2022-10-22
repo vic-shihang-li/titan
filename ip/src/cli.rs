@@ -1,4 +1,5 @@
-use crate::net::get_interfaces;
+use crate::net::{self, get_interfaces};
+use crate::protocol::ProtocolPayload;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
@@ -95,15 +96,26 @@ impl Cli {
             }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
+                if let Err(e) = net::deactivate(interface).await {
+                    eprintln!("Failed to turn interface {} down: {:?}", interface, e);
+                }
             }
             Command::InterfaceUp(interface) => {
                 eprintln!("Turning up interface {}", interface);
+                if let Err(e) = net::activate(interface).await {
+                    eprintln!("Failed to turn interface {} up: {:?}", interface, e);
+                }
             }
             Command::Send(cmd) => {
                 eprintln!(
                     "Sending packet {} with protocol {} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
+                // TODO: assume test protocol for now
+                let payload = ProtocolPayload::Test(cmd.payload);
+                if let Err(e) = net::send(payload, cmd.virtual_ip).await {
+                    eprintln!("Failed to send packet: {:?}", e);
+                }
             }
             Command::Quit => {
                 eprintln!("Quitting");

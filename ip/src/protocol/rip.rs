@@ -6,11 +6,9 @@ use crate::{
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
-use std::{cmp::Ordering, net::Ipv4Addr};
+use std::{cmp, cmp::Ordering, net::Ipv4Addr};
 
 use crate::Message;
-
-const MAX_COST: u32 = 16;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
@@ -32,8 +30,8 @@ pub struct RipMessage {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<u8> for Command {
-    fn into(self) -> u8 {
+impl Into<u16> for Command {
+    fn into(self) -> u16 {
         match self {
             Command::Request => 1,
             Command::Response => 2,
@@ -54,13 +52,13 @@ impl Entry {
 
 #[derive(Debug)]
 pub enum ParseCommandError {
-    BadValue(u8),
+    BadValue(u16),
 }
 
-impl TryFrom<u8> for Command {
+impl TryFrom<u16> for Command {
     type Error = ParseCommandError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Command::Request),
             2 => Ok(Command::Response),
@@ -70,20 +68,11 @@ impl TryFrom<u8> for Command {
 }
 
 impl RipMessage {
-    fn from_route_updates(updates: Vec<RoutingEntry>, update_originator: Ipv4Addr) -> Self {
+    pub fn from_entries(entries: &[RoutingEntry]) -> Self {
         let cmd = Command::Response;
-        let entries = updates
+        let entries = entries
             .iter()
-            .map(|update| {
-                // poisoned reverse
-                let cost = if update.next_hop() == update_originator {
-                    MAX_COST
-                } else {
-                    update.cost()
-                };
-
-                Entry::with_default_mask(cost, update.destination())
-            })
+            .map(|e| Entry::with_default_mask(e.cost(), e.destination()))
             .collect();
 
         Self {
@@ -95,13 +84,17 @@ impl RipMessage {
 
 impl Message for RipMessage {
     fn into_bytes(self) -> Vec<u8> {
-        let mut v = vec![
-            self.command.into(),
-            self.entries
-                .len()
-                .try_into()
-                .expect("RIP message has too many entries"),
-        ];
+        let cmd: u16 = self.command.into();
+        let num_entries: u16 = self
+            .entries
+            .len()
+            .try_into()
+            .expect("RIP message has too many entries");
+
+        let mut v = Vec::new();
+
+        v.extend_from_slice(&cmd.to_be_bytes());
+        v.extend_from_slice(&num_entries.to_be_bytes());
 
         for entry in self.entries {
             v.append(&mut entry.into_bytes());
@@ -111,23 +104,25 @@ impl Message for RipMessage {
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
-        assert!(!bytes.is_empty(), "Missing command byte");
-        let command = Command::try_from(bytes[0]).expect("Bad command type");
+        assert!(bytes.len() >= 2, "Missing command byte");
 
-        assert!(bytes.len() >= 2, "Missing num entries byte");
-        let num_entries: u8 = bytes[1];
+        let cmd: u16 = u16::from_be_bytes(bytes[0..2].try_into().unwrap());
+        let command = Command::try_from(cmd).expect("Bad command type");
+
+        assert!(bytes.len() >= 4, "Missing num entries byte");
+        let num_entries: u16 = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
 
         if command == Command::Request {
             assert_eq!(num_entries, 0, "request RIP message cannot have any entries");
         }
 
         assert!(
-            bytes.len() >= 2 + num_entries as usize * Entry::serialized_size(),
+            bytes.len() >= 4 + num_entries as usize * Entry::serialized_size(),
             "Missing entry bytes"
         );
 
         let mut entries = Vec::new();
-        let mut start = 2;
+        let mut start = 4;
         let mut remaining_entries = num_entries;
         while remaining_entries > 0 {
             let entry = Entry::from_bytes(&bytes[start..start + Entry::serialized_size()]);
@@ -180,26 +175,47 @@ pub struct RipHandler {}
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let message = RipMessage::from_bytes(payload);
-        let next_hop = header.source_addr();
+
+        log::info!("Received RIP packet");
+
+        let sender = header.source_addr();
 
         let mut rt = get_routing_table_mut().await;
-
         let mut updates = Vec::new();
 
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
+            let entry_cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
             match rt.find_mut_entry_for(entry.address) {
                 Some(found) => {
-                    match entry.cost.cmp(&found.cost()) {
+                    match entry_cost.cmp(&found.cost()) {
                         Ordering::Less => {
-                            found.update(next_hop, entry.cost);
-                            updates.push(*found);
+                            log::info!("Found a cheaper entry; old: {:?}, new: {:?}", found, entry);
+                            if found.is_local() {
+                                // a neighbor router can advertise a lower cost when a link of our
+                                // own has been deactivated, but its cost has yet been advertised
+                                // to this neighbor.
+                                log::warn!("Update skipped; neighbor is advertising stale cost");
+                            } else {
+                                found.update(sender, entry_cost);
+                                updates.push(*found);
+                            }
                         }
                         Ordering::Greater => {
-                            if found.next_hop() == next_hop {
-                                found.update(next_hop, entry.cost);
-                                updates.push(*found);
+                            if found.next_hop() == sender {
+                                log::info!(
+                                    "Updating entry cost; old: {:?}, new: {:?}",
+                                    found,
+                                    entry
+                                );
+                                found.update(found.next_hop(), entry_cost);
+                                // poisoned reverse
+                                updates.push(RoutingEntry::new(
+                                    entry.address,
+                                    header.destination_addr(),
+                                    RoutingEntry::max_cost(),
+                                ));
                             }
                         }
                         Ordering::Equal => {
@@ -208,20 +224,26 @@ impl ProtocolHandler for RipHandler {
                             // in the Chapter 13 of Dordal).
                         }
                     }
+                    // Any entry matched by the incoming RIP packet is not stale.
+                    found.restart_delete_timer();
                 }
                 None => {
+                    log::info!("Adding new entry: {:?}", entry);
+
                     let dest = entry.address;
-                    let cost = entry.cost + 1;
-                    let entry = RoutingEntry::new(dest, next_hop, cost);
+                    let entry = RoutingEntry::new(dest, sender, entry_cost);
                     rt.add_entry(entry);
                     updates.push(entry);
                 }
             }
         }
 
-        let update_msg = RipMessage::from_route_updates(updates, header.source_addr());
-        for link in &*iter_links().await {
-            link.send(update_msg.clone().into()).await.ok();
+        if !updates.is_empty() {
+            let update_msg = RipMessage::from_entries(&updates);
+            log::info!("Sending triggered update RIP packet: {:?}", update_msg);
+            for link in &*iter_links().await {
+                link.send(update_msg.clone().into()).await.ok();
+            }
         }
     }
 }

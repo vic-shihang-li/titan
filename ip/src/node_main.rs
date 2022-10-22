@@ -8,6 +8,8 @@ use ip::route::Router;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let args = match Args::try_from(std::env::args()) {
         Ok(a) => {
             eprintln!("Args: {}", a);
