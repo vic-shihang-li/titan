@@ -88,7 +88,7 @@ pub enum SendError {
 
 impl Link {
     /// On this link, send a message conforming to one of the supported protocols.
-    pub async fn send(&self, payload: ProtocolPayload, dest: Ipv4Addr) -> Result<(), SendError> {
+    pub async fn send(&self, payload: ProtocolPayload, source: Ipv4Addr, dest: Ipv4Addr) -> Result<(), SendError> {
         if !self.activated {
             return Err(SendError::LinkInactive);
         }
@@ -101,7 +101,7 @@ impl Link {
             payload.len().try_into().expect("payload too long"),
             TTL,
             protocol,
-            self.src_virtual_ip.octets(),
+            source.octets(),
             dest.octets(),
         );
 
@@ -137,6 +137,10 @@ impl Link {
 
     pub fn dest(&self) -> Ipv4Addr {
         self.dest_virtual_ip
+    }
+
+    pub fn source(&self) -> Ipv4Addr {
+        self.src_virtual_ip
     }
 
     pub fn clone_socket(&self) -> Arc<UdpSocket> {

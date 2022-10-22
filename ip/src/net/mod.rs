@@ -40,8 +40,8 @@ pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
 /// Send bytes to a destination.
 ///
 /// The destination is typically the next-hop address for a packet.
-pub async fn send(message: ProtocolPayload, dest: Ipv4Addr, next_hop: Ipv4Addr) -> Result<()> {
-    NET.send(message, dest, next_hop).await
+pub async fn send(message: ProtocolPayload, source: Ipv4Addr, dest: Ipv4Addr, next_hop: Ipv4Addr) -> Result<()> {
+    NET.send(message, source, dest, next_hop).await
 }
 
 /// Turns on a link interface.
@@ -105,11 +105,11 @@ impl Net {
         }
     }
 
-    async fn send(&self, message: ProtocolPayload, dest: Ipv4Addr, next_hop: Ipv4Addr) -> Result<()> {
+    async fn send(&self, message: ProtocolPayload, source: Ipv4Addr, dest: Ipv4Addr, next_hop: Ipv4Addr) -> Result<()> {
         let links = self.links.read().await;
         match links.iter().find(|l| l.dest() == next_hop) {
             None => Err(Error::LinkNotFound),
-            Some(link) => link.send(message, dest).await.map_err(|e| match e {
+            Some(link) => link.send(message, source, dest).await.map_err(|e| match e {
                 SendError::LinkInactive => Error::LinkInactive,
             }),
         }

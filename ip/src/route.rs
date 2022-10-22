@@ -172,7 +172,7 @@ async fn periodic_rip_update() {
         let msg = RipMessage::from_entries(table.entries());
         log::info!("Periodic RIP update: {:?}", msg);
         for link in &*iter_links().await {
-            link.send(msg.clone().into(), link.dest()).await.ok();
+            link.send(msg.clone().into(), link.source(),link.dest()).await.ok();
         }
     })
     .await;
@@ -238,7 +238,7 @@ impl Router {
 
                 match ip {
                     InternetSlice::Ipv4(header, _) => {
-                        self.handle_packet(&header, payload, bytes).await
+                        self.handle_packet(&header, payload).await
                     }
                     InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
                 };
@@ -250,12 +250,11 @@ impl Router {
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        packet_bytes: &[u8],
     ) {
         match self.decide_packet(header) {
             PacketDecision::Drop => {}
             PacketDecision::Consume => self.consume_packet(header, payload).await,
-            PacketDecision::Forward => self.forward_packet(header, packet_bytes).await,
+            PacketDecision::Forward => self.forward_packet(header, payload).await,
         }
     }
 
@@ -263,8 +262,6 @@ impl Router {
         if header.ttl() == 0 {
             return PacketDecision::Drop;
         }
-
-        // TODO: if checksum is incorrect, drop.
 
         if self.is_my_addr(&header.destination_addr()) {
             return PacketDecision::Consume;
@@ -289,14 +286,14 @@ impl Router {
         }
     }
 
-    async fn forward_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, _packet_bytes: &[u8]) {
+    async fn forward_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let dest = _header.destination_addr();
-        let tm = Test(_packet_bytes.to_vec());
+        let source = _header.source_addr();
+        eprintln!("Packet Bytes: {}", payload.len());
+        let tm = Test(payload.to_vec());
         let rt = ROUTING_TABLE.read().await;
         if rt.has_entry_for(dest) {
-            let entry = rt.find_entry_for(dest).unwrap();
-            let next_hop = entry.next_hop;
-            send(tm, next_hop).await.expect("Error forwarding packet");
+            forward(tm, source,dest).await.expect("Error forwarding packet");
         } else {
             eprintln!("No route to {}", dest);
         }
@@ -324,5 +321,12 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
 
 pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Error>{
     let next_hop = ROUTING_TABLE.read().await.find_entry_for(dest_vip).unwrap().next_hop;
-    net::send(payload, dest_vip, next_hop).await
+    let source_vip = iter_links().await
+        .iter().find(|link| link.dest() == next_hop).unwrap().source();
+    net::send(payload, source_vip, dest_vip, next_hop).await
+}
+
+pub async fn forward(payload: ProtocolPayload, source_vip: Ipv4Addr, dest_vip: Ipv4Addr) -> Result<(), Error> {
+    let next_hop = ROUTING_TABLE.read().await.find_entry_for(dest_vip).unwrap().next_hop;
+    net::send(payload, source_vip, dest_vip, next_hop).await
 }
