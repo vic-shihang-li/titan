@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::{iter_links, Ipv4PacketBuilder},
+    net::{self, iter_links, Ipv4PacketBuilder},
     protocol::Protocol,
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
@@ -69,11 +69,24 @@ impl TryFrom<u16> for Command {
 }
 
 impl RipMessage {
-    pub fn from_entries(entries: &[RoutingEntry]) -> Self {
+    pub fn from_entries_with_poisoned_reverse(
+        entries: &[RoutingEntry],
+        receiver: Ipv4Addr,
+    ) -> Self {
         let cmd = Command::Response;
-        let entries = entries
+        let entries: Vec<_> = entries
             .iter()
-            .map(|e| Entry::with_default_mask(e.cost(), e.destination()))
+            .map(|e| {
+                let cost = {
+                    if e.next_hop() == receiver {
+                        RoutingEntry::max_cost()
+                    } else {
+                        e.cost()
+                    }
+                };
+
+                Entry::with_default_mask(cost, e.destination())
+            })
             .collect();
 
         Self {
@@ -184,52 +197,71 @@ impl ProtocolHandler for RipHandler {
 
         let sender = header.source_addr();
 
+        if net::find_link_to(sender)
+            .await
+            .expect("Failed to find the link where RIP packet was sent")
+            .is_disabled()
+        {
+            log::info!("Ignoring RIP packet from {}, link disabled", sender);
+            return;
+        }
+
         let mut rt = get_routing_table_mut().await;
         let mut updates = Vec::new();
 
         // RIP protocol implementation.
         // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
+            if net::is_my_addr(entry.address).await {
+                log::warn!("Ignoring advertised entry for my address: {:?}", entry);
+                continue;
+            }
+
             let entry_cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
             match rt.find_mut_entry_for(entry.address) {
-                Some(found) => {
-                    match entry_cost.cmp(&found.cost()) {
+                Some(local_entry) => {
+                    match entry_cost.cmp(&local_entry.cost()) {
                         Ordering::Less => {
-                            log::info!("Found a cheaper entry; old: {:?}, new: {:?}", found, entry);
-                            if found.is_local() {
-                                // a neighbor router can advertise a lower cost when a link of our
-                                // own has been deactivated, but its cost has yet been advertised
-                                // to this neighbor.
-                                log::warn!("Update skipped; neighbor is advertising stale cost");
+                            log::info!(
+                                "Found a cheaper entry; old: {:?}, new: {:?}",
+                                local_entry,
+                                entry
+                            );
+                            if local_entry.get_inner_link().await.is_disabled() {
+                                log::info!("Update skipped; neighbor is advertising cost for disabled link");
                             } else {
-                                found.update(sender, entry_cost);
-                                updates.push(*found);
+                                local_entry.update(sender, entry_cost);
+                                updates.push(*local_entry);
                             }
                         }
                         Ordering::Greater => {
-                            if found.next_hop() == sender {
+                            if local_entry.next_hop() == sender {
                                 log::info!(
                                     "Updating entry cost; old: {:?}, new: {:?}",
-                                    found,
+                                    local_entry,
                                     entry
                                 );
-                                found.update(found.next_hop(), entry_cost);
-                                // poisoned reverse
-                                updates.push(RoutingEntry::new(
-                                    entry.address,
-                                    header.destination_addr(),
-                                    RoutingEntry::max_cost(),
-                                ));
+                                local_entry.update_cost(entry_cost);
+                                updates.push(*local_entry);
+                            } else {
+                                log::warn!(
+                                    "Ignoring RIP entry with greater cost {:?}, sender: {:?}, local: {:?}",
+                                    entry,
+                                    sender,
+                                    local_entry
+                                );
                             }
                         }
                         Ordering::Equal => {
                             // If new cost == old cost, we ignore the new report.
                             // Accepting the new report could destabilize the network (see Ex. 8
                             // in the Chapter 13 of Dordal).
+                            if local_entry.next_hop() == sender {
+                                log::info!("Restarting timer without update");
+                                local_entry.restart_delete_timer();
+                            }
                         }
                     }
-                    // Any entry matched by the incoming RIP packet is not stale.
-                    found.restart_delete_timer();
                 }
                 None => {
                     log::info!("Adding new entry: {:?}", entry);
@@ -243,16 +275,15 @@ impl ProtocolHandler for RipHandler {
         }
 
         if !updates.is_empty() {
-            let update_msg_bytes = {
-                let update_msg = RipMessage::from_entries(&updates);
-                log::info!("Sending triggered update RIP packet: {:?}", update_msg);
-                update_msg.into_bytes()
-            };
             for link in &*iter_links().await {
+                log::info!("Sending triggered update to {}", link.dest());
+                let rip_msg_bytes =
+                    RipMessage::from_entries_with_poisoned_reverse(&updates, link.dest())
+                        .into_bytes();
                 let packet = Ipv4PacketBuilder::default()
                     .with_src(link.source())
                     .with_dst(link.dest())
-                    .with_payload(&update_msg_bytes)
+                    .with_payload(&rip_msg_bytes)
                     .with_protocol(Protocol::Rip)
                     .build()
                     .unwrap();

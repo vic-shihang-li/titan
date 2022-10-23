@@ -56,6 +56,10 @@ pub async fn find_link_to<'a>(next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
     NET.find_link_to(next_hop).await
 }
 
+pub async fn find_link_with_interface_ip<'a>(ip: Ipv4Addr) -> Option<LinkRef<'a>> {
+    NET.find_link_with_interface_ip(ip).await
+}
+
 /// Turns on a link interface.
 pub async fn activate(link_no: u16) -> Result<()> {
     NET.activate_link(link_no).await
@@ -64,6 +68,15 @@ pub async fn activate(link_no: u16) -> Result<()> {
 /// Turns off a link interface.
 pub async fn deactivate(link_no: u16) -> Result<()> {
     NET.deactivate_link(link_no).await
+}
+
+pub async fn is_my_addr(addr: Ipv4Addr) -> bool {
+    for link in &*iter_links().await {
+        if link.source() == addr {
+            return true;
+        }
+    }
+    false
 }
 
 /// Iterate all links (both active and inactive) for this host.
@@ -168,12 +181,31 @@ impl Net {
         }
     }
 
+    #[allow(clippy::needless_lifetimes)]
     async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
         let links = self.links.read().await;
         let mut idx = 0;
 
         while idx < links.len() {
             if links[idx].dest() == dest {
+                break;
+            }
+            idx += 1;
+        }
+
+        if idx == links.len() {
+            return None;
+        } else {
+            return Some(LinkRef { guard: links, idx });
+        }
+    }
+
+    async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
+        let links = self.links.read().await;
+        let mut idx = 0;
+
+        while idx < links.len() {
+            if links[idx].source() == ip {
                 break;
             }
             idx += 1;

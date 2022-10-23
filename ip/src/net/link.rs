@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::net::UdpSocket;
 
-use crate::route::get_routing_table_mut;
+use crate::route::{get_routing_table_mut, Entry as RoutingEntry};
 
 use super::utils::localhost_with_port;
 
@@ -91,7 +91,7 @@ impl Link {
         }
 
         self.sock
-            .send_to(&payload, localhost_with_port(self.dest_port))
+            .send_to(payload, localhost_with_port(self.dest_port))
             .await
             .unwrap();
 
@@ -99,21 +99,29 @@ impl Link {
     }
 
     pub async fn activate(&mut self) {
-        self.activated = true;
+        if !self.activated {
+            self.activated = true;
 
-        let mut table = get_routing_table_mut().await;
-        if let Some(e) = table.find_mut_entry_for(self.dest_virtual_ip) {
-            e.update_cost(0);
+            let mut table = get_routing_table_mut().await;
+            table.add_entry(RoutingEntry::new(
+                self.src_virtual_ip,
+                self.src_virtual_ip,
+                0,
+            ));
         }
     }
 
     pub async fn deactivate(&mut self) {
-        self.activated = false;
+        if self.activated {
+            self.activated = false;
 
-        let mut table = get_routing_table_mut().await;
-        if let Some(e) = table.find_mut_entry_for(self.dest_virtual_ip) {
-            e.mark_unreachable();
+            let mut table = get_routing_table_mut().await;
+            table.delete_mut_entry_for(self.src_virtual_ip);
         }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        !self.activated
     }
 
     pub fn dest(&self) -> Ipv4Addr {

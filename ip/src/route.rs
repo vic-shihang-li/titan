@@ -1,4 +1,4 @@
-use crate::net::{iter_links, Ipv4PacketBuilder};
+use crate::net::{iter_links, Ipv4PacketBuilder, LinkRef};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::{net, Args, Message};
@@ -50,6 +50,10 @@ impl RoutingTable {
 
     pub fn find_entry_for(&self, addr: Ipv4Addr) -> Option<&Entry> {
         self.entries.iter().find(|e| e.destination == addr)
+    }
+
+    pub fn delete_mut_entry_for(&mut self, addr: Ipv4Addr) {
+        self.entries.retain(|e| e.destination != addr)
     }
 
     pub fn add_entry(&mut self, entry: Entry) {
@@ -107,10 +111,30 @@ impl Entry {
 
     /// Whether this is an entry for one of the router's own IPs
     pub fn is_local(&self) -> bool {
-        self.cost == 0
+        self.destination == self.next_hop
+    }
+
+    pub async fn get_inner_link<'a>(&self) -> LinkRef<'a> {
+        let r = if self.is_local() {
+            net::find_link_with_interface_ip(self.destination).await
+        } else {
+            net::find_link_to(self.next_hop).await
+        };
+
+        if r.is_none() {
+            panic!("Failed to find link for entry {:?}", self);
+        }
+
+        r.unwrap()
     }
 
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
+        log::info!(
+            "Update routing entry: old: {}, new next hop: {}, new cost: {}",
+            self,
+            next_hop,
+            cost
+        );
         self.next_hop = next_hop;
         self.cost = cost;
         self.restart_delete_timer();
@@ -149,16 +173,15 @@ async fn prune_routing_table() {
 
 async fn periodic_rip_update() {
     loop_with_interval(Duration::from_secs(5), || async {
-        let msg = {
-            let table = ROUTING_TABLE.read().await;
-            let msg = RipMessage::from_entries(table.entries());
-            log::info!("Periodic RIP update: {:?}", msg);
-            msg.into_bytes()
-        };
+        log::info!("Sending periodic update");
+        let table = ROUTING_TABLE.read().await;
 
         for link in &*iter_links().await {
+            let rip_msg_bytes =
+                RipMessage::from_entries_with_poisoned_reverse(table.entries(), link.dest())
+                    .into_bytes();
             let packet = Ipv4PacketBuilder::default()
-                .with_payload(&msg)
+                .with_payload(&rip_msg_bytes)
                 .with_protocol(Protocol::Rip)
                 .with_src(link.source())
                 .with_dst(link.dest())
@@ -212,8 +235,11 @@ impl Router {
             // 2. if packet is for "me", pass packet to the correct protocol handler
             // 3. if forwarding table has rule for packet, send to the next-hop interface
 
+            log::info!("Receiving packet");
             self.handle_packet_bytes(&bytes).await;
         }
+
+        panic!("Premature run loop exit");
     }
 
     async fn handle_packet_bytes(&self, bytes: &[u8]) {
@@ -258,7 +284,7 @@ impl Router {
         PacketDecision::Forward
     }
 
-    fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
+    pub fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
         self.addrs.iter().any(|a| a == addr)
     }
 
