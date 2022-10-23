@@ -39,6 +39,7 @@ main()
     fi
 
     clean=0
+    debug=0
     
     POSITIONAL=()
     while [[ $# -gt 0 ]]; do
@@ -46,6 +47,10 @@ main()
 	case $key in
 	    --clean)
 		clean=1
+		shift
+		;;
+	    --debug)
+		debug=1
 		shift
 		;;
 	    --help)
@@ -65,6 +70,11 @@ main()
     shift
     extra_args=$@
 
+    debug_prelude=
+    if [[ ${debug} == 1 ]]; then
+        debug_prelude="RUST_LOG=info"
+    fi
+
     if [[ ${clean} == 1 ]]; then
 	kill_open_sessions
     fi
@@ -78,7 +88,7 @@ main()
     # Create a tmux session with the first lnx file
     # Run each pane as the node + a shell after so that user can press
     # Ctrl+C and get a shell, rather than killing the pane
-    tmux new-session -s ${session} -d "${node} ${extra_args} ${net_first}; ${START_SHELL}"
+    tmux new-session -s ${session} -d "${debug_prelude} ${node} ${extra_args} ${net_first}; ${START_SHELL}"
     tmux select-pane -T $(basename ${net_first} .lnx)
 
     # Set session options
@@ -87,7 +97,7 @@ main()
 
     # Now that the session exists, create all the other panes
     for f in ${net_others}; do
-	tmux split-window "${node} ${extra_args} ${f}; ${START_SHELL}"
+	tmux split-window "${debug_prelude} ${node} ${extra_args} ${f}; ${START_SHELL}"
 	tmux select-pane -T $(basename ${f} .lnx)
 
 	# Even out the layout (use tiled to accommodate the maximum
