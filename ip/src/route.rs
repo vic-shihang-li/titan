@@ -1,4 +1,4 @@
-use crate::net::{iter_links, Error};
+use crate::net::iter_links;
 use crate::protocol::rip::RipMessage;
 use crate::protocol::{Protocol, ProtocolPayload};
 use crate::{net, Args};
@@ -295,12 +295,18 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
     }
 }
 
-pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Error> {
+#[derive(Debug)]
+pub enum SendError {
+    NoForwardingEntry,
+    Transport(crate::net::Error),
+}
+
+pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), SendError> {
     let next_hop = ROUTING_TABLE
         .read()
         .await
         .find_entry_for(dest_vip)
-        .unwrap()
+        .ok_or(SendError::NoForwardingEntry)?
         .next_hop;
     let source_vip = iter_links()
         .await
@@ -308,5 +314,7 @@ pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Er
         .find(|link| link.dest() == next_hop)
         .unwrap()
         .source();
-    net::send(payload, source_vip, dest_vip, next_hop).await
+    net::send(payload, source_vip, dest_vip, next_hop)
+        .await
+        .map_err(SendError::Transport)
 }
