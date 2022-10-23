@@ -1,7 +1,7 @@
-use crate::net::iter_links;
+use crate::net::{iter_links, Ipv4PacketBuilder};
 use crate::protocol::rip::RipMessage;
-use crate::protocol::{Protocol, ProtocolPayload};
-use crate::{net, Args};
+use crate::protocol::Protocol;
+use crate::{net, Args, Message};
 use async_trait::async_trait;
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use lazy_static::lazy_static;
@@ -149,13 +149,20 @@ async fn prune_routing_table() {
 
 async fn periodic_rip_update() {
     loop_with_interval(Duration::from_secs(5), || async {
-        let table = ROUTING_TABLE.read().await;
-        let msg = RipMessage::from_entries(table.entries());
-        log::info!("Periodic RIP update: {:?}", msg);
+        let msg = {
+            let table = ROUTING_TABLE.read().await;
+            let msg = RipMessage::from_entries(table.entries());
+            log::info!("Periodic RIP update: {:?}", msg);
+            msg.into_bytes()
+        };
+
         for link in &*iter_links().await {
-            link.send(msg.clone().into(), link.source(), link.dest())
-                .await
-                .ok();
+            let packet = Ipv4PacketBuilder::default()
+                .with_payload(&msg)
+                .using_link(link)
+                .build()
+                .unwrap();
+            link.send(&packet).await.ok();
         }
     })
     .await;
@@ -240,6 +247,8 @@ impl Router {
             return PacketDecision::Drop;
         }
 
+        // TODO: drop if checksum isn't valid
+
         if self.is_my_addr(&header.destination_addr()) {
             return PacketDecision::Consume;
         }
@@ -265,16 +274,28 @@ impl Router {
 
     async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let dest = header.destination_addr();
-        let source = header.source_addr();
-        log::info!("Packet Bytes: {}", payload.len());
         let rt = ROUTING_TABLE.read().await;
+
         if let Some(entry) = rt.find_entry_for(dest) {
-            let payload = ProtocolPayload::Test(payload.to_vec());
-            if let Err(e) = net::send(payload, source, dest, entry.next_hop).await {
-                eprintln!("Error forwarding packet, {:?}", e);
+            match net::find_link_to(entry.next_hop).await {
+                Some(link) => {
+                    let packet = Ipv4PacketBuilder::default()
+                        .using_link(&link)
+                        .with_payload(payload)
+                        .with_ttl(header.ttl() - 1)
+                        .build()
+                        .unwrap();
+
+                    if let Err(e) = link.send(&packet).await {
+                        log::warn!("Error forwarding packet, {:?}", e);
+                    }
+                }
+                None => {
+                    log::warn!("No link to next hop {}, dropping packet", entry.next_hop);
+                }
             }
         } else {
-            log::info!("No route to {}, dropping packet", dest);
+            log::warn!("No route to {}, dropping packet", dest);
         }
     }
 }
@@ -298,23 +319,30 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
 #[derive(Debug)]
 pub enum SendError {
     NoForwardingEntry,
+    NoLink,
     Transport(crate::net::Error),
 }
 
-pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), SendError> {
+pub async fn send(payload: &[u8], dest_vip: Ipv4Addr) -> Result<(), SendError> {
     let next_hop = ROUTING_TABLE
         .read()
         .await
         .find_entry_for(dest_vip)
         .ok_or(SendError::NoForwardingEntry)?
         .next_hop;
-    let source_vip = iter_links()
+
+    let link = net::find_link_to(next_hop).await.ok_or_else(|| {
+        log::warn!("No link found for next hop {}", next_hop);
+        SendError::NoLink
+    })?;
+
+    let packet = Ipv4PacketBuilder::default()
+        .using_link(&link)
+        .with_payload(payload)
+        .build()
+        .unwrap();
+
+    link.send(&packet)
         .await
-        .iter()
-        .find(|link| link.dest() == next_hop)
-        .unwrap()
-        .source();
-    net::send(payload, source_vip, dest_vip, next_hop)
-        .await
-        .map_err(SendError::Transport)
+        .map_err(|e| SendError::Transport(e.into()))
 }

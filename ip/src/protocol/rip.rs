@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::iter_links,
+    net::{iter_links, Ipv4PacketBuilder},
+    protocol::Protocol,
     route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
@@ -242,12 +243,20 @@ impl ProtocolHandler for RipHandler {
         }
 
         if !updates.is_empty() {
-            let update_msg = RipMessage::from_entries(&updates);
-            log::info!("Sending triggered update RIP packet: {:?}", update_msg);
+            let update_msg_bytes = {
+                let update_msg = RipMessage::from_entries(&updates);
+                log::info!("Sending triggered update RIP packet: {:?}", update_msg);
+                update_msg.into_bytes()
+            };
             for link in &*iter_links().await {
-                link.send(update_msg.clone().into(), link.source(), link.dest())
-                    .await
-                    .ok();
+                let packet = Ipv4PacketBuilder::default()
+                    .with_src(link.source())
+                    .with_dst(link.dest())
+                    .with_payload(&update_msg_bytes)
+                    .with_protocol(Protocol::Rip.into())
+                    .build()
+                    .unwrap();
+                link.send(&packet).await.ok();
             }
         }
     }

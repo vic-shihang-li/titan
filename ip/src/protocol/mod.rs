@@ -1,10 +1,6 @@
 pub mod rip;
 pub mod test;
 
-use crate::protocol::test::TestMessage;
-use crate::Message;
-use rip::RipMessage;
-
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {
     Rip,
@@ -34,31 +30,5 @@ impl Into<u8> for Protocol {
             Protocol::Rip => 200,
             Protocol::Test => 0,
         }
-    }
-}
-
-pub enum ProtocolPayload {
-    Rip(RipMessage),
-    Test(Vec<u8>),
-}
-
-impl ProtocolPayload {
-    pub fn into_bytes(self) -> (u8, Vec<u8>) {
-        match self {
-            ProtocolPayload::Rip(msg) => (Protocol::Rip.into(), msg.into_bytes()),
-            ProtocolPayload::Test(msg) => (Protocol::Test.into(), msg),
-        }
-    }
-}
-
-impl From<RipMessage> for ProtocolPayload {
-    fn from(m: RipMessage) -> Self {
-        ProtocolPayload::Rip(m)
-    }
-}
-
-impl From<TestMessage> for ProtocolPayload {
-    fn from(m: TestMessage) -> Self {
-        ProtocolPayload::Test(m.into_bytes())
     }
 }

@@ -2,11 +2,11 @@ mod args;
 mod link;
 mod utils;
 
-use crate::protocol::ProtocolPayload;
 pub use args::Args;
 pub use link::{Link, LinkDefinition};
 use std::ops::Deref;
 use utils::localhost_with_port;
+pub use utils::Ipv4PacketBuilder;
 
 use lazy_static::lazy_static;
 use std::net::Ipv4Addr;
@@ -33,6 +33,14 @@ pub enum Error {
     LinkInactive,
 }
 
+impl From<link::SendError> for Error {
+    fn from(e: link::SendError) -> Self {
+        match e {
+            link::SendError::LinkInactive => Error::LinkInactive,
+        }
+    }
+}
+
 pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
     NET.links.read().await
 }
@@ -40,13 +48,12 @@ pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
 /// Send bytes to a destination.
 ///
 /// The destination is typically the next-hop address for a packet.
-pub async fn send(
-    message: ProtocolPayload,
-    source: Ipv4Addr,
-    dest: Ipv4Addr,
-    next_hop: Ipv4Addr,
-) -> Result<()> {
-    NET.send(message, source, dest, next_hop).await
+pub async fn send(message: &[u8], next_hop: Ipv4Addr) -> Result<()> {
+    NET.send(message, next_hop).await
+}
+
+pub async fn find_link_to<'a>(next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
+    NET.find_link_to(next_hop).await
 }
 
 /// Turns on a link interface.
@@ -74,6 +81,18 @@ impl<'a> Deref for LinkIter<'a> {
     type Target = Vec<Link>;
     fn deref(&self) -> &Self::Target {
         &*self.inner
+    }
+}
+
+pub struct LinkRef<'a> {
+    guard: RwLockReadGuard<'a, Vec<Link>>,
+    idx: usize,
+}
+
+impl<'a> Deref for LinkRef<'a> {
+    type Target = Link;
+    fn deref(&self) -> &Self::Target {
+        &self.guard[self.idx]
     }
 }
 
@@ -110,17 +129,11 @@ impl Net {
         }
     }
 
-    async fn send(
-        &self,
-        message: ProtocolPayload,
-        source: Ipv4Addr,
-        dest: Ipv4Addr,
-        next_hop: Ipv4Addr,
-    ) -> Result<()> {
+    async fn send(&self, payload: &[u8], next_hop: Ipv4Addr) -> Result<()> {
         let links = self.links.read().await;
         match links.iter().find(|l| l.dest() == next_hop) {
             None => Err(Error::LinkNotFound),
-            Some(link) => link.send(message, source, dest).await.map_err(|e| match e {
+            Some(link) => link.send(payload).await.map_err(|e| match e {
                 SendError::LinkInactive => Error::LinkInactive,
             }),
         }
@@ -152,6 +165,24 @@ impl Net {
     async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
         LinkIter {
             inner: self.links.read().await,
+        }
+    }
+
+    async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
+        let links = self.links.read().await;
+        let mut idx = 0;
+
+        while idx < links.len() {
+            if links[idx].dest() == dest {
+                break;
+            }
+            idx += 1;
+        }
+
+        if idx == links.len() {
+            return None;
+        } else {
+            return Some(LinkRef { guard: links, idx });
         }
     }
 

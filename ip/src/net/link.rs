@@ -2,15 +2,11 @@ use std::fmt;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use etherparse::Ipv4Header;
 use tokio::net::UdpSocket;
 
-use crate::protocol::ProtocolPayload;
 use crate::route::get_routing_table_mut;
 
 use super::utils::localhost_with_port;
-
-const TTL: u8 = 15;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LinkDefinition {
@@ -82,42 +78,20 @@ impl LinkDefinition {
     }
 }
 
+#[derive(Debug)]
 pub enum SendError {
     LinkInactive,
 }
 
 impl Link {
     /// On this link, send a message conforming to one of the supported protocols.
-    pub async fn send(
-        &self,
-        payload: ProtocolPayload,
-        source: Ipv4Addr,
-        dest: Ipv4Addr,
-    ) -> Result<(), SendError> {
+    pub async fn send(&self, payload: &[u8]) -> Result<(), SendError> {
         if !self.activated {
             return Err(SendError::LinkInactive);
         }
 
-        let mut buf = Vec::new();
-
-        let (protocol, payload) = payload.into_bytes();
-
-        let ip_header = Ipv4Header::new(
-            payload.len().try_into().expect("payload too long"),
-            TTL,
-            protocol,
-            source.octets(),
-            dest.octets(),
-        );
-
-        ip_header
-            .write(&mut buf)
-            .expect("IP header serialization error");
-
-        buf.extend_from_slice(&payload);
-
         self.sock
-            .send_to(&buf[..], localhost_with_port(self.dest_port))
+            .send_to(&payload, localhost_with_port(self.dest_port))
             .await
             .unwrap();
 
