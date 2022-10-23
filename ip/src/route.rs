@@ -11,7 +11,6 @@ use std::future::Future;
 use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
 
-use crate::protocol::ProtocolPayload::Test;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
@@ -264,18 +263,18 @@ impl Router {
         }
     }
 
-    async fn forward_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        let dest = _header.destination_addr();
-        let source = _header.source_addr();
-        eprintln!("Packet Bytes: {}", payload.len());
-        let tm = Test(payload.to_vec());
+    async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
+        let dest = header.destination_addr();
+        let source = header.source_addr();
+        log::info!("Packet Bytes: {}", payload.len());
         let rt = ROUTING_TABLE.read().await;
-        if rt.has_entry_for(dest) {
-            forward(tm, source, dest)
-                .await
-                .expect("Error forwarding packet");
+        if let Some(entry) = rt.find_entry_for(dest) {
+            let payload = ProtocolPayload::Test(payload.to_vec());
+            if let Err(e) = net::send(payload, source, dest, entry.next_hop).await {
+                eprintln!("Error forwarding packet, {:?}", e);
+            }
         } else {
-            eprintln!("No route to {}", dest);
+            log::info!("No route to {}, dropping packet", dest);
         }
     }
 }
@@ -309,19 +308,5 @@ pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Er
         .find(|link| link.dest() == next_hop)
         .unwrap()
         .source();
-    net::send(payload, source_vip, dest_vip, next_hop).await
-}
-
-pub async fn forward(
-    payload: ProtocolPayload,
-    source_vip: Ipv4Addr,
-    dest_vip: Ipv4Addr,
-) -> Result<(), Error> {
-    let next_hop = ROUTING_TABLE
-        .read()
-        .await
-        .find_entry_for(dest_vip)
-        .unwrap()
-        .next_hop;
     net::send(payload, source_vip, dest_vip, next_hop).await
 }
