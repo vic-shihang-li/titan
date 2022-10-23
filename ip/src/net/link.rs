@@ -128,16 +128,18 @@ impl Link {
         self.activated = true;
 
         let mut table = get_routing_table_mut().await;
-        let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
-        e.update_cost(0);
+        if let Some(e) = table.find_mut_entry_for(self.dest_virtual_ip) {
+            e.update_cost(0);
+        }
     }
 
     pub async fn deactivate(&mut self) {
         self.activated = false;
 
         let mut table = get_routing_table_mut().await;
-        let e = table.find_mut_entry_for(self.dest_virtual_ip).unwrap();
-        e.mark_unreachable();
+        if let Some(e) = table.find_mut_entry_for(self.dest_virtual_ip) {
+            e.mark_unreachable();
+        }
     }
 
     pub fn dest(&self) -> Ipv4Addr {

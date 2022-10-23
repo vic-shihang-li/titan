@@ -303,9 +303,6 @@ pub async fn bootstrap(args: &Args) {
     for link in &args.links {
         // Add entry to my interface with a cost of 0.
         rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
-
-        // Add entry to my neighbor with a cost of 1.
-        rt.add_entry(Entry::new_local(link.dest_ip, link.dest_ip, 1));
     }
 }
 
