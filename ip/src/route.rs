@@ -66,7 +66,7 @@ impl RoutingTable {
         let num_deleted = {
             let len_before = self.entries.len();
             self.entries
-                .retain(|e| e.is_local || e.last_updated.elapsed() < max_age);
+                .retain(|e| e.is_local() || e.last_updated.elapsed() < max_age);
             let len_after = self.entries().len();
             len_before - len_after
         };
@@ -82,9 +82,6 @@ pub struct Entry {
     next_hop: Ipv4Addr,
     cost: u32,
     last_updated: Instant,
-    /// `true` if this is an entry formed by this router's links (i.e. entries
-    /// with a cost of 0 or 1). `false` if this is an entry advertised by other routers.
-    is_local: bool,
 }
 
 impl Entry {
@@ -94,21 +91,6 @@ impl Entry {
             next_hop,
             cost,
             last_updated: Instant::now(),
-            is_local: false,
-        }
-    }
-
-    pub fn new_local(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
-        assert!(
-            cost == 0 || cost == 1,
-            "local routing table entry must have a cost of 0 or 1"
-        );
-        Self {
-            destination,
-            next_hop,
-            cost,
-            last_updated: Instant::now(),
-            is_local: true,
         }
     }
 
@@ -124,8 +106,9 @@ impl Entry {
         self.next_hop
     }
 
+    /// Whether this is an entry for one of the router's own IPs
     pub fn is_local(&self) -> bool {
-        self.is_local
+        self.cost == 0
     }
 
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
@@ -302,7 +285,7 @@ pub async fn bootstrap(args: &Args) {
 
     for link in &args.links {
         // Add entry to my interface with a cost of 0.
-        rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
+        rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
     }
 }
 
