@@ -159,6 +159,7 @@ async fn periodic_rip_update() {
         for link in &*iter_links().await {
             let packet = Ipv4PacketBuilder::default()
                 .with_payload(&msg)
+                .with_protocol(Protocol::Rip)
                 .using_link(link)
                 .build()
                 .unwrap();
@@ -323,7 +324,11 @@ pub enum SendError {
     Transport(crate::net::Error),
 }
 
-pub async fn send(payload: &[u8], dest_vip: Ipv4Addr) -> Result<(), SendError> {
+pub async fn send<P: Into<u8>>(
+    payload: &[u8],
+    protocol: P,
+    dest_vip: Ipv4Addr,
+) -> Result<(), SendError> {
     let next_hop = ROUTING_TABLE
         .read()
         .await
@@ -339,6 +344,7 @@ pub async fn send(payload: &[u8], dest_vip: Ipv4Addr) -> Result<(), SendError> {
     let packet = Ipv4PacketBuilder::default()
         .using_link(&link)
         .with_payload(payload)
+        .with_protocol(protocol)
         .build()
         .unwrap();
 

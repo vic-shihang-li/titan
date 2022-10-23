@@ -253,7 +253,7 @@ impl ProtocolHandler for RipHandler {
                     .with_src(link.source())
                     .with_dst(link.dest())
                     .with_payload(&update_msg_bytes)
-                    .with_protocol(Protocol::Rip.into())
+                    .with_protocol(Protocol::Rip)
                     .build()
                     .unwrap();
                 link.send(&packet).await.ok();

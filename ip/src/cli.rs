@@ -1,4 +1,5 @@
 use crate::net::{self, get_interfaces};
+use crate::protocol::Protocol;
 use crate::route;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
@@ -18,7 +19,7 @@ pub enum Command {
 
 pub struct SendCmd {
     virtual_ip: Ipv4Addr,
-    protocol: u16,
+    protocol: Protocol,
     payload: String,
 }
 
@@ -108,10 +109,12 @@ impl Cli {
             }
             Command::Send(cmd) => {
                 eprintln!(
-                    "Sending packet {} with protocol {} to {}",
+                    "Sending packet {} with protocol {:?} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
-                if let Err(e) = route::send(cmd.payload.as_bytes(), cmd.virtual_ip).await {
+                if let Err(e) =
+                    route::send(cmd.payload.as_bytes(), cmd.protocol, cmd.virtual_ip).await
+                {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }
@@ -228,7 +231,7 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
             match (virtual_ip, protocol, payload) {
                 (Some(virtual_ip), Some(protocol), p) => {
                     let virtual_ip = virtual_ip.parse();
-                    let protocol = protocol.parse::<u16>();
+                    let protocol = Protocol::try_from(protocol);
 
                     match (virtual_ip, protocol) {
                         (Ok(virtual_ip), Ok(protocol)) => Some(Command::Send(SendCmd {

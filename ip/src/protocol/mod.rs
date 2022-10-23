@@ -23,6 +23,16 @@ impl TryFrom<u8> for Protocol {
     }
 }
 
+impl TryFrom<&str> for Protocol {
+    type Error = ParseProtocolError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let v = value
+            .parse::<u8>()
+            .map_err(|_| ParseProtocolError::Unsupported)?;
+        Protocol::try_from(v)
+    }
+}
+
 #[allow(clippy::from_over_into)]
 impl Into<u8> for Protocol {
     fn into(self) -> u8 {

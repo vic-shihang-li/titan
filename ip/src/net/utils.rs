@@ -36,8 +36,8 @@ impl<'a> Ipv4PacketBuilder<'a> {
         self
     }
 
-    pub fn with_protocol(&mut self, protocol: u8) -> &mut Self {
-        self.protocol = Some(protocol);
+    pub fn with_protocol<P: Into<u8>>(&mut self, protocol: P) -> &mut Self {
+        self.protocol = Some(protocol.into());
         self
     }
 
