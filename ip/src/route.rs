@@ -105,6 +105,10 @@ impl Entry {
         self.cost
     }
 
+    pub fn is_unreachable(&self) -> bool {
+        self.cost >= Entry::max_cost()
+    }
+
     pub fn next_hop(&self) -> Ipv4Addr {
         self.next_hop
     }
@@ -349,6 +353,7 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
 #[derive(Debug)]
 pub enum SendError {
     NoForwardingEntry,
+    Unreachable,
     NoLink,
     Transport(crate::net::Error),
 }
@@ -358,15 +363,18 @@ pub async fn send<P: Into<u8>>(
     protocol: P,
     dest_vip: Ipv4Addr,
 ) -> Result<(), SendError> {
-    let next_hop = ROUTING_TABLE
-        .read()
-        .await
-        .find_entry_for(dest_vip)
-        .ok_or(SendError::NoForwardingEntry)?
-        .next_hop;
+    let table = ROUTING_TABLE.read().await;
 
-    let link = net::find_link_to(next_hop).await.ok_or_else(|| {
-        log::warn!("No link found for next hop {}", next_hop);
+    let entry = table
+        .find_entry_for(dest_vip)
+        .ok_or(SendError::NoForwardingEntry)?;
+
+    if entry.is_unreachable() {
+        return Err(SendError::Unreachable);
+    }
+
+    let link = net::find_link_to(entry.next_hop).await.ok_or_else(|| {
+        log::warn!("No link found for next hop {}", entry.next_hop);
         SendError::NoLink
     })?;
 
