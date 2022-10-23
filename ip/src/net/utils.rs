@@ -1,8 +1,6 @@
 use etherparse::Ipv4Header;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use super::Link;
-
 pub fn localhost_with_port(port: u16) -> SocketAddr {
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
 }
@@ -51,12 +49,6 @@ impl<'a> Ipv4PacketBuilder<'a> {
         self
     }
 
-    pub fn using_link(&mut self, link: &Link) -> &mut Self {
-        self.src = Some(link.source());
-        self.dst = Some(link.dest());
-        self
-    }
-
     pub fn build(self) -> Result<Vec<u8>, BuildError> {
         let mut buf = Vec::new();
         let payload = self.payload.ok_or(BuildError::NoPayload)?;
@@ -67,7 +59,7 @@ impl<'a> Ipv4PacketBuilder<'a> {
         let protocol = self.protocol.ok_or(BuildError::NoProtocol)?;
         let src = self.src.ok_or(BuildError::NoSourceAddress)?;
         let dst = self.dst.ok_or(BuildError::NoDestinationAddress)?;
-        let ttl = self.ttl.unwrap_or(Ipv4PacketBuilder::default_ttl());
+        let ttl = self.ttl.unwrap_or_else(Ipv4PacketBuilder::default_ttl);
 
         let ip_header = Ipv4Header::new(payload_len, ttl, protocol, src.octets(), dst.octets());
 
@@ -75,7 +67,7 @@ impl<'a> Ipv4PacketBuilder<'a> {
             .write(&mut buf)
             .expect("IP header serialization error");
 
-        buf.extend_from_slice(&payload);
+        buf.extend_from_slice(payload);
 
         Ok(buf)
     }

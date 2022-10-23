@@ -160,7 +160,8 @@ async fn periodic_rip_update() {
             let packet = Ipv4PacketBuilder::default()
                 .with_payload(&msg)
                 .with_protocol(Protocol::Rip)
-                .using_link(link)
+                .with_src(link.source())
+                .with_dst(link.dest())
                 .build()
                 .unwrap();
             link.send(&packet).await.ok();
@@ -281,8 +282,10 @@ impl Router {
             match net::find_link_to(entry.next_hop).await {
                 Some(link) => {
                     let packet = Ipv4PacketBuilder::default()
-                        .using_link(&link)
+                        .with_src(header.source_addr())
+                        .with_dst(header.destination_addr())
                         .with_payload(payload)
+                        .with_protocol(header.protocol())
                         .with_ttl(header.ttl() - 1)
                         .build()
                         .unwrap();
@@ -342,7 +345,8 @@ pub async fn send<P: Into<u8>>(
     })?;
 
     let packet = Ipv4PacketBuilder::default()
-        .using_link(&link)
+        .with_src(link.source())
+        .with_dst(dest_vip)
         .with_payload(payload)
         .with_protocol(protocol)
         .build()
