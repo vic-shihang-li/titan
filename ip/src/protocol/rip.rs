@@ -113,7 +113,10 @@ impl Message for RipMessage {
         let num_entries: u16 = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
 
         if command == Command::Request {
-            assert_eq!(num_entries, 0, "request RIP message cannot have any entries");
+            assert_eq!(
+                num_entries, 0,
+                "request RIP message cannot have any entries"
+            );
         }
 
         assert!(
@@ -242,7 +245,9 @@ impl ProtocolHandler for RipHandler {
             let update_msg = RipMessage::from_entries(&updates);
             log::info!("Sending triggered update RIP packet: {:?}", update_msg);
             for link in &*iter_links().await {
-                link.send(update_msg.clone().into(), link.source(), link.dest()).await.ok();
+                link.send(update_msg.clone().into(), link.source(), link.dest())
+                    .await
+                    .ok();
             }
         }
     }

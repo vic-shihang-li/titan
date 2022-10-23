@@ -1,12 +1,12 @@
 use crate::net::{self, get_interfaces};
 use crate::protocol::ProtocolPayload;
+use crate::route;
 use crate::route::get_routing_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
-use crate::route;
 
 pub enum Command {
     ListInterface(Option<String>),

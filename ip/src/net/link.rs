@@ -88,7 +88,12 @@ pub enum SendError {
 
 impl Link {
     /// On this link, send a message conforming to one of the supported protocols.
-    pub async fn send(&self, payload: ProtocolPayload, source: Ipv4Addr, dest: Ipv4Addr) -> Result<(), SendError> {
+    pub async fn send(
+        &self,
+        payload: ProtocolPayload,
+        source: Ipv4Addr,
+        dest: Ipv4Addr,
+    ) -> Result<(), SendError> {
         if !self.activated {
             return Err(SendError::LinkInactive);
         }

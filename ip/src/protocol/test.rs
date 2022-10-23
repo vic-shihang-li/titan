@@ -4,36 +4,36 @@ use std::net::Ipv4Addr;
 use async_trait::async_trait;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
-use crate::Message;
 use crate::route::ProtocolHandler;
+use crate::Message;
 
 #[derive(Default)]
 pub struct TestHandler {}
 
 pub struct TestMessage {
     header: Ipv4Header,
-    payload: Vec<u8>
+    payload: Vec<u8>,
 }
 
 impl TestMessage {
     pub fn from_packet(_header: &Ipv4HeaderSlice, payload: &[u8]) -> Self {
-        let header = Ipv4Header::new(_header.payload_len(),
-                                     _header.ttl()-1, _header.protocol(),
-                                     _header.source(), _header.destination());
+        let header = Ipv4Header::new(
+            _header.payload_len(),
+            _header.ttl() - 1,
+            _header.protocol(),
+            _header.source(),
+            _header.destination(),
+        );
         Self {
             header,
-            payload: payload.to_vec()
+            payload: payload.to_vec(),
         }
     }
     pub fn from_payload(payload: String) -> Self {
         let source: [u8; 4] = [0, 0, 0, 0];
-        let header = Ipv4Header::new(payload.len() as u16,
-                                     15, 0, source,source);
+        let header = Ipv4Header::new(payload.len() as u16, 15, 0, source, source);
         let payload = payload.into_bytes();
-        Self {
-            header,
-            payload
-        }
+        Self { header, payload }
     }
 }
 
@@ -59,7 +59,9 @@ impl ProtocolHandler for TestHandler {
 
 impl fmt::Display for TestMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "---Node received packet!---\n\
+        write!(
+            f,
+            "---Node received packet!---\n\
         \tsource IP\t:\t{:?}\n\
         \tdestination IP\t:\t{:?}\n\
         \tprotocol\t:\t{}\n\
@@ -67,10 +69,11 @@ impl fmt::Display for TestMessage {
         \tpayload\t\t:\t{}\n\
         ---------------------------
         ",
-               Ipv4Addr::from(self.header.source),
-               Ipv4Addr::from(self.header.destination),
-               self.header.protocol,
-               self.header.payload_len,
-               String::from_utf8_lossy(&self.payload))
+            Ipv4Addr::from(self.header.source),
+            Ipv4Addr::from(self.header.destination),
+            self.header.protocol,
+            self.header.payload_len,
+            String::from_utf8_lossy(&self.payload)
+        )
     }
 }

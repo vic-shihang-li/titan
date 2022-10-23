@@ -1,4 +1,4 @@
-use crate::net::{Error, iter_links};
+use crate::net::{iter_links, Error};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::{Protocol, ProtocolPayload};
 use crate::{net, Args};
@@ -11,9 +11,8 @@ use std::future::Future;
 use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
 
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::protocol::ProtocolPayload::Test;
-
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
     static ref ROUTING_TABLE: RwLock<RoutingTable> = {
@@ -172,7 +171,9 @@ async fn periodic_rip_update() {
         let msg = RipMessage::from_entries(table.entries());
         log::info!("Periodic RIP update: {:?}", msg);
         for link in &*iter_links().await {
-            link.send(msg.clone().into(), link.source(),link.dest()).await.ok();
+            link.send(msg.clone().into(), link.source(), link.dest())
+                .await
+                .ok();
         }
     })
     .await;
@@ -237,20 +238,14 @@ impl Router {
                 let payload = packet.payload;
 
                 match ip {
-                    InternetSlice::Ipv4(header, _) => {
-                        self.handle_packet(&header, payload).await
-                    }
+                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, payload).await,
                     InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
                 };
             }
         }
     }
 
-    async fn handle_packet<'a>(
-        &self,
-        header: &Ipv4HeaderSlice<'a>,
-        payload: &[u8],
-    ) {
+    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         match self.decide_packet(header) {
             PacketDecision::Drop => {}
             PacketDecision::Consume => self.consume_packet(header, payload).await,
@@ -293,7 +288,9 @@ impl Router {
         let tm = Test(payload.to_vec());
         let rt = ROUTING_TABLE.read().await;
         if rt.has_entry_for(dest) {
-            forward(tm, source,dest).await.expect("Error forwarding packet");
+            forward(tm, source, dest)
+                .await
+                .expect("Error forwarding packet");
         } else {
             eprintln!("No route to {}", dest);
         }
@@ -319,14 +316,32 @@ async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: imp
     }
 }
 
-pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Error>{
-    let next_hop = ROUTING_TABLE.read().await.find_entry_for(dest_vip).unwrap().next_hop;
-    let source_vip = iter_links().await
-        .iter().find(|link| link.dest() == next_hop).unwrap().source();
+pub async fn send(payload: ProtocolPayload, dest_vip: Ipv4Addr) -> Result<(), Error> {
+    let next_hop = ROUTING_TABLE
+        .read()
+        .await
+        .find_entry_for(dest_vip)
+        .unwrap()
+        .next_hop;
+    let source_vip = iter_links()
+        .await
+        .iter()
+        .find(|link| link.dest() == next_hop)
+        .unwrap()
+        .source();
     net::send(payload, source_vip, dest_vip, next_hop).await
 }
 
-pub async fn forward(payload: ProtocolPayload, source_vip: Ipv4Addr, dest_vip: Ipv4Addr) -> Result<(), Error> {
-    let next_hop = ROUTING_TABLE.read().await.find_entry_for(dest_vip).unwrap().next_hop;
+pub async fn forward(
+    payload: ProtocolPayload,
+    source_vip: Ipv4Addr,
+    dest_vip: Ipv4Addr,
+) -> Result<(), Error> {
+    let next_hop = ROUTING_TABLE
+        .read()
+        .await
+        .find_entry_for(dest_vip)
+        .unwrap()
+        .next_hop;
     net::send(payload, source_vip, dest_vip, next_hop).await
 }
