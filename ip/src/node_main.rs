@@ -33,7 +33,7 @@ async fn main() {
     )
     .await;
 
-    let mut router = Router::new(&args.get_my_interface_ips());
+    let mut router = Router::new();
     router.register_handler(Protocol::Rip, RipHandler::default());
     router.register_handler(Protocol::Test, TestHandler::default());
 

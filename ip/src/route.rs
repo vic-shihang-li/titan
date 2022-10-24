@@ -199,14 +199,12 @@ enum PacketDecision {
 }
 
 pub struct Router {
-    my_ips: Vec<Ipv4Addr>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
 impl Router {
-    pub fn new(my_ips: &[Ipv4Addr]) -> Self {
+    pub fn new() -> Self {
         Self {
-            my_ips: my_ips.into(),
             protocol_handlers: HashMap::new(),
         }
     }
@@ -257,14 +255,14 @@ impl Router {
     }
 
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match self.decide_packet(header) {
+        match self.decide_packet(header).await {
             PacketDecision::Drop => {}
             PacketDecision::Consume => self.consume_packet(header, payload).await,
             PacketDecision::Forward => self.forward_packet(header, payload).await,
         }
     }
 
-    fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
+    async fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
         if header.ttl() == 0 {
             log::debug!("packet TTL = 0; dropping packet");
             return PacketDecision::Drop;
@@ -275,15 +273,11 @@ impl Router {
             return PacketDecision::Drop;
         }
 
-        if self.is_my_addr(&header.destination_addr()) {
+        if net::is_my_addr(header.destination_addr()).await {
             return PacketDecision::Consume;
         }
 
         PacketDecision::Forward
-    }
-
-    pub fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
-        self.my_ips.iter().any(|a| a == addr)
     }
 
     async fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
