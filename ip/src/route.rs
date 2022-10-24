@@ -14,16 +14,7 @@ use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref ROUTING_TABLE: RwLock<RoutingTable> = {
-        tokio::spawn(async {
-            prune_routing_table().await;
-        });
-        tokio::spawn(async {
-            periodic_rip_update().await;
-        });
-
-        RwLock::new(RoutingTable::default())
-    };
+    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
 }
 
 pub async fn get_routing_table() -> RwLockReadGuard<'static, RoutingTable> {
@@ -64,8 +55,7 @@ impl RoutingTable {
         self.entries.as_slice()
     }
 
-    pub fn prune(&mut self) {
-        let max_age = Duration::from_secs(12);
+    pub fn prune(&mut self, max_age: Duration) {
         let num_deleted = {
             let len_before = self.entries.len();
             self.entries
@@ -167,16 +157,16 @@ impl fmt::Display for Entry {
     }
 }
 
-async fn prune_routing_table() {
-    loop_with_interval(Duration::from_secs(1), || async {
+async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
+    loop_with_interval(prune_interval, || async {
         let mut table = ROUTING_TABLE.write().await;
-        table.prune();
+        table.prune(max_age);
     })
     .await;
 }
 
-async fn periodic_rip_update() {
-    loop_with_interval(Duration::from_secs(5), || async {
+async fn periodic_rip_update(interval: Duration) {
+    loop_with_interval(interval, || async {
         log::info!("Sending periodic update");
         let table = ROUTING_TABLE.read().await;
 
@@ -334,13 +324,54 @@ impl Router {
     }
 }
 
-pub async fn bootstrap(args: &Args) {
+#[derive(Debug, Clone)]
+pub struct BootstrapArgs<'a> {
+    program_args: &'a Args,
+    prune_interval: Duration,
+    rip_update_interval: Duration,
+    entry_max_age: Duration,
+}
+
+impl<'a> BootstrapArgs<'a> {
+    pub fn new(args: &'a Args) -> Self {
+        Self {
+            program_args: args,
+            prune_interval: Duration::from_secs(1),
+            rip_update_interval: Duration::from_secs(5),
+            entry_max_age: Duration::from_secs(12),
+        }
+    }
+
+    /// Set the interval of sending up periodic RIP updates.
+    pub fn with_rip_interval(&mut self, rip_interval: Duration) -> &mut Self {
+        self.rip_update_interval = rip_interval;
+        self
+    }
+
+    /// Set the maximum time a routing entry can live without receiving an update.
+    pub fn with_entry_max_age(&mut self, max_age: Duration) -> &mut Self {
+        self.entry_max_age = max_age;
+        self
+    }
+}
+
+pub async fn bootstrap<'a>(args: &'a BootstrapArgs<'a>) {
     let mut rt = ROUTING_TABLE.write().await;
 
-    for link in &args.links {
+    for link in &args.program_args.links {
         // Add entry to my interface with a cost of 0.
         rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
     }
+
+    let prune_interval = args.prune_interval;
+    let entry_max_age = args.entry_max_age;
+    let rip_update_interval = args.rip_update_interval;
+    tokio::spawn(async move {
+        prune_routing_table(prune_interval, entry_max_age).await;
+    });
+    tokio::spawn(async move {
+        periodic_rip_update(rip_update_interval).await;
+    });
 }
 
 async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: impl Fn() -> Fut) {
