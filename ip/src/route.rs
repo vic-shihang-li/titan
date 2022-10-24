@@ -266,10 +266,14 @@ impl Router {
 
     fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
         if header.ttl() == 0 {
+            log::debug!("packet TTL = 0; dropping packet");
             return PacketDecision::Drop;
         }
 
-        // TODO: drop if checksum isn't valid
+        if !verify_header_checksum(header) {
+            log::debug!("packet header checksum invalid; dropping packet");
+            return PacketDecision::Drop;
+        }
 
         if self.is_my_addr(&header.destination_addr()) {
             return PacketDecision::Consume;
@@ -420,4 +424,12 @@ pub async fn send<P: Into<u8>>(
     link.send(&packet)
         .await
         .map_err(|e| SendError::Transport(e.into()))
+}
+
+fn verify_header_checksum<'a>(header: &Ipv4HeaderSlice<'a>) -> bool {
+    let owned_header = header.to_header();
+    match owned_header.calc_header_checksum() {
+        Ok(expected_checksum) => expected_checksum == header.header_checksum(),
+        Err(_) => false,
+    }
 }
