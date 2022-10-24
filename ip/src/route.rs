@@ -199,14 +199,14 @@ enum PacketDecision {
 }
 
 pub struct Router {
-    addrs: Vec<Ipv4Addr>,
+    my_ips: Vec<Ipv4Addr>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
 impl Router {
-    pub fn new(addrs: &[Ipv4Addr]) -> Self {
+    pub fn new(my_ips: &[Ipv4Addr]) -> Self {
         Self {
-            addrs: addrs.into(),
+            my_ips: my_ips.into(),
             protocol_handlers: HashMap::new(),
         }
     }
@@ -279,7 +279,7 @@ impl Router {
     }
 
     pub fn is_my_addr(&self, addr: &Ipv4Addr) -> bool {
-        self.addrs.iter().any(|a| a == addr)
+        self.my_ips.iter().any(|a| a == addr)
     }
 
     async fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {

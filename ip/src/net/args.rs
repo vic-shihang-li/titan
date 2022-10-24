@@ -68,7 +68,7 @@ impl Args {
         })
     }
 
-    pub fn get_ip_addrs(&self) -> Vec<Ipv4Addr> {
+    pub fn get_my_interface_ips(&self) -> Vec<Ipv4Addr> {
         self.links.iter().map(|l| l.interface_ip).collect()
     }
 }
