@@ -200,12 +200,14 @@ enum PacketDecision {
 }
 
 pub struct Router {
+    my_addrs: Vec<Ipv4Addr>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
 impl Router {
-    pub fn new() -> Self {
+    pub fn new(my_addrs: &[Ipv4Addr]) -> Self {
         Self {
+            my_addrs: my_addrs.into(),
             protocol_handlers: HashMap::new(),
         }
     }
@@ -219,6 +221,10 @@ impl Router {
         handler: H,
     ) {
         self.protocol_handlers.insert(protocol, Box::new(handler));
+    }
+
+    pub fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
+        self.my_addrs.iter().any(|a| *a == addr)
     }
 
     pub async fn run(&self) {
@@ -274,7 +280,7 @@ impl Router {
             return PacketDecision::Drop;
         }
 
-        if net::is_my_addr(header.destination_addr()).await {
+        if self.is_my_addr(header.destination_addr()) {
             return PacketDecision::Consume;
         }
 
@@ -430,7 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn drop_packet_with_invalid_checksum() {
-        let r = Router::new();
+        let r = Router::new(&[]);
 
         let valid_packet = make_random_packet();
         let decision = r
@@ -449,13 +455,47 @@ mod tests {
 
     #[tokio::test]
     async fn drop_packet_with_zero_ttl() {
-        let r = Router::new();
+        let r = Router::new(&[]);
 
         let packet = make_packet_with_zero_ttl();
         let decision = r
             .decide_packet(&Ipv4HeaderSlice::from_slice(&packet).unwrap())
             .await;
 
+        assert_eq!(decision, PacketDecision::Drop);
+    }
+
+    #[tokio::test]
+    async fn consume_packet_on_ip_match() {
+        let my_ip = Ipv4Addr::new(1, 2, 3, 4);
+        let r = Router::new(&[my_ip]);
+
+        let pkt = Ipv4PacketBuilder::default()
+            .with_dst(my_ip)
+            .with_src(Ipv4Addr::new(255, 255, 255, 255))
+            .with_protocol(Protocol::Test)
+            .with_payload(&[1, 2, 3, 4])
+            .build()
+            .unwrap();
+
+        let decision = r
+            .decide_packet(&Ipv4HeaderSlice::from_slice(&pkt).unwrap())
+            .await;
+        assert_eq!(decision, PacketDecision::Consume);
+
+        // Drop packets with zero TTL even if destination IP matches
+        let pkt_zero_ttl = Ipv4PacketBuilder::default()
+            .with_ttl(0)
+            .with_dst(my_ip)
+            .with_src(Ipv4Addr::new(255, 255, 255, 255))
+            .with_protocol(Protocol::Test)
+            .with_payload(&[1, 2, 3, 4])
+            .build()
+            .unwrap();
+
+        let decision = r
+            .decide_packet(&Ipv4HeaderSlice::from_slice(&pkt_zero_ttl).unwrap())
+            .await;
         assert_eq!(decision, PacketDecision::Drop);
     }
 
