@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::{self, iter_links, Ipv4PacketBuilder},
+    net::{self, iter_links, Ipv4PacketBuilder, Link},
     protocol::Protocol,
-    route::{get_forwarding_table_mut, Entry as RoutingEntry, ProtocolHandler},
+    route::{get_forwarding_table_mut, Entry as RoutingEntry, ForwardingTable, ProtocolHandler},
 };
 
 use std::{cmp, cmp::Ordering, net::Ipv4Addr};
@@ -192,11 +192,9 @@ pub struct RipHandler {}
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let message = RipMessage::from_bytes(payload);
-
         log::info!("Received RIP packet");
 
         let sender = header.source_addr();
-
         if net::find_link_to(sender)
             .await
             .expect("Failed to find the link where RIP packet was sent")
@@ -207,10 +205,26 @@ impl ProtocolHandler for RipHandler {
         }
 
         let mut rt = get_forwarding_table_mut().await;
+        let updates = self.update_route_table(&mut rt, message, sender).await;
+        if !updates.is_empty() {
+            for link in &*iter_links().await {
+                self.send_triggered_update(&updates, link).await;
+            }
+        }
+    }
+}
+
+impl RipHandler {
+    // RIP protocol implementation.
+    // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
+    async fn update_route_table(
+        &self,
+        rt: &mut ForwardingTable,
+        message: RipMessage,
+        sender: Ipv4Addr,
+    ) -> Vec<RoutingEntry> {
         let mut updates = Vec::new();
 
-        // RIP protocol implementation.
-        // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
         for entry in &message.entries {
             if net::is_my_addr(entry.address).await {
                 log::warn!("Ignoring advertised entry for my address: {:?}", entry);
@@ -274,22 +288,22 @@ impl ProtocolHandler for RipHandler {
             }
         }
 
-        if !updates.is_empty() {
-            for link in &*iter_links().await {
-                log::info!("Sending triggered update to {}", link.dest());
-                let rip_msg_bytes =
-                    RipMessage::from_entries_with_poisoned_reverse(&updates, link.dest())
-                        .into_bytes();
-                let packet = Ipv4PacketBuilder::default()
-                    .with_src(link.source())
-                    .with_dst(link.dest())
-                    .with_payload(&rip_msg_bytes)
-                    .with_protocol(Protocol::Rip)
-                    .build()
-                    .unwrap();
-                link.send(&packet).await.ok();
-            }
-        }
+        updates
+    }
+
+    async fn send_triggered_update(&self, updates: &[RoutingEntry], link: &Link) {
+        log::info!("Sending triggered update to {}", link.dest());
+        let rip_msg_bytes =
+            RipMessage::from_entries_with_poisoned_reverse(&updates, link.dest()).into_bytes();
+        let packet = Ipv4PacketBuilder::default()
+            .with_src(link.source())
+            .with_dst(link.dest())
+            .with_payload(&rip_msg_bytes)
+            .with_protocol(Protocol::Rip)
+            .build()
+            .unwrap();
+        // Ignore the error case, which occurs when sending data out on a disabled link.
+        link.send(&packet).await.ok();
     }
 }
 
