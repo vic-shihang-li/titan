@@ -191,21 +191,13 @@ pub struct RipHandler {}
 #[async_trait]
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        let message = RipMessage::from_bytes(payload);
         log::info!("Received RIP packet");
-
-        let sender = header.source_addr();
-        if net::find_link_to(sender)
-            .await
-            .expect("Failed to find the link where RIP packet was sent")
-            .is_disabled()
-        {
-            log::info!("Ignoring RIP packet from {}, link disabled", sender);
-            return;
-        }
+        let message = RipMessage::from_bytes(payload);
 
         let mut rt = get_forwarding_table_mut().await;
-        let updates = self.update_route_table(&mut rt, message, sender).await;
+        let updates = self
+            .update_route_table(&mut rt, message, header.source_addr())
+            .await;
         if !updates.is_empty() {
             for link in &*iter_links().await {
                 self.send_triggered_update(&updates, link).await;

@@ -280,6 +280,16 @@ impl Router {
             return PacketDecision::Drop;
         }
 
+        let sender = header.source_addr();
+        if net::find_link_to(sender)
+            .await
+            .expect("Failed to find the link where RIP packet was sent")
+            .is_disabled()
+        {
+            log::info!("Ignoring RIP packet from {}, link disabled", sender);
+            return PacketDecision::Drop;
+        }
+
         if self.is_my_addr(header.destination_addr()) {
             return PacketDecision::Consume;
         }
