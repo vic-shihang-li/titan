@@ -14,23 +14,23 @@ use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref FORWARDING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
+    static ref FORWARDING_TABLE: RwLock<ForwardingTable> = RwLock::new(ForwardingTable::default());
 }
 
-pub async fn get_forwarding_table() -> RwLockReadGuard<'static, RoutingTable> {
+pub async fn get_forwarding_table() -> RwLockReadGuard<'static, ForwardingTable> {
     FORWARDING_TABLE.read().await
 }
 
-pub async fn get_forwarding_table_mut() -> RwLockWriteGuard<'static, RoutingTable> {
+pub async fn get_forwarding_table_mut() -> RwLockWriteGuard<'static, ForwardingTable> {
     FORWARDING_TABLE.write().await
 }
 
 #[derive(Default)]
-pub struct RoutingTable {
+pub struct ForwardingTable {
     entries: Vec<Entry>,
 }
 
-impl RoutingTable {
+impl ForwardingTable {
     pub fn has_entry_for(&self, addr: Ipv4Addr) -> bool {
         self.entries.iter().any(|e| e.destination == addr)
     }
