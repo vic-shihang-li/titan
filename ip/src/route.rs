@@ -454,8 +454,30 @@ mod tests {
         assert_eq!(decision, PacketDecision::Drop);
     }
 
+    #[tokio::test]
+    async fn drop_packet_with_zero_ttl() {
+        let r = Router::new();
+
+        let packet = make_packet_with_zero_ttl();
+        let decision = r
+            .decide_packet(&Ipv4HeaderSlice::from_slice(&packet).unwrap())
+            .await;
+
+        assert_eq!(decision, PacketDecision::Drop);
+    }
+
     fn make_random_packet() -> Vec<u8> {
         let (header, mut payload) = make_random_packet_internal();
+        let mut v = Vec::new();
+        header.write(&mut v).unwrap();
+        v.append(&mut payload);
+        v
+    }
+
+    fn make_packet_with_zero_ttl() -> Vec<u8> {
+        let (mut header, mut payload) = make_random_packet_internal();
+        header.time_to_live = 0;
+
         let mut v = Vec::new();
         header.write(&mut v).unwrap();
         v.append(&mut payload);
