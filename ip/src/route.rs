@@ -192,6 +192,7 @@ pub trait ProtocolHandler: Send + Sync {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]);
 }
 
+#[derive(PartialEq, Eq, Debug)]
 enum PacketDecision {
     Drop,
     Forward,
@@ -425,5 +426,65 @@ fn verify_header_checksum<'a>(header: &Ipv4HeaderSlice<'a>) -> bool {
     match owned_header.calc_header_checksum() {
         Ok(expected_checksum) => expected_checksum == header.header_checksum(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use etherparse::{Ipv4Header, Ipv4HeaderSlice};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn drop_packet_with_invalid_checksum() {
+        let r = Router::new();
+
+        let valid_packet = make_random_packet();
+        let decision = r
+            .decide_packet(&Ipv4HeaderSlice::from_slice(&valid_packet).unwrap())
+            .await;
+
+        assert_eq!(decision, PacketDecision::Forward);
+
+        let invalid_packet = make_random_packet_with_incorrect_checksum();
+        let decision = r
+            .decide_packet(&Ipv4HeaderSlice::from_slice(&invalid_packet).unwrap())
+            .await;
+
+        assert_eq!(decision, PacketDecision::Drop);
+    }
+
+    fn make_random_packet() -> Vec<u8> {
+        let (header, mut payload) = make_random_packet_internal();
+        let mut v = Vec::new();
+        header.write(&mut v).unwrap();
+        v.append(&mut payload);
+        v
+    }
+
+    fn make_random_packet_with_incorrect_checksum() -> Vec<u8> {
+        let (mut header, mut payload) = make_random_packet_internal();
+
+        // set a bogus checksum value
+        header.header_checksum = 128;
+
+        let mut v = Vec::new();
+        header.write_raw(&mut v).unwrap();
+        v.append(&mut payload);
+        v
+    }
+
+    fn make_random_packet_internal() -> (Ipv4Header, Vec<u8>) {
+        let payload = vec![1; 8];
+
+        let header = Ipv4Header::new(
+            payload.len().try_into().unwrap(),
+            8,
+            0,
+            [1, 2, 3, 4],
+            [5, 6, 7, 8],
+        );
+
+        (header, payload)
     }
 }
