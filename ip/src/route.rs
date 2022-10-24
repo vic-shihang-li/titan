@@ -281,14 +281,17 @@ impl Router {
         }
 
         let sender = header.source_addr();
-        if net::find_link_to(sender)
-            .await
-            .expect("Failed to find the link where RIP packet was sent")
-            .is_disabled()
-        {
-            log::info!("Ignoring RIP packet from {}, link disabled", sender);
-            return PacketDecision::Drop;
-        }
+        match net::find_link_to(sender).await {
+            Some(link) => {
+                if link.is_disabled() {
+                    log::info!("Ignoring RIP packet from {}, link disabled", sender);
+                    return PacketDecision::Drop;
+                }
+            }
+            None => {
+                log::debug!("Could not obtain the link where a packet is sent; is this in a test?");
+            }
+        };
 
         if self.is_my_addr(header.destination_addr()) {
             return PacketDecision::Consume;
