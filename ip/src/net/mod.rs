@@ -4,7 +4,10 @@ mod utils;
 
 pub use args::Args;
 pub use link::{Link, LinkDefinition};
-use std::ops::Deref;
+use std::{
+    ops::{Deref, DerefMut},
+    usize,
+};
 use utils::localhost_with_port;
 pub use utils::Ipv4PacketBuilder;
 
@@ -15,7 +18,7 @@ use tokio::{
     net::UdpSocket,
     sync::{
         broadcast::{self, Receiver, Sender},
-        Mutex, RwLock, RwLockReadGuard,
+        Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
     },
 };
 
@@ -42,7 +45,7 @@ impl From<link::SendError> for Error {
 }
 
 pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
-    NET.links.read().await
+    NET.links.0.read().await
 }
 
 /// Send bytes to a destination.
@@ -109,6 +112,24 @@ impl<'a> Deref for LinkRef<'a> {
     }
 }
 
+pub struct LinkMutRef<'a> {
+    guard: RwLockWriteGuard<'a, Vec<Link>>,
+    idx: usize,
+}
+
+impl<'a> Deref for LinkMutRef<'a> {
+    type Target = Link;
+    fn deref(&self) -> &Self::Target {
+        &self.guard[self.idx]
+    }
+}
+
+impl<'a> DerefMut for LinkMutRef<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard[self.idx]
+    }
+}
+
 /// Subscribe to a stream of packets received by this host.
 ///
 /// The received data is a packet in its binary format.
@@ -117,14 +138,14 @@ pub async fn listen() -> Receiver<Vec<u8>> {
 }
 
 struct Net {
-    links: RwLock<Vec<Link>>,
+    links: Links,
     listener_sub: Mutex<Option<Sender<Vec<u8>>>>,
 }
 
 impl Net {
     fn new() -> Self {
         Self {
-            links: RwLock::new(Vec::new()),
+            links: Links::default(),
             listener_sub: Mutex::new(None),
         }
     }
@@ -136,103 +157,78 @@ impl Net {
                 .expect("Failed to bind to this router's port"),
         );
 
-        let mut links = self.links.write().await;
-        for link_def in &args.links {
-            links.push(link_def.into_link(udp_socket.clone()));
-        }
+        self.links
+            .add_bulk(
+                args.links
+                    .iter()
+                    .map(|l| l.into_link(udp_socket.clone()))
+                    .collect(),
+            )
+            .await;
     }
 
     async fn send(&self, payload: &[u8], next_hop: Ipv4Addr) -> Result<()> {
-        let links = self.links.read().await;
-        match links.iter().find(|l| l.dest() == next_hop) {
-            None => Err(Error::LinkNotFound),
-            Some(link) => link.send(payload).await.map_err(|e| match e {
+        self.links
+            .find(|link| link.dest() == next_hop)
+            .await
+            .ok_or(Error::LinkNotFound)?
+            .send(payload)
+            .await
+            .map_err(|e| match e {
                 SendError::LinkInactive => Error::LinkInactive,
-            }),
-        }
+            })
     }
 
     async fn activate_link(&self, link_no: u16) -> Result<()> {
-        let mut links = self.links.write().await;
-        let link_no = link_no as usize;
-        if link_no >= links.len() {
-            Err(Error::LinkNotFound)
-        } else {
-            links[link_no].activate().await;
-            Ok(())
-        }
+        self.links
+            .get_mut(link_no)
+            .await
+            .ok_or(Error::LinkNotFound)?
+            .activate()
+            .await;
+        Ok(())
     }
 
     async fn deactivate_link(&self, link_no: u16) -> Result<()> {
-        let mut links = self.links.write().await;
-        let link_no = link_no as usize;
-        if link_no >= links.len() {
-            Err(Error::LinkNotFound)
-        } else {
-            links[link_no].deactivate().await;
-            Ok(())
-        }
+        self.links
+            .get_mut(link_no)
+            .await
+            .ok_or(Error::LinkNotFound)?
+            .deactivate()
+            .await;
+        Ok(())
     }
 
     #[allow(clippy::needless_lifetimes)]
     async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
-        LinkIter {
-            inner: self.links.read().await,
-        }
+        self.links.iter().await
     }
 
     #[allow(clippy::needless_lifetimes)]
     async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
-        let links = self.links.read().await;
-        let mut idx = 0;
-
-        while idx < links.len() {
-            if links[idx].dest() == dest {
-                break;
-            }
-            idx += 1;
-        }
-
-        if idx == links.len() {
-            None
-        } else {
-            Some(LinkRef { guard: links, idx })
-        }
+        self.links.find(|link| link.dest() == dest).await
     }
 
     #[allow(clippy::needless_lifetimes)]
     async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
-        let links = self.links.read().await;
-        let mut idx = 0;
-
-        while idx < links.len() {
-            if links[idx].source() == ip {
-                break;
-            }
-            idx += 1;
-        }
-
-        if idx == links.len() {
-            None
-        } else {
-            Some(LinkRef { guard: links, idx })
-        }
+        self.links.find(|link| link.source() == ip).await
     }
 
     async fn listen(&self) -> Receiver<Vec<u8>> {
         let mut sub = self.listener_sub.lock().await;
-        let links = self.links.read().await;
-        if links.is_empty() {
-            panic!("cannot listen on an uninitialized network");
-        }
-
         if let Some(ref sub_handle) = *sub {
             return sub_handle.subscribe();
         }
 
+        let sock = self
+            .links
+            .get(0)
+            .await
+            .expect("cannot listen on an uninitialized network")
+            .clone_socket();
+
         let (tx, rx) = broadcast::channel(100);
         let sender = tx.clone();
-        let sock = links[0].clone_socket();
 
         tokio::spawn(async move {
             let mut buf = [0; 1024];
@@ -243,6 +239,90 @@ impl Net {
 
         *sub = Some(tx);
         rx
+    }
+}
+
+#[derive(Default)]
+struct Links(RwLock<Vec<Link>>);
+
+impl Links {
+    async fn add_bulk(&self, mut links: Vec<Link>) {
+        let mut ls = self.0.write().await;
+        ls.append(&mut links);
+    }
+
+    #[allow(clippy::needless_lifetimes)]
+    async fn get<'a>(&'a self, link_no: u16) -> Option<LinkRef<'a>> {
+        let links = self.0.read().await;
+        let link_no = link_no as usize;
+        if link_no >= links.len() {
+            None
+        } else {
+            Some(LinkRef {
+                guard: links,
+                idx: link_no,
+            })
+        }
+    }
+
+    #[allow(clippy::needless_lifetimes)]
+    async fn get_mut<'a>(&'a self, link_no: u16) -> Option<LinkMutRef<'a>> {
+        let links = self.0.write().await;
+        let link_no = link_no as usize;
+        if link_no >= links.len() {
+            None
+        } else {
+            Some(LinkMutRef {
+                guard: links,
+                idx: link_no,
+            })
+        }
+    }
+
+    #[allow(clippy::needless_lifetimes)]
+    async fn find<'a>(&'a self, pred: impl Fn(&Link) -> bool) -> Option<LinkRef<'a>> {
+        let links = self.0.read().await;
+        let mut idx = 0;
+
+        while idx < links.len() {
+            if pred(&links[idx]) {
+                break;
+            }
+            idx += 1;
+        }
+
+        if idx == links.len() {
+            None
+        } else {
+            Some(LinkRef { guard: links, idx })
+        }
+    }
+
+    #[allow(unused)]
+    #[allow(clippy::needless_lifetimes)]
+    async fn find_mut<'a>(&'a self, pred: impl Fn(&Link) -> bool) -> Option<LinkMutRef<'a>> {
+        let links = self.0.write().await;
+        let mut idx = 0;
+
+        while idx < links.len() {
+            if pred(&links[idx]) {
+                break;
+            }
+            idx += 1;
+        }
+
+        if idx == links.len() {
+            None
+        } else {
+            Some(LinkMutRef { guard: links, idx })
+        }
+    }
+
+    #[allow(clippy::needless_lifetimes)]
+    async fn iter<'a>(&'a self) -> LinkIter<'a> {
+        LinkIter {
+            inner: self.0.read().await,
+        }
     }
 }
 
