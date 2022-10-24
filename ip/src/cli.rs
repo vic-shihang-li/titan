@@ -298,7 +298,6 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             let mut payload = String::new();
             for token in tokens {
                 payload.push_str(token);
-                payload.push_str(" ");
             }
 
             let virtual_ip = virtual_ip.parse().map_err(|_| ParseSendError::InvalidIp)?;
