@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::net::UdpSocket;
 
-use crate::route::{get_routing_table_mut, Entry as RoutingEntry};
+use crate::route::{get_forwarding_table_mut, Entry as RoutingEntry};
 
 use super::utils::localhost_with_port;
 
@@ -102,7 +102,7 @@ impl Link {
         if !self.activated {
             self.activated = true;
 
-            let mut table = get_routing_table_mut().await;
+            let mut table = get_forwarding_table_mut().await;
             table.add_entry(RoutingEntry::new(
                 self.src_virtual_ip,
                 self.src_virtual_ip,
@@ -115,7 +115,7 @@ impl Link {
         if self.activated {
             self.activated = false;
 
-            let mut table = get_routing_table_mut().await;
+            let mut table = get_forwarding_table_mut().await;
             table.delete_mut_entry_for(self.src_virtual_ip);
         }
     }

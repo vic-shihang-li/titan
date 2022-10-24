@@ -1,7 +1,7 @@
 use crate::net::{self, get_interfaces};
 use crate::protocol::Protocol;
 use crate::route;
-use crate::route::get_routing_table;
+use crate::route::get_forwarding_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fs::File;
 use std::io::Write;
@@ -145,7 +145,7 @@ impl Cli {
     }
 
     async fn print_routes(&self, file: Option<String>) {
-        let rt = get_routing_table().await;
+        let rt = get_forwarding_table().await;
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();

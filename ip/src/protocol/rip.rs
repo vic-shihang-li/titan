@@ -4,7 +4,7 @@ use etherparse::Ipv4HeaderSlice;
 use crate::{
     net::{self, iter_links, Ipv4PacketBuilder},
     protocol::Protocol,
-    route::{get_routing_table_mut, Entry as RoutingEntry, ProtocolHandler},
+    route::{get_forwarding_table_mut, Entry as RoutingEntry, ProtocolHandler},
 };
 
 use std::{cmp, cmp::Ordering, net::Ipv4Addr};
@@ -206,7 +206,7 @@ impl ProtocolHandler for RipHandler {
             return;
         }
 
-        let mut rt = get_routing_table_mut().await;
+        let mut rt = get_forwarding_table_mut().await;
         let mut updates = Vec::new();
 
         // RIP protocol implementation.

@@ -14,15 +14,15 @@ use std::{net::Ipv4Addr, time::Instant};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static! {
-    static ref ROUTING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
+    static ref FORWARDING_TABLE: RwLock<RoutingTable> = RwLock::new(RoutingTable::default());
 }
 
-pub async fn get_routing_table() -> RwLockReadGuard<'static, RoutingTable> {
-    ROUTING_TABLE.read().await
+pub async fn get_forwarding_table() -> RwLockReadGuard<'static, RoutingTable> {
+    FORWARDING_TABLE.read().await
 }
 
-pub async fn get_routing_table_mut() -> RwLockWriteGuard<'static, RoutingTable> {
-    ROUTING_TABLE.write().await
+pub async fn get_forwarding_table_mut() -> RwLockWriteGuard<'static, RoutingTable> {
+    FORWARDING_TABLE.write().await
 }
 
 #[derive(Default)]
@@ -159,7 +159,7 @@ impl fmt::Display for Entry {
 
 async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
     loop_with_interval(prune_interval, || async {
-        let mut table = ROUTING_TABLE.write().await;
+        let mut table = FORWARDING_TABLE.write().await;
         table.prune(max_age);
     })
     .await;
@@ -168,7 +168,7 @@ async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
 async fn periodic_rip_update(interval: Duration) {
     loop_with_interval(interval, || async {
         log::info!("Sending periodic update");
-        let table = ROUTING_TABLE.read().await;
+        let table = FORWARDING_TABLE.read().await;
 
         for link in &*iter_links().await {
             let rip_msg_bytes =
@@ -296,7 +296,7 @@ impl Router {
 
     async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let dest = header.destination_addr();
-        let rt = ROUTING_TABLE.read().await;
+        let rt = FORWARDING_TABLE.read().await;
 
         if let Some(entry) = rt.find_entry_for(dest) {
             match net::find_link_to(entry.next_hop).await {
@@ -356,7 +356,7 @@ impl<'a> BootstrapArgs<'a> {
 }
 
 pub async fn bootstrap<'a>(args: &'a BootstrapArgs<'a>) {
-    let mut rt = ROUTING_TABLE.write().await;
+    let mut rt = FORWARDING_TABLE.write().await;
 
     for link in &args.program_args.links {
         // Add entry to my interface with a cost of 0.
@@ -394,7 +394,7 @@ pub async fn send<P: Into<u8>>(
     protocol: P,
     dest_vip: Ipv4Addr,
 ) -> Result<(), SendError> {
-    let table = ROUTING_TABLE.read().await;
+    let table = FORWARDING_TABLE.read().await;
 
     let entry = table
         .find_entry_for(dest_vip)
