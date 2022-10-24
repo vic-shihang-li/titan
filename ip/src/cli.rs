@@ -110,7 +110,7 @@ impl Cli {
             }
             Command::Send(cmd) => {
                 eprintln!(
-                    "Sending packet {} with protocol {:?} to {}",
+                    "Sending packet \"{}\" with protocol {:?} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
                 if let Err(e) =
