@@ -194,12 +194,13 @@ impl Net {
         }
 
         if idx == links.len() {
-            return None;
+            None
         } else {
-            return Some(LinkRef { guard: links, idx });
+            Some(LinkRef { guard: links, idx })
         }
     }
 
+    #[allow(clippy::needless_lifetimes)]
     async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
         let links = self.links.read().await;
         let mut idx = 0;
@@ -212,9 +213,9 @@ impl Net {
         }
 
         if idx == links.len() {
-            return None;
+            None
         } else {
-            return Some(LinkRef { guard: links, idx });
+            Some(LinkRef { guard: links, idx })
         }
     }
 

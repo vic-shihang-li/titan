@@ -433,6 +433,7 @@ pub async fn send<P: Into<u8>>(
         .map_err(|e| SendError::Transport(e.into()))
 }
 
+#[allow(clippy::needless_lifetimes)]
 fn verify_header_checksum<'a>(header: &Ipv4HeaderSlice<'a>) -> bool {
     let owned_header = header.to_header();
     match owned_header.calc_header_checksum() {

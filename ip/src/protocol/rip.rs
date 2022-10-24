@@ -286,7 +286,7 @@ impl RipHandler {
     async fn send_triggered_update(&self, updates: &[RoutingEntry], link: &Link) {
         log::info!("Sending triggered update to {}", link.dest());
         let rip_msg_bytes =
-            RipMessage::from_entries_with_poisoned_reverse(&updates, link.dest()).into_bytes();
+            RipMessage::from_entries_with_poisoned_reverse(updates, link.dest()).into_bytes();
         let packet = Ipv4PacketBuilder::default()
             .with_src(link.source())
             .with_dst(link.dest())
