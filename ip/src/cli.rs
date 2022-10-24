@@ -3,6 +3,7 @@ use crate::protocol::Protocol;
 use crate::route;
 use crate::route::get_forwarding_table;
 use rustyline::{error::ReadlineError, Editor};
+use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
 use std::net::Ipv4Addr;
@@ -53,11 +54,11 @@ impl Cli {
                         shutdown_flag = true;
                     }
                     match self.parse_command(line) {
-                        Some(cmd) => {
+                        Ok(cmd) => {
                             self.execute_command(cmd).await;
                         }
-                        None => {
-                            eprintln!("Invalid command");
+                        Err(e) => {
+                            eprintln!("{e}")
                         }
                     }
                     if shutdown_flag {
@@ -80,7 +81,7 @@ impl Cli {
         }
     }
 
-    fn parse_command(&self, line: String) -> Option<Command> {
+    fn parse_command(&self, line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
         eprintln!("cmd: {}", cmd);
@@ -164,34 +165,104 @@ impl Cli {
     }
 }
 
-fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
+#[derive(Debug)]
+pub enum ParseDownError {
+    InvalidLinkId,
+    NoLinkId,
+}
+
+#[derive(Debug)]
+pub enum ParseUpError {
+    InvalidLinkId,
+    NoLinkId,
+}
+
+#[derive(Debug)]
+pub enum ParseSendError {
+    NoIp,
+    InvalidIp,
+    NoProtocol,
+    InvalidProtocol,
+    NoPayload,
+}
+
+#[derive(Debug)]
+pub enum ParseError {
+    Unknown,
+    Down(ParseDownError),
+    Up(ParseUpError),
+    Send(ParseSendError),
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::Unknown => write!(f, "Unknown command"),
+            ParseError::Down(e) => write!(
+                f,
+                "Invalid down command. Usage: down <integer>. Error: {:?}",
+                e
+            ),
+            ParseError::Up(e) => {
+                write!(f, "Invalid up command. Usage: up <integer>. Error: {:?}", e)
+            }
+            ParseError::Send(e) => {
+                write!(
+                    f,
+                    "Invalid send command. Usage: send <vip> <proto> <string>. Error: {:?}",
+                    e
+                )
+            }
+        }
+    }
+}
+
+impl From<ParseUpError> for ParseError {
+    fn from(v: ParseUpError) -> Self {
+        ParseError::Up(v)
+    }
+}
+
+impl From<ParseDownError> for ParseError {
+    fn from(v: ParseDownError) -> Self {
+        ParseError::Down(v)
+    }
+}
+
+impl From<ParseSendError> for ParseError {
+    fn from(v: ParseSendError) -> Self {
+        ParseError::Send(v)
+    }
+}
+
+fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseError> {
     match cmd {
         "li" => {
             let arg = tokens.next();
             match arg {
-                Some(arg) => Some(Command::ListInterface(Some(arg.to_string()))),
-                None => Some(Command::ListInterface(None)),
+                Some(arg) => Ok(Command::ListInterface(Some(arg.to_string()))),
+                None => Ok(Command::ListInterface(None)),
             }
         }
         "interfaces" => {
             let arg = tokens.next();
             match arg {
-                Some(arg) => Some(Command::ListInterface(Some(arg.to_string()))),
-                None => Some(Command::ListInterface(None)),
+                Some(arg) => Ok(Command::ListInterface(Some(arg.to_string()))),
+                None => Ok(Command::ListInterface(None)),
             }
         }
         "lr" => {
             let arg = tokens.next();
             match arg {
-                Some(arg) => Some(Command::ListRoute(Some(arg.to_string()))),
-                None => Some(Command::ListRoute(None)),
+                Some(arg) => Ok(Command::ListRoute(Some(arg.to_string()))),
+                None => Ok(Command::ListRoute(None)),
             }
         }
         "routes" => {
             let arg = tokens.next();
             match arg {
-                Some(arg) => Some(Command::ListRoute(Some(arg.to_string()))),
-                None => Some(Command::ListRoute(None)),
+                Some(arg) => Ok(Command::ListRoute(Some(arg.to_string()))),
+                None => Ok(Command::ListRoute(None)),
             }
         }
         "down" => {
@@ -200,11 +271,11 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
                 Some(arg) => {
                     let link_no = arg.parse::<u16>();
                     match link_no {
-                        Ok(link_no) => Some(Command::InterfaceDown(link_no)),
-                        Err(_) => None, // TODO replace with error
+                        Ok(link_no) => Ok(Command::InterfaceDown(link_no)),
+                        Err(_) => Err(ParseDownError::InvalidLinkId.into()),
                     }
                 }
-                None => None, //TODO replace with error
+                None => Err(ParseDownError::NoLinkId.into()),
             }
         }
         "up" => {
@@ -213,39 +284,33 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Option<Command> {
                 Some(arg) => {
                     let link_no = arg.parse::<u16>();
                     match link_no {
-                        Ok(link_no) => Some(Command::InterfaceUp(link_no)),
-                        Err(_) => None, // TODO replace with error
+                        Ok(link_no) => Ok(Command::InterfaceUp(link_no)),
+                        Err(_) => Err(ParseUpError::InvalidLinkId.into()),
                     }
                 }
-                None => None, //TODO replace with error
+                None => Err(ParseUpError::NoLinkId.into()),
             }
         }
         "send" => {
-            let virtual_ip = tokens.next();
-            let protocol = tokens.next();
+            let virtual_ip = tokens.next().ok_or(ParseSendError::NoIp)?;
+            let protocol = tokens.next().ok_or(ParseSendError::NoProtocol)?;
+
             let mut payload = String::new();
             for token in tokens {
                 payload.push_str(token);
                 payload.push_str(" ");
             }
-            match (virtual_ip, protocol, payload) {
-                (Some(virtual_ip), Some(protocol), p) => {
-                    let virtual_ip = virtual_ip.parse();
-                    let protocol = Protocol::try_from(protocol);
 
-                    match (virtual_ip, protocol) {
-                        (Ok(virtual_ip), Ok(protocol)) => Some(Command::Send(SendCmd {
-                            virtual_ip,
-                            protocol,
-                            payload: p,
-                        })),
-                        _ => None, // TODO replace with error
-                    }
-                }
-                _ => None, // TODO replace with error
-            }
+            let virtual_ip = virtual_ip.parse().map_err(|_| ParseSendError::InvalidIp)?;
+            let protocol =
+                Protocol::try_from(protocol).map_err(|_| ParseSendError::InvalidProtocol)?;
+            Ok(Command::Send(SendCmd {
+                virtual_ip,
+                protocol,
+                payload,
+            }))
         }
-        "q" => Some(Command::Quit),
-        _ => None,
+        "q" => Ok(Command::Quit),
+        _ => Err(ParseError::Unknown),
     }
 }
