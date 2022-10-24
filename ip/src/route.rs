@@ -1,13 +1,13 @@
 use crate::net::{iter_links, Ipv4PacketBuilder, LinkRef};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
+use crate::utils::loop_with_interval;
 use crate::{net, Args, Message};
 use async_trait::async_trait;
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::Future;
 use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
 
@@ -371,13 +371,6 @@ pub async fn bootstrap<'a>(args: &'a BootstrapArgs<'a>) {
     tokio::spawn(async move {
         periodic_rip_update(rip_update_interval).await;
     });
-}
-
-async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f: impl Fn() -> Fut) {
-    loop {
-        f().await;
-        tokio::time::sleep(interval).await;
-    }
 }
 
 #[derive(Debug)]

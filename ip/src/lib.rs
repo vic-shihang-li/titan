@@ -2,6 +2,7 @@ pub mod cli;
 pub mod net;
 pub mod protocol;
 pub mod route;
+mod utils;
 
 pub use net::Args;
 
