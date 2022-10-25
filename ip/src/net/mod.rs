@@ -233,7 +233,14 @@ impl Net {
         tokio::spawn(async move {
             let mut buf = [0; 1024];
             while let Ok(sz) = sock.recv(&mut buf).await {
-                sender.send(buf[..sz].into()).unwrap();
+                // Note: there seems to be a bug here. We should be able to
+                // unwrap send() b/c there should always be a listener, and we
+                // do assert that the receiver is running (see Router::run()).
+                // However, after running the node for long enough,
+                // send().unwrap() panics.
+                if sender.send(buf[..sz].into()).is_err() {
+                    log::error!("Failed to send packet to receiver");
+                }
             }
         });
 
