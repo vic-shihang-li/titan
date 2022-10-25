@@ -103,7 +103,7 @@ impl Link {
             self.activated = true;
 
             let mut table = get_forwarding_table_mut().await;
-            table.add_entry(RoutingEntry::new(
+            table.add_entry(RoutingEntry::new_local(
                 self.src_virtual_ip,
                 self.src_virtual_ip,
                 0,

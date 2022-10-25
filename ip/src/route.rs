@@ -56,6 +56,10 @@ impl ForwardingTable {
     }
 
     pub fn prune(&mut self, max_age: Duration) {
+        for (i, entry) in self.entries().iter().enumerate() {
+            log::debug!("{i}, age: {:?}", entry.last_updated.elapsed());
+        }
+
         let num_deleted = {
             let len_before = self.entries.len();
             self.entries
@@ -74,6 +78,7 @@ pub struct Entry {
     destination: Ipv4Addr,
     next_hop: Ipv4Addr,
     cost: u32,
+    is_local: bool,
     last_updated: Instant,
 }
 
@@ -83,6 +88,17 @@ impl Entry {
             destination,
             next_hop,
             cost,
+            is_local: false,
+            last_updated: Instant::now(),
+        }
+    }
+
+    pub fn new_local(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
+        Self {
+            destination,
+            next_hop,
+            cost,
+            is_local: true,
             last_updated: Instant::now(),
         }
     }
@@ -105,7 +121,7 @@ impl Entry {
 
     /// Whether this is an entry for one of the router's own IPs
     pub fn is_local(&self) -> bool {
-        self.destination == self.next_hop
+        self.is_local
     }
 
     pub async fn get_inner_link<'a>(&self) -> LinkRef<'a> {
@@ -143,6 +159,7 @@ impl Entry {
     }
 
     pub fn restart_delete_timer(&mut self) {
+        log::info!("resetting timer: {}", self);
         self.last_updated = Instant::now();
     }
 
@@ -160,6 +177,7 @@ impl fmt::Display for Entry {
 async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
     loop_with_interval(prune_interval, || async {
         let mut table = FORWARDING_TABLE.write().await;
+        log::info!("Pruning table");
         table.prune(max_age);
     })
     .await;
@@ -378,7 +396,7 @@ pub async fn bootstrap<'a>(args: &'a BootstrapArgs<'a>) {
 
     for link in &args.program_args.links {
         // Add entry to my interface with a cost of 0.
-        rt.add_entry(Entry::new(link.interface_ip, link.interface_ip, 0));
+        rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
     }
 
     let prune_interval = args.prune_interval;
