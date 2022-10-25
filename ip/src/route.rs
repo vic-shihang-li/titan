@@ -288,11 +288,6 @@ impl Router {
     }
 
     async fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
-        if header.ttl() == 0 {
-            log::debug!("packet TTL = 0; dropping packet");
-            return PacketDecision::Drop;
-        }
-
         if !verify_header_checksum(header) {
             log::debug!("packet header checksum invalid; dropping packet");
             return PacketDecision::Drop;
@@ -313,6 +308,11 @@ impl Router {
 
         if self.is_my_addr(header.destination_addr()) {
             return PacketDecision::Consume;
+        }
+
+        if header.ttl() == 0 {
+            log::debug!("packet TTL = 0; dropping packet");
+            return PacketDecision::Drop;
         }
 
         PacketDecision::Forward
@@ -515,7 +515,8 @@ mod tests {
             .await;
         assert_eq!(decision, PacketDecision::Consume);
 
-        // Drop packets with zero TTL even if destination IP matches
+        // Even if a packet arrives with TTL=0, it should be processed if it
+        // matches our IP.
         let pkt_zero_ttl = Ipv4PacketBuilder::default()
             .with_ttl(0)
             .with_dst(my_ip)
@@ -528,7 +529,7 @@ mod tests {
         let decision = r
             .decide_packet(&Ipv4HeaderSlice::from_slice(&pkt_zero_ttl).unwrap())
             .await;
-        assert_eq!(decision, PacketDecision::Drop);
+        assert_eq!(decision, PacketDecision::Consume);
     }
 
     fn make_random_packet() -> Vec<u8> {
