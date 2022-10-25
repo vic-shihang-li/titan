@@ -5,6 +5,7 @@ use ip::net;
 use ip::route;
 use ip::Args;
 
+use cli::Cli;
 use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};
 use ip::route::Router;
 
@@ -41,6 +42,5 @@ async fn main() {
         router.run().await;
     });
 
-    let cli = cli::Cli::new();
-    cli.run().await;
+    Cli::default().run().await;
 }

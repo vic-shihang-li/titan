@@ -24,20 +24,10 @@ pub struct SendCmd {
     payload: String,
 }
 
-pub struct Cli {}
-
-impl Default for Cli {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Default)]
+pub struct Cli;
 
 impl Cli {
-    pub fn new() -> Self {
-        eprintln!("Starting CLI");
-        Self {}
-    }
-
     pub async fn run(&self) {
         let mut rl = Editor::<()>::new().unwrap();
         let mut shutdown_flag = false;
