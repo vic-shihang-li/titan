@@ -72,7 +72,7 @@ main()
 
     debug_prelude=
     if [[ ${debug} == 1 ]]; then
-        debug_prelude="RUST_LOG=info"
+        debug_prelude="RUST_LOG=debug"
     fi
 
     if [[ ${clean} == 1 ]]; then
