@@ -263,7 +263,7 @@ impl RipHandler {
                             // Accepting the new report could destabilize the network (see Ex. 8
                             // in the Chapter 13 of Dordal).
                             if local_entry.next_hop() == sender {
-                                log::info!("Restarting timer without update");
+                                log::debug!("Restarting timer without update");
                                 local_entry.restart_delete_timer();
                             }
                         }
@@ -284,7 +284,7 @@ impl RipHandler {
     }
 
     async fn send_triggered_update(&self, updates: &[RoutingEntry], link: &Link) {
-        log::info!("Sending triggered update to {}", link.dest());
+        log::debug!("Sending triggered update to {}", link.dest());
         let rip_msg_bytes =
             RipMessage::from_entries_with_poisoned_reverse(updates, link.dest()).into_bytes();
         let packet = Ipv4PacketBuilder::default()
