@@ -6,3 +6,6 @@
 target
 .idea
 test.txt
+node
+.cargo
+opt
