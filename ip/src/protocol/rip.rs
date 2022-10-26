@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::{self, iter_links, Ipv4PacketBuilder, Link},
+    net::{iter_links, Ipv4PacketBuilder, Link},
     protocol::Protocol,
     route::{get_forwarding_table_mut, Entry as RoutingEntry, ForwardingTable, ProtocolHandler},
 };
@@ -191,8 +191,9 @@ pub struct RipHandler {}
 #[async_trait]
 impl ProtocolHandler for RipHandler {
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        log::info!("Received RIP packet");
         let message = RipMessage::from_bytes(payload);
+
+        log::info!("Received RIP packet from {}", header.source_addr());
 
         let mut rt = get_forwarding_table_mut().await;
         let updates = self
@@ -218,11 +219,6 @@ impl RipHandler {
         let mut updates = Vec::new();
 
         for entry in &message.entries {
-            if net::is_my_addr(entry.address).await {
-                log::warn!("Ignoring advertised entry for my address: {:?}", entry);
-                continue;
-            }
-
             let entry_cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
             match rt.find_mut_entry_for(entry.address) {
                 Some(local_entry) => {
@@ -233,12 +229,8 @@ impl RipHandler {
                                 local_entry,
                                 entry
                             );
-                            if local_entry.get_inner_link().await.is_disabled() {
-                                log::info!("Update skipped; neighbor is advertising cost for disabled link");
-                            } else {
-                                local_entry.update(sender, entry_cost);
-                                updates.push(*local_entry);
-                            }
+                            local_entry.update(sender, entry_cost);
+                            updates.push(*local_entry);
                         }
                         Ordering::Greater => {
                             if local_entry.next_hop() == sender {
@@ -249,13 +241,6 @@ impl RipHandler {
                                 );
                                 local_entry.update_cost(entry_cost);
                                 updates.push(*local_entry);
-                            } else {
-                                log::warn!(
-                                    "Ignoring RIP entry with greater cost {:?}, sender: {:?}, local: {:?}",
-                                    entry,
-                                    sender,
-                                    local_entry
-                                );
                             }
                         }
                         Ordering::Equal => {
@@ -263,7 +248,6 @@ impl RipHandler {
                             // Accepting the new report could destabilize the network (see Ex. 8
                             // in the Chapter 13 of Dordal).
                             if local_entry.next_hop() == sender {
-                                log::debug!("Restarting timer without update");
                                 local_entry.restart_delete_timer();
                             }
                         }
@@ -271,7 +255,6 @@ impl RipHandler {
                 }
                 None => {
                     log::info!("Adding new entry: {:?}", entry);
-
                     let dest = entry.address;
                     let entry = RoutingEntry::new(dest, sender, entry_cost);
                     rt.add_entry(entry);

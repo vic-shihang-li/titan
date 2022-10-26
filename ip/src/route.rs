@@ -57,7 +57,13 @@ impl ForwardingTable {
 
     pub fn prune(&mut self, max_age: Duration) {
         for (i, entry) in self.entries().iter().enumerate() {
-            log::debug!("{i}, age: {:?}", entry.last_updated.elapsed());
+            if !entry.is_local() && entry.last_updated.elapsed() > max_age {
+                log::warn!(
+                    "Deleting entry {i}, {:?}, age: {:?}",
+                    entry,
+                    entry.last_updated.elapsed()
+                );
+            }
         }
 
         let num_deleted = {
@@ -79,7 +85,7 @@ pub struct Entry {
     next_hop: Ipv4Addr,
     cost: u32,
     is_local: bool,
-    last_updated: Instant,
+    pub last_updated: Instant,
 }
 
 impl Entry {
@@ -159,7 +165,7 @@ impl Entry {
     }
 
     pub fn restart_delete_timer(&mut self) {
-        log::debug!("resetting timer: {}", self);
+        log::info!("resetting timer for entry: {}", self);
         self.last_updated = Instant::now();
     }
 
@@ -177,21 +183,21 @@ impl fmt::Display for Entry {
 async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
     loop_with_interval(prune_interval, || async {
         let mut table = FORWARDING_TABLE.write().await;
-        log::info!("Pruning table");
+        log::debug!("Pruning table");
         table.prune(max_age);
     })
     .await;
 }
 
 async fn periodic_rip_update(interval: Duration) {
-    loop_with_interval(interval, || async {
-        log::info!("Sending periodic update");
+    loop_with_interval(interval, || async move {
         let table = FORWARDING_TABLE.read().await;
 
         for link in &*iter_links().await {
-            let rip_msg_bytes =
-                RipMessage::from_entries_with_poisoned_reverse(table.entries(), link.dest())
-                    .into_bytes();
+            log::info!("Sending periodic update to {}", link.dest());
+            let rip_msg =
+                RipMessage::from_entries_with_poisoned_reverse(table.entries(), link.dest());
+            let rip_msg_bytes = rip_msg.into_bytes();
             let packet = Ipv4PacketBuilder::default()
                 .with_payload(&rip_msg_bytes)
                 .with_protocol(Protocol::Rip)
@@ -246,17 +252,15 @@ impl Router {
     }
 
     pub async fn run(&self) {
-        while let Ok(bytes) = net::listen().await.recv().await {
+        let mut listener = net::listen().await;
+        while let Ok(bytes) = listener.recv().await {
             // 0. parse bytes to packet
             // 1. drop if packet is not valid or TTL = 0
             // 2. if packet is for "me", pass packet to the correct protocol handler
             // 3. if forwarding table has rule for packet, send to the next-hop interface
 
-            log::info!("Receiving packet");
             self.handle_packet_bytes(&bytes).await;
         }
-
-        panic!("Premature run loop exit");
     }
 
     async fn handle_packet_bytes(&self, bytes: &[u8]) {
