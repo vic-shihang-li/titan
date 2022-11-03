@@ -792,6 +792,11 @@ mod tests {
 
         #[test]
         fn multithreaded_non_consecutive_rw() {
+            // Simulate real data arrival pattern in TCP.
+            //
+            // Tests that the byte stream consumed is contiguous even when
+            // data arrives in different order.
+
             let data: Vec<u8> = (0..255).collect();
 
             let start_seq_no = 91215;
@@ -812,6 +817,7 @@ mod tests {
                     while num_iters < 10 {
                         let mut b = producer_buf.lock().unwrap();
 
+                        // introduce jitter in arrival
                         let offset = rng.gen_range(0..producer_data.len());
                         match b.write(curr + offset, &producer_data[offset..]) {
                             Ok(_) => {}
