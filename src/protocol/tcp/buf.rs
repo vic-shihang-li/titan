@@ -222,6 +222,11 @@ pub struct RecvBuf<const N: usize> {
     head: usize,
 }
 
+#[derive(Debug)]
+pub enum ConsumeError {
+    DestTooSmall,
+}
+
 impl<const N: usize> RecvBuf<N> {
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
@@ -233,18 +238,28 @@ impl<const N: usize> RecvBuf<N> {
 
     /// Attempts to obtain N bytes from the internal buffer.
     ///
-    /// If there are bytes to consume, return a vector containing up to N bytes.
+    /// The function will write up to N bytes into the destination buffer,
+    /// returning a slice of written bytes to the caller.
     ///
     /// Bytes can only be consumed once; the internal buffer is free to discard
     /// consumed bytes.
-    pub fn consume(&mut self, n_bytes: usize) -> Option<Vec<u8>> {
+    pub fn consume<'a>(
+        &mut self,
+        n_bytes: usize,
+        dest: &'a mut [u8],
+    ) -> Result<&'a [u8], ConsumeError> {
+        if dest.len() < n_bytes {
+            return Err(ConsumeError::DestTooSmall);
+        }
+
         let remaining = self.read_remaining_size();
 
         match remaining {
-            0 => None,
+            0 => Ok(&dest[0..0]),
             _ => {
                 let to_consume = min(remaining, n_bytes);
-                Some(self.consume_unchecked(to_consume))
+                self.consume_unchecked(to_consume, dest);
+                Ok(&dest[0..to_consume])
             }
         }
     }
@@ -333,23 +348,23 @@ impl<const N: usize> RecvBuf<N> {
     }
 
     /// Consume exactly n bytes.
-    fn consume_unchecked(&mut self, n_bytes: usize) -> Vec<u8> {
-        let mut consumed = Vec::new();
-
+    fn consume_unchecked(&mut self, n_bytes: usize, dest: &mut [u8]) {
         let start = self.tail % self.size();
         let end = min(start + n_bytes, self.size());
+        let to_copy = end - start;
 
-        consumed.extend_from_slice(&self.buf[start..end]);
+        let mut curr = 0;
+        dest[curr..to_copy].copy_from_slice(&self.buf[start..end]);
+        curr += to_copy;
+
         let copied = end - start;
         if copied < n_bytes {
             // wrap over
-            let end = n_bytes - copied;
-            consumed.extend_from_slice(&self.buf[..end]);
+            let remaining = n_bytes - copied;
+            dest[curr..curr + remaining].copy_from_slice(&self.buf[..remaining]);
         }
 
         self.tail += n_bytes;
-
-        consumed
     }
 }
 
@@ -536,9 +551,14 @@ mod tests {
             );
 
             let mut total_consumed = 0;
-            while let Some(bytes) = buf.consume(data.len()) {
-                assert_eq!(&bytes, &data);
-                total_consumed += bytes.len();
+            let mut bytes = vec![0; 16];
+            loop {
+                let consumed = buf.consume(data.len(), &mut bytes).unwrap();
+                if consumed.is_empty() {
+                    break;
+                }
+                assert_eq!(&consumed, &data);
+                total_consumed += consumed.len();
 
                 assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ - total_consumed);
                 assert_eq!(buf.write_remaining_size(), total_consumed);
