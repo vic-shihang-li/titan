@@ -22,10 +22,14 @@ pub struct SendBuf<const N: usize> {
     buf: [u8; N],
 }
 
-const DEFAULT_SENDBUF_SZ: usize = 1 << 16;
+const DEFAULT_BUF_SZ: usize = 1 << 16;
 
-pub fn make_default_sendbuf() -> SendBuf<DEFAULT_SENDBUF_SZ> {
-    SendBuf::<DEFAULT_SENDBUF_SZ>::new()
+pub fn make_default_sendbuf() -> SendBuf<DEFAULT_BUF_SZ> {
+    SendBuf::<DEFAULT_BUF_SZ>::new()
+}
+
+pub fn make_default_recvbuf(starting_seq_no: usize) -> RecvBuf<DEFAULT_BUF_SZ> {
+    RecvBuf::<DEFAULT_BUF_SZ>::new(starting_seq_no)
 }
 
 #[derive(Debug)]
@@ -207,6 +211,120 @@ impl<const N: usize> SendBuf<N> {
     }
 }
 
+/// A fixed-sized buffer for constructing a contiguous byte stream over TCP.
+///
+/// Upon receiving a packet, the payload can be written into this buffer via
+/// `RecvBuf::write()`. Additionally, window size can be probed by inspecting
+/// `RecvBuf::write_remaining_size()`.
+pub struct RecvBuf<const N: usize> {
+    buf: [u8; N],
+    tail: usize,
+    head: usize,
+}
+
+impl<const N: usize> RecvBuf<N> {
+    pub fn new(starting_seq_no: usize) -> Self {
+        Self {
+            buf: [0; N],
+            tail: starting_seq_no,
+            head: starting_seq_no,
+        }
+    }
+
+    /// Attempts to obtain N bytes from the internal buffer.
+    ///
+    /// If there are bytes to consume, return a vector containing up to N bytes.
+    ///
+    /// Bytes can only be consumed once; the internal buffer is free to discard
+    /// consumed bytes.
+    pub fn consume(&mut self, n_bytes: usize) -> Option<Vec<u8>> {
+        todo!()
+    }
+
+    /// Attempts to write bytes starting at a sequence number.
+    ///
+    /// This method errs when the write remaining size of this buffer is less
+    /// than the number of bytes to be written.
+    ///
+    /// In the error case, no byte shall be written in the buffer. The error
+    /// contains the maximum number of bytes that can be written into the
+    /// buffer, starting at the specified sequence number.
+    pub fn write(&mut self, seq_no: usize, bytes: &[u8]) -> Result<(), usize> {
+        if !self.in_write_range(seq_no, seq_no + bytes.len()) {
+            return Err(self.write_remaining_size());
+        }
+
+        self.write_unchecked(seq_no, bytes);
+        Ok(())
+    }
+
+    /// Whether the internal byte buffer is non-contiguous, i.e. some bytes
+    /// arrived while some other bytes before them have not arrived.
+    pub fn has_early_arrival(&self) -> bool {
+        todo!()
+    }
+
+    /// Get the sequence number of the last byte received.
+    ///
+    /// This is P.SEQ_NO + P.PAYLOAD_SZ, where P is the packet with the largest
+    /// sequence number received thus far.
+    pub fn max_arrival(&self) -> usize {
+        todo!()
+    }
+
+    /// Get the next sequence number expected to be sent by the sender.
+    pub fn expected_next(&self) -> usize {
+        self.head
+    }
+
+    /// Get the buffer room between "expected_next" and the end of the buffer.
+    pub fn write_remaining_size(&self) -> usize {
+        self.tail + self.size() - self.head
+    }
+
+    /// Get the [min, max) sequence number that can be written into.
+    pub fn write_range(&self) -> (usize, usize) {
+        (self.head, self.tail + self.buf.len())
+    }
+
+    /// Get the number of consumable bytes.
+    ///
+    /// Note that early arrival bytes are not consumable.
+    pub fn read_remaining_size(&self) -> usize {
+        self.head - self.tail
+    }
+}
+
+impl<const N: usize> RecvBuf<N> {
+    fn size(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Whether the provided range is within write range.
+    ///
+    /// end_seq_no is exclusive: this checks writing up to but not including
+    /// end_seq_no.
+    fn in_write_range(&self, start_seq_no: usize, end_seq_no: usize) -> bool {
+        let (min, max) = self.write_range();
+        start_seq_no >= min && end_seq_no <= max
+    }
+
+    fn write_unchecked(&mut self, seq_no: usize, bytes: &[u8]) {
+        let start = self.head % self.size();
+        let end = min(start + bytes.len(), self.size());
+        let to_write = end - start;
+        self.buf[start..end].copy_from_slice(&bytes[..to_write]);
+
+        if to_write < bytes.len() {
+            // wrap over
+            let end = bytes.len() - to_write;
+            self.buf[..end].copy_from_slice(&bytes[to_write..]);
+        }
+
+        self.head += bytes.len();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -325,5 +443,59 @@ mod tests {
             }
             assert!(buf.is_full());
         }
+    }
+
+    #[cfg(test)]
+    mod recv {
+        use super::*;
+
+        #[test]
+        fn contiguous_write_till_full() {
+            let start_seq_no = 231251;
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
+
+            let mut buf = make_default_recvbuf(start_seq_no);
+            assert!(buf.write_remaining_size() == DEFAULT_BUF_SZ);
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no, start_seq_no + buf.write_remaining_size())
+            );
+
+            let mut curr = start_seq_no;
+            let mut total = 0;
+            loop {
+                match buf.write(curr, &data) {
+                    Ok(_) => {
+                        curr += data.len();
+                        total += data.len();
+                        assert_eq!(buf.read_remaining_size(), total);
+                        assert_eq!(buf.expected_next(), start_seq_no + total);
+                        assert_eq!(
+                            buf.write_range(),
+                            (start_seq_no + total, start_seq_no + DEFAULT_BUF_SZ)
+                        );
+                    }
+                    Err(remaining) => {
+                        buf.write(curr, &data[..remaining]).unwrap();
+                        total += remaining;
+                        break;
+                    }
+                }
+            }
+
+            assert_eq!(total, DEFAULT_BUF_SZ);
+            assert_eq!(buf.write_remaining_size(), 0);
+            assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ);
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + DEFAULT_BUF_SZ, start_seq_no + DEFAULT_BUF_SZ)
+            );
+        }
+
+        #[test]
+        fn contiguous_read_from_full() {}
+
+        #[test]
+        fn contiguous_read_write() {}
     }
 }
