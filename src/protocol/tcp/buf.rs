@@ -238,7 +238,15 @@ impl<const N: usize> RecvBuf<N> {
     /// Bytes can only be consumed once; the internal buffer is free to discard
     /// consumed bytes.
     pub fn consume(&mut self, n_bytes: usize) -> Option<Vec<u8>> {
-        todo!()
+        let remaining = self.read_remaining_size();
+
+        match remaining {
+            0 => None,
+            _ => {
+                let to_consume = min(remaining, n_bytes);
+                Some(self.consume_unchecked(to_consume))
+            }
+        }
     }
 
     /// Attempts to write bytes starting at a sequence number.
@@ -322,6 +330,26 @@ impl<const N: usize> RecvBuf<N> {
         }
 
         self.head += bytes.len();
+    }
+
+    /// Consume exactly n bytes.
+    fn consume_unchecked(&mut self, n_bytes: usize) -> Vec<u8> {
+        let mut consumed = Vec::new();
+
+        let start = self.tail % self.size();
+        let end = min(start + n_bytes, self.size());
+
+        consumed.extend_from_slice(&self.buf[start..end]);
+        let copied = end - start;
+        if copied < n_bytes {
+            // wrap over
+            let end = n_bytes - copied;
+            consumed.extend_from_slice(&self.buf[..end]);
+        }
+
+        self.tail += n_bytes;
+
+        consumed
     }
 }
 
@@ -493,9 +521,53 @@ mod tests {
         }
 
         #[test]
-        fn contiguous_read_from_full() {}
+        fn contiguous_read_from_full() {
+            let start_seq_no = 1291241;
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
+
+            let mut buf = make_default_recvbuf(start_seq_no);
+            fill_buf(&mut buf, start_seq_no, &data);
+
+            assert_eq!(buf.write_remaining_size(), 0);
+            assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ);
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + DEFAULT_BUF_SZ, start_seq_no + DEFAULT_BUF_SZ)
+            );
+
+            let mut total_consumed = 0;
+            while let Some(bytes) = buf.consume(data.len()) {
+                assert_eq!(&bytes, &data);
+                total_consumed += bytes.len();
+
+                assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ - total_consumed);
+                assert_eq!(buf.write_remaining_size(), total_consumed);
+                assert_eq!(
+                    buf.write_range(),
+                    (
+                        start_seq_no + DEFAULT_BUF_SZ,
+                        start_seq_no + DEFAULT_BUF_SZ + total_consumed
+                    )
+                );
+            }
+
+            assert_eq!(total_consumed, DEFAULT_BUF_SZ);
+        }
 
         #[test]
         fn contiguous_read_write() {}
+
+        fn fill_buf<const N: usize>(buf: &mut RecvBuf<N>, start_seq_no: usize, data: &[u8]) {
+            let mut curr = start_seq_no;
+            loop {
+                match buf.write(curr, data) {
+                    Ok(_) => curr += data.len(),
+                    Err(remaining) => {
+                        buf.write(curr, &data[..remaining]).unwrap();
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
