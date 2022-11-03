@@ -216,109 +216,114 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn write_until_full() {
-        let data = [1; 15];
+    #[cfg(test)]
+    mod send {
+        use super::*;
 
-        let mut buf = make_default_sendbuf();
-        assert!(buf.is_empty());
+        #[test]
+        fn write_until_full() {
+            let data = [1; 15];
 
-        let mut total_written = 0;
-        loop {
-            let written = buf.write(&data);
-            if written == 0 {
-                break;
+            let mut buf = make_default_sendbuf();
+            assert!(buf.is_empty());
+
+            let mut total_written = 0;
+            loop {
+                let written = buf.write(&data);
+                if written == 0 {
+                    break;
+                }
+                total_written += written;
             }
-            total_written += written;
+
+            assert!(buf.is_full());
+            assert_eq!(total_written, buf.size());
         }
 
-        assert!(buf.is_full());
-        assert_eq!(total_written, buf.size());
-    }
+        #[test]
+        fn read_until_empty() {
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-    #[test]
-    fn read_until_empty() {
-        let data = [1, 2, 3, 4, 5, 6, 7, 8];
+            let mut buf = make_default_sendbuf();
+            fill_buf(&mut buf, &data);
 
-        let mut buf = make_default_sendbuf();
-        fill_buf(&mut buf, &data);
-
-        while !buf.is_empty() {
-            match buf.advance(data.len()) {
-                Ok(_) => {
-                    let expect_len = min(data.len(), buf.read_remaining_size());
-                    let pending_buf = buf.unconsumed().slice(expect_len).unwrap();
-                    assert!(pending_buf == data[..expect_len]);
-                }
-                Err(_) => {
-                    buf.advance(buf.write_remaining_size()).unwrap();
-                }
-            }
-        }
-
-        assert!(buf.is_empty());
-        assert!(buf.unconsumed().is_empty());
-    }
-
-    #[test]
-    fn read_write() {
-        // Simulate real SendBuf interactions in TCP.
-        //
-        // Here, a thread acts as application code writing into this buffer.
-        // Another thread in the TCP stack consumes from this buffer.
-        //
-        // Bytes are marked as consumed when they're acked, so there will be
-        // some bytes that are transmitted but not acked; these bytes remain
-        // unconsumed from SendBuf's perspective.
-
-        let data = [1, 2, 3, 4, 5, 6, 7, 8];
-        let num_repeats = 1_000_000;
-        let buf = Arc::new(Mutex::new(make_default_sendbuf()));
-
-        let producer_buf = buf.clone();
-        let producer = std::thread::spawn(move || {
-            for _ in 0..num_repeats {
-                let mut start = 0;
-                while start != data.len() {
-                    let mut buf = producer_buf.lock().unwrap();
-                    let written = buf.write(&data[start..]);
-                    start += written;
-                    if written < data.len() - start {
-                        yield_now();
+            while !buf.is_empty() {
+                match buf.advance(data.len()) {
+                    Ok(_) => {
+                        let expect_len = min(data.len(), buf.read_remaining_size());
+                        let pending_buf = buf.unconsumed().slice_front(expect_len).unwrap();
+                        assert!(pending_buf == data[..expect_len]);
+                    }
+                    Err(_) => {
+                        buf.advance(buf.write_remaining_size()).unwrap();
                     }
                 }
             }
-        });
 
-        let consumer = std::thread::spawn(move || {
-            for _ in 0..num_repeats {
-                loop {
-                    let mut b = buf.lock().unwrap();
-                    if b.read_remaining_size() < data.len() {
-                        drop(b);
-                        yield_now();
-                        continue;
+            assert!(buf.is_empty());
+            assert!(buf.unconsumed().is_empty());
+        }
+
+        #[test]
+        fn read_write() {
+            // Simulate real SendBuf interactions in TCP.
+            //
+            // Here, a thread acts as application code writing into this buffer.
+            // Another thread in the TCP stack consumes from this buffer.
+            //
+            // Bytes are marked as consumed when they're acked, so there will be
+            // some bytes that are transmitted but not acked; these bytes remain
+            // unconsumed from SendBuf's perspective.
+
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
+            let num_repeats = 1_000_000;
+            let buf = Arc::new(Mutex::new(make_default_sendbuf()));
+
+            let producer_buf = buf.clone();
+            let producer = std::thread::spawn(move || {
+                for _ in 0..num_repeats {
+                    let mut start = 0;
+                    while start != data.len() {
+                        let mut buf = producer_buf.lock().unwrap();
+                        let written = buf.write(&data[start..]);
+                        start += written;
+                        if written < data.len() - start {
+                            yield_now();
+                        }
                     }
+                }
+            });
 
-                    let got = b.unconsumed().slice(data.len()).unwrap();
-                    assert!(got == data[..]);
-                    b.advance(data.len()).unwrap();
+            let consumer = std::thread::spawn(move || {
+                for _ in 0..num_repeats {
+                    loop {
+                        let mut b = buf.lock().unwrap();
+                        let remaining = b.read_remaining_size();
+                        if remaining < data.len() {
+                            drop(b);
+                            yield_now();
+                            continue;
+                        }
+                        let got = b.unconsumed().slice_front(data.len()).unwrap();
+                        assert!(got == data[..]);
+                        b.advance(data.len()).unwrap();
+                        break;
+                    }
+                }
+            });
+
+            producer.join().unwrap();
+            consumer.join().unwrap();
+        }
+
+        fn fill_buf<const N: usize>(buf: &mut SendBuf<N>, data: &[u8]) {
+            loop {
+                let written = buf.write(data);
+                if written == 0 {
                     break;
                 }
             }
-        });
-
-        producer.join().unwrap();
-        consumer.join().unwrap();
-    }
-
-    fn fill_buf<const N: usize>(buf: &mut SendBuf<N>, data: &[u8]) {
-        loop {
-            let written = buf.write(data);
-            if written == 0 {
-                break;
-            }
+            assert!(buf.is_full());
         }
-        assert!(buf.is_full());
     }
 }
