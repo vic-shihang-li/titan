@@ -490,6 +490,7 @@ mod tests {
 
     #[cfg(test)]
     mod recv {
+
         use super::*;
 
         #[test]
@@ -575,7 +576,61 @@ mod tests {
         }
 
         #[test]
-        fn contiguous_read_write() {}
+        fn contiguous_read_write() {
+            // Simulate real RecvBuf interations in TCP.
+            //
+            // Here, the producer thread acts as the thread in the TCP stack
+            // that's pushing data into the buffer. A separate consumer thread
+            // acts as a the application-level thread that's consuming data.
+
+            let start_seq_no = 91215;
+            let num_repeats = 1_000_000;
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
+            let buf = Arc::new(Mutex::new(make_default_recvbuf(start_seq_no)));
+
+            let producer_buf = buf.clone();
+            let producer = std::thread::spawn(move || {
+                let mut curr = start_seq_no;
+                for _ in 0..num_repeats {
+                    loop {
+                        let mut b = producer_buf.lock().unwrap();
+                        match b.write(curr, &data) {
+                            Ok(_) => {
+                                curr += data.len();
+                                break;
+                            }
+                            Err(_) => {
+                                yield_now();
+                            }
+                        }
+                    }
+                }
+            });
+
+            let consumer = std::thread::spawn(move || {
+                let mut consume_buf = vec![0; 16];
+                for _ in 0..num_repeats {
+                    let mut curr = 0;
+                    loop {
+                        let mut b = buf.lock().unwrap();
+                        let consumed = b
+                            .consume(data.len() - curr, &mut consume_buf[curr..])
+                            .unwrap();
+                        curr += consumed.len();
+                        if consumed.is_empty() {
+                            yield_now();
+                        } else if curr == data.len() {
+                            assert_eq!(consume_buf[..data.len()], data);
+                            break;
+                        }
+                    }
+                }
+                assert!(buf.lock().unwrap().read_remaining_size() == 0);
+            });
+
+            producer.join().unwrap();
+            consumer.join().unwrap();
+        }
 
         fn fill_buf<const N: usize>(buf: &mut RecvBuf<N>, start_seq_no: usize, data: &[u8]) {
             let mut curr = start_seq_no;
