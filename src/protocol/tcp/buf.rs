@@ -33,6 +33,12 @@ pub enum AdvanceError {
     TooBig,
 }
 
+#[derive(Debug)]
+pub struct SliceError {
+    requested: usize,
+    got: usize,
+}
+
 /// Slice into a ring buffer.
 ///
 /// Abstract over how a slice could be split into two in a ring buffer.
@@ -60,24 +66,26 @@ impl<'a> ByteSlice<'a> {
     }
 
     /// Construct a new slice that is a sub-slice of the current slice.
-    pub fn slice(&self, n_bytes: usize) -> Option<ByteSlice<'a>> {
+    pub fn slice_front(&self, n_bytes: usize) -> Result<ByteSlice<'a>, SliceError> {
         if n_bytes <= self.len() {
             match self.second {
                 Some(second) => {
                     if n_bytes <= self.first.len() {
-                        Some(ByteSlice::new(&self.first[..n_bytes], None))
+                        Ok(ByteSlice::new(&self.first[..n_bytes], None))
                     } else {
-                        Some(ByteSlice::new(
+                        Ok(ByteSlice::new(
                             self.first,
                             Some(&second[..(n_bytes - self.first.len())]),
                         ))
                     }
                 }
-
-                None => Some(ByteSlice::new(&self.first[..n_bytes], None)),
+                None => Ok(ByteSlice::new(&self.first[..n_bytes], None)),
             }
         } else {
-            None
+            Err(SliceError {
+                requested: n_bytes,
+                got: self.len(),
+            })
         }
     }
 }
@@ -155,7 +163,14 @@ impl<const N: usize> SendBuf<N> {
 
         match start.cmp(&end) {
             std::cmp::Ordering::Less => ByteSlice::new(&self.buf[start..end], None),
-            std::cmp::Ordering::Equal => ByteSlice::new(&self.buf[start..end], None),
+            std::cmp::Ordering::Equal => {
+                if self.head == self.tail {
+                    ByteSlice::new(&self.buf[start..end], None)
+                } else {
+                    assert!(self.head == self.tail + self.size());
+                    ByteSlice::new(&self.buf, None)
+                }
+            }
             std::cmp::Ordering::Greater => {
                 let first = &self.buf[start..];
                 let second = &self.buf[..end];
