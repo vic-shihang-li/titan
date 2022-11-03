@@ -1,3 +1,5 @@
+mod buf;
+
 use crate::route::ProtocolHandler;
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
