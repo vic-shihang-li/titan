@@ -300,7 +300,8 @@ impl<const N: usize> RecvBuf<N> {
     /// This method errs when the write remaining size of this buffer is less
     /// than the number of bytes to be written.
     ///
-    /// In the error case, no byte shall be written in the buffer.
+    /// Either all bytes or no byte will be written: in the error case, no byte
+    /// shall be written in the buffer.
     pub fn write(&mut self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
         self.validate_write_range(seq_no, seq_no + bytes.len())
             .map(|_| self.write_unchecked(seq_no, bytes))
@@ -547,6 +548,8 @@ mod tests {
     #[cfg(test)]
     mod recv {
 
+        use rand::{thread_rng, Rng};
+
         use super::*;
 
         #[test]
@@ -690,7 +693,7 @@ mod tests {
         }
 
         #[test]
-        fn non_consecutive_read_write() {
+        fn non_consecutive_rw() {
             let start_seq_no = 0;
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
             let mut buf = make_default_recvbuf(start_seq_no);
@@ -703,6 +706,7 @@ mod tests {
             buf.write(start_seq_no, &data).unwrap();
             assert!(!buf.has_early_arrival());
             assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
@@ -716,6 +720,7 @@ mod tests {
             buf.write(start_seq_no + 100, &data).unwrap();
             assert!(buf.has_early_arrival());
             assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
@@ -729,6 +734,7 @@ mod tests {
             buf.write(start_seq_no + 135, &data).unwrap();
             assert!(buf.has_early_arrival());
             assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
@@ -742,6 +748,7 @@ mod tests {
             let payload = [8; 55];
             buf.write(start_seq_no + data.len(), &payload).unwrap();
             assert!(buf.has_early_arrival());
+            assert_eq!(buf.expected_next(), 63);
             assert_eq!(
                 buf.write_remaining_size(),
                 DEFAULT_BUF_SZ - data.len() - payload.len()
@@ -762,6 +769,7 @@ mod tests {
             let payload = [3; 37];
             buf.write(start_seq_no + 63, &payload).unwrap();
             assert!(buf.has_early_arrival());
+            assert_eq!(buf.expected_next(), 108);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no + 108, start_seq_no + DEFAULT_BUF_SZ)
@@ -775,10 +783,95 @@ mod tests {
             let payload = [1; 100];
             buf.write(start_seq_no + 108, &payload).unwrap();
             assert!(!buf.has_early_arrival());
+            assert_eq!(buf.expected_next(), 208);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no + 208, start_seq_no + DEFAULT_BUF_SZ)
             );
+        }
+
+        #[test]
+        fn multithreaded_non_consecutive_rw() {
+            let data: Vec<u8> = (0..255).collect();
+
+            let start_seq_no = 91215;
+            let num_repeats = 100_000;
+            let buf = Arc::new(Mutex::new(make_default_recvbuf(start_seq_no)));
+
+            let producer_buf = buf.clone();
+            let producer_data = data.clone();
+            let producer = std::thread::spawn(move || {
+                let mut rng = thread_rng();
+                let mut curr = start_seq_no;
+
+                for _ in 0..num_repeats {
+                    let target = curr + producer_data.len();
+                    let mut num_iters = 0;
+                    let mut succeeded = false;
+
+                    while num_iters < 10 {
+                        let mut b = producer_buf.lock().unwrap();
+
+                        let offset = rng.gen_range(0..producer_data.len());
+                        match b.write(curr + offset, &producer_data[offset..]) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                if matches!(e, WriteRangeError::ExceedBuffer) {
+                                    yield_now();
+                                }
+                            }
+                        }
+
+                        assert!(b.expected_next() <= target);
+                        if b.expected_next() == target {
+                            succeeded = true;
+                            break;
+                        }
+
+                        num_iters += 1;
+                    }
+
+                    if !succeeded {
+                        loop {
+                            let mut b = producer_buf.lock().unwrap();
+                            match b.write(curr, &producer_data) {
+                                Ok(_) => break,
+                                Err(e) => {
+                                    if matches!(e, WriteRangeError::ExceedBuffer) {
+                                        yield_now();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    curr = target;
+                }
+            });
+
+            let consumer = std::thread::spawn(move || {
+                let mut consume_buf = vec![0; 1024];
+                for _ in 0..num_repeats {
+                    let mut curr = 0;
+                    loop {
+                        let mut b = buf.lock().unwrap();
+                        let consumed = b
+                            .consume(data.len() - curr, &mut consume_buf[curr..])
+                            .unwrap();
+                        curr += consumed.len();
+                        if consumed.is_empty() {
+                            yield_now();
+                        } else if curr == data.len() {
+                            assert_eq!(consume_buf[..data.len()], data);
+                            break;
+                        }
+                    }
+                }
+                assert!(buf.lock().unwrap().read_remaining_size() == 0);
+            });
+
+            producer.join().unwrap();
+            consumer.join().unwrap();
         }
 
         fn fill_buf<const N: usize>(buf: &mut RecvBuf<N>, start_seq_no: usize, data: &[u8]) {
