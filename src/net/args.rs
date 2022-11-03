@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn parse_link_file() {
-        let link_file_path = "../net_links/abc/B.lnx";
+        let link_file_path = "./net_links/abc/B.lnx";
         let br = BufReader::new(File::open(link_file_path).unwrap());
         let args = Args::try_parse(br).unwrap();
 
