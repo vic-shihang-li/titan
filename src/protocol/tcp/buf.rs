@@ -249,6 +249,14 @@ pub enum ConsumeError {
     DestTooSmall,
 }
 
+#[derive(Debug)]
+pub enum WriteRangeError {
+    /// Starting at a sequence number below the minimal bound.
+    SeqNoTooSmall,
+    /// Writing too much into the buffer.
+    ExceedBuffer,
+}
+
 impl<const N: usize> RecvBuf<N> {
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
@@ -292,16 +300,10 @@ impl<const N: usize> RecvBuf<N> {
     /// This method errs when the write remaining size of this buffer is less
     /// than the number of bytes to be written.
     ///
-    /// In the error case, no byte shall be written in the buffer. The error
-    /// contains the maximum number of bytes that can be written into the
-    /// buffer, starting at the specified sequence number.
-    pub fn write(&mut self, seq_no: usize, bytes: &[u8]) -> Result<(), usize> {
-        if !self.in_write_range(seq_no, seq_no + bytes.len()) {
-            return Err(self.write_remaining_size());
-        }
-
-        self.write_unchecked(seq_no, bytes);
-        Ok(())
+    /// In the error case, no byte shall be written in the buffer.
+    pub fn write(&mut self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
+        self.validate_write_range(seq_no, seq_no + bytes.len())
+            .map(|_| self.write_unchecked(seq_no, bytes))
     }
 
     /// Whether the internal byte buffer is non-contiguous, i.e. some bytes
@@ -342,9 +344,22 @@ impl<const N: usize> RecvBuf<N> {
     ///
     /// end_seq_no is exclusive: this checks writing up to but not including
     /// end_seq_no.
-    fn in_write_range(&self, start_seq_no: usize, end_seq_no: usize) -> bool {
+    fn validate_write_range(
+        &self,
+        start_seq_no: usize,
+        end_seq_no: usize,
+    ) -> Result<(), WriteRangeError> {
         let (min, max) = self.write_range();
-        start_seq_no >= min && end_seq_no <= max
+        // start_seq_no >= min && end_seq_no <= max
+
+        if start_seq_no < min {
+            return Err(WriteRangeError::SeqNoTooSmall);
+        }
+        if end_seq_no > max {
+            return Err(WriteRangeError::ExceedBuffer);
+        }
+
+        return Ok(());
     }
 
     fn write_unchecked(&mut self, seq_no: usize, bytes: &[u8]) {
@@ -560,7 +575,8 @@ mod tests {
                             (start_seq_no + total, start_seq_no + DEFAULT_BUF_SZ)
                         );
                     }
-                    Err(remaining) => {
+                    Err(_) => {
+                        let remaining = buf.write_remaining_size();
                         buf.write(curr, &data[..remaining]).unwrap();
                         total += remaining;
                         break;
@@ -770,8 +786,9 @@ mod tests {
             loop {
                 match buf.write(curr, data) {
                     Ok(_) => curr += data.len(),
-                    Err(remaining) => {
-                        buf.write(curr, &data[..remaining]).unwrap();
+                    Err(_) => {
+                        buf.write(curr, &data[..buf.write_remaining_size()])
+                            .unwrap();
                         break;
                     }
                 }
