@@ -1,4 +1,7 @@
-use std::cmp::min;
+use std::{
+    cmp::{max, min, Reverse},
+    collections::BinaryHeap,
+};
 
 /// A fixed-sized buffer for buffering data to be sent over TCP.
 ///
@@ -211,6 +214,24 @@ impl<const N: usize> SendBuf<N> {
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct SegmentMeta {
+    seq_no: usize,
+    size: usize,
+}
+
+impl PartialOrd for SegmentMeta {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.seq_no.partial_cmp(&other.seq_no)
+    }
+}
+
+impl Ord for SegmentMeta {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.seq_no.cmp(&other.seq_no)
+    }
+}
+
 /// A fixed-sized buffer for constructing a contiguous byte stream over TCP.
 ///
 /// Upon receiving a packet, the payload can be written into this buffer via
@@ -220,6 +241,7 @@ pub struct RecvBuf<const N: usize> {
     buf: [u8; N],
     tail: usize,
     head: usize,
+    early_arrivals: BinaryHeap<Reverse<SegmentMeta>>,
 }
 
 #[derive(Debug)]
@@ -233,6 +255,7 @@ impl<const N: usize> RecvBuf<N> {
             buf: [0; N],
             tail: starting_seq_no,
             head: starting_seq_no,
+            early_arrivals: BinaryHeap::new(),
         }
     }
 
@@ -284,15 +307,7 @@ impl<const N: usize> RecvBuf<N> {
     /// Whether the internal byte buffer is non-contiguous, i.e. some bytes
     /// arrived while some other bytes before them have not arrived.
     pub fn has_early_arrival(&self) -> bool {
-        todo!()
-    }
-
-    /// Get the sequence number of the last byte received.
-    ///
-    /// This is P.SEQ_NO + P.PAYLOAD_SZ, where P is the packet with the largest
-    /// sequence number received thus far.
-    pub fn max_arrival(&self) -> usize {
-        todo!()
+        !self.early_arrivals.is_empty()
     }
 
     /// Get the next sequence number expected to be sent by the sender.
@@ -333,18 +348,19 @@ impl<const N: usize> RecvBuf<N> {
     }
 
     fn write_unchecked(&mut self, seq_no: usize, bytes: &[u8]) {
-        let start = self.head % self.size();
-        let end = min(start + bytes.len(), self.size());
-        let to_write = end - start;
-        self.buf[start..end].copy_from_slice(&bytes[..to_write]);
+        self.write_into_buf(seq_no, bytes);
 
-        if to_write < bytes.len() {
-            // wrap over
-            let end = bytes.len() - to_write;
-            self.buf[..end].copy_from_slice(&bytes[to_write..]);
+        if seq_no == self.head {
+            self.head += bytes.len();
+            if self.has_early_arrival() {
+                self.drain_early_arrivals();
+            }
+        } else {
+            self.early_arrivals.push(Reverse(SegmentMeta {
+                seq_no,
+                size: bytes.len(),
+            }));
         }
-
-        self.head += bytes.len();
     }
 
     /// Consume exactly n bytes.
@@ -365,6 +381,31 @@ impl<const N: usize> RecvBuf<N> {
         }
 
         self.tail += n_bytes;
+    }
+
+    fn write_into_buf(&mut self, seq_no: usize, bytes: &[u8]) {
+        let start = seq_no % self.size();
+        let end = min(start + bytes.len(), self.size());
+        let to_write = end - start;
+        self.buf[start..end].copy_from_slice(&bytes[..to_write]);
+
+        if to_write < bytes.len() {
+            // wrap over
+            let end = bytes.len() - to_write;
+            self.buf[..end].copy_from_slice(&bytes[to_write..]);
+        }
+    }
+
+    fn drain_early_arrivals(&mut self) {
+        while !self.early_arrivals.is_empty() {
+            let top = self.early_arrivals.peek().unwrap();
+            if top.0.seq_no <= self.head {
+                let top = self.early_arrivals.pop().unwrap();
+                self.head = max(self.head, top.0.seq_no + top.0.size);
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -630,6 +671,98 @@ mod tests {
 
             producer.join().unwrap();
             consumer.join().unwrap();
+        }
+
+        #[test]
+        fn non_consecutive_read_write() {
+            let start_seq_no = 0;
+            let data = [1, 2, 3, 4, 5, 6, 7, 8];
+            let mut buf = make_default_recvbuf(start_seq_no);
+
+            //      |-------------WRITEABLE------------|
+            // |xxxx-----------------------------------|
+            //  ^   ^
+            //  0   8
+
+            buf.write(start_seq_no, &data).unwrap();
+            assert!(!buf.has_early_arrival());
+            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+            );
+
+            //      |-------------WRITEABLE------------|
+            // |xxxx-------------xxxx------------------|
+            //  ^   ^            ^   ^
+            //  0   8            100 108
+
+            buf.write(start_seq_no + 100, &data).unwrap();
+            assert!(buf.has_early_arrival());
+            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+            );
+
+            //      |-------------WRITEABLE------------|
+            // |xxxx-------------xxxx----xxxx----------|
+            //  ^   ^            ^   ^   ^   ^
+            //  0   8            100 108 135 143
+
+            buf.write(start_seq_no + 135, &data).unwrap();
+            assert!(buf.has_early_arrival());
+            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+            );
+
+            //            |---------WRITEABLE----------|
+            // |xxxxxxxxxx-------xxxx----xxxx----------|
+            //  ^         ^      ^   ^   ^   ^
+            //  0         63     100 108 135 143
+
+            let payload = [8; 55];
+            buf.write(start_seq_no + data.len(), &payload).unwrap();
+            assert!(buf.has_early_arrival());
+            assert_eq!(
+                buf.write_remaining_size(),
+                DEFAULT_BUF_SZ - data.len() - payload.len()
+            );
+            assert_eq!(
+                buf.write_range(),
+                (
+                    start_seq_no + data.len() + payload.len(),
+                    start_seq_no + DEFAULT_BUF_SZ
+                )
+            );
+
+            //                       |----WRITEABLE----|
+            // |xxxxxxxxxxxxxxxxxxxxx----xxxx----------|
+            //  ^                    ^   ^   ^
+            //  0                    108 135 143
+
+            let payload = [3; 37];
+            buf.write(start_seq_no + 63, &payload).unwrap();
+            assert!(buf.has_early_arrival());
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + 108, start_seq_no + DEFAULT_BUF_SZ)
+            );
+
+            //                                    |-WT-|
+            // |xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-----|
+            //  ^                                 ^
+            //  0                                 208
+
+            let payload = [1; 100];
+            buf.write(start_seq_no + 108, &payload).unwrap();
+            assert!(!buf.has_early_arrival());
+            assert_eq!(
+                buf.write_range(),
+                (start_seq_no + 208, start_seq_no + DEFAULT_BUF_SZ)
+            );
         }
 
         fn fill_buf<const N: usize>(buf: &mut RecvBuf<N>, start_seq_no: usize, data: &[u8]) {
