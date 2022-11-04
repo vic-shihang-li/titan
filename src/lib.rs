@@ -1,4 +1,6 @@
 pub mod cli;
+#[cfg(test)]
+mod fixture;
 pub mod net;
 pub mod protocol;
 pub mod route;

@@ -29,7 +29,30 @@ pub enum ParseArgsError {
     MissingLinkFileArg,
 }
 
+#[derive(Debug)]
+pub enum ParseFromPathError {
+    Io(std::io::Error),
+    Parse(ParseArgsError),
+}
+
+impl From<std::io::Error> for ParseFromPathError {
+    fn from(e: std::io::Error) -> Self {
+        ParseFromPathError::Io(e)
+    }
+}
+
+impl From<ParseArgsError> for ParseFromPathError {
+    fn from(e: ParseArgsError) -> Self {
+        ParseFromPathError::Parse(e)
+    }
+}
+
 impl Args {
+    pub fn parse_from_path(path: &str) -> Result<Args, ParseFromPathError> {
+        let br = BufReader::new(File::open(path)?);
+        Ok(Args::try_parse(br)?)
+    }
+
     pub fn try_parse<B>(reader: B) -> Result<Args, ParseArgsError>
     where
         B: BufRead,
@@ -106,9 +129,7 @@ mod tests {
 
     #[test]
     fn parse_link_file() {
-        let link_file_path = "./net_links/abc/B.lnx";
-        let br = BufReader::new(File::open(link_file_path).unwrap());
-        let args = Args::try_parse(br).unwrap();
+        let args = crate::fixture::netlinks::abc::B.clone();
 
         assert_eq!(
             args,
