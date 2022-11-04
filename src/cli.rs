@@ -11,13 +11,20 @@ use std::sync::Arc;
 pub enum Command {
     ListInterface(Option<String>),
     ListRoute(Option<String>),
+    ListSockets(Option<String>),
     InterfaceDown(u16),
     InterfaceUp(u16),
-    Send(SendCmd),
+    SendIPv4Packet(IPv4SendCmd),
+    SendTCPPacket(TCPSendCmd),
+    OpenSocket(u16),
+    ConnectSocket(Ipv4Addr, u16),
+    ReadSocket(TCPReadCmd),
+    Shutdown(u16, u16),
+    Close(u16),
     Quit,
 }
 
-pub struct SendCmd {
+pub struct IPv4SendCmd {
     virtual_ip: Ipv4Addr,
     protocol: Protocol,
     payload: String,
@@ -90,6 +97,9 @@ impl Cli {
             Command::ListRoute(op) => {
                 self.print_routes(op).await;
             }
+            Command::ListSockets(op) => {
+                self.print_sockets(op).await;
+            }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
                 if let Err(e) = self.node.deactivate(interface).await {
@@ -102,7 +112,7 @@ impl Cli {
                     eprintln!("Failed to turn interface {} up: {:?}", interface, e);
                 }
             }
-            Command::Send(cmd) => {
+            Command::SendIPv4Packet(cmd) => {
                 eprintln!(
                     "Sending packet \"{}\" with protocol {:?} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
@@ -114,6 +124,24 @@ impl Cli {
                 {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
+            }
+            Command::SendTCPPacket(cmd) => {
+                todo!() //TODO implement
+            }
+            Command::OpenSocket(port) => {
+                todo!() //TODO implement
+            }
+            Command::ConnectSocket(ip, port) => {
+                todo!() //TODO implement
+            }
+            Command::ReadSocket(cmd) => {
+                todo!() //TODO implement
+            }
+            Command::Shutdown(socket, option) => {
+                todo!() //TODO implement
+            }
+            Command::Close(socket) => {
+                todo!() //TODO implement
             }
             Command::Quit => {
                 eprintln!("Quitting");
@@ -161,77 +189,24 @@ impl Cli {
             }
         }
     }
-}
 
-#[derive(Debug)]
-pub enum ParseDownError {
-    InvalidLinkId,
-    NoLinkId,
-}
-
-#[derive(Debug)]
-pub enum ParseUpError {
-    InvalidLinkId,
-    NoLinkId,
-}
-
-#[derive(Debug)]
-pub enum ParseSendError {
-    NoIp,
-    InvalidIp,
-    NoProtocol,
-    InvalidProtocol,
-    NoPayload,
-}
-
-#[derive(Debug)]
-pub enum ParseError {
-    Unknown,
-    Down(ParseDownError),
-    Up(ParseUpError),
-    Send(ParseSendError),
-}
-
-impl Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParseError::Unknown => write!(f, "Unknown command"),
-            ParseError::Down(e) => write!(
-                f,
-                "Invalid down command. Usage: down <integer>. Error: {:?}",
-                e
-            ),
-            ParseError::Up(e) => {
-                write!(f, "Invalid up command. Usage: up <integer>. Error: {:?}", e)
+    async fn print_sockets(&self, file: Option<String>) {
+        // TODO fetch socket table from TCP API
+        let sockets = "test";
+        match file {
+            Some(file) => {
+                let mut f = File::create(file).unwrap();
+                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n").unwrap();
+                f.write_all(format!("{}\n", sockets).as_bytes()).unwrap();
             }
-            ParseError::Send(e) => {
-                write!(
-                    f,
-                    "Invalid send command. Usage: send <vip> <proto> <string>. Error: {:?}",
-                    e
-                )
+            None => {
+                println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
+                println!("{}", sockets)
             }
         }
     }
 }
 
-impl From<ParseUpError> for ParseError {
-    fn from(v: ParseUpError) -> Self {
-        ParseError::Up(v)
-    }
-}
-
-impl From<ParseDownError> for ParseError {
-    fn from(v: ParseDownError) -> Self {
-        ParseError::Down(v)
-    }
-}
-
-impl From<ParseSendError> for ParseError {
-    fn from(v: ParseSendError) -> Self {
-        ParseError::Send(v)
-    }
-}
 
 fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseError> {
     match cmd {
@@ -301,13 +276,134 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             let virtual_ip = virtual_ip.parse().map_err(|_| ParseSendError::InvalidIp)?;
             let protocol =
                 Protocol::try_from(protocol).map_err(|_| ParseSendError::InvalidProtocol)?;
-            Ok(Command::Send(SendCmd {
+            Ok(Command::SendIPv4Packet(IPv4SendCmd {
                 virtual_ip,
                 protocol,
                 payload,
             }))
         }
+        "ls" => {
+            let arg = tokens.next();
+            match arg {
+                Some(arg) => Ok(Command::ListSockets(Some(arg.to_string()))),
+                None => Ok(Command::ListSockets(None)),
+            }
+        }
+        "a" => {
+            let arg = tokens.next().ok_or(ParseOpenSocketError::NoPort)?;
+            let port = arg.parse::<u16>().map_err(|_| ParseOpenSocketError::InvalidPort)?;
+            Ok(Command::OpenSocket(port))
+        }
+        "c" => {
+            todo!() //TODO implement
+        }
+        "s" => {
+            todo!() //TODO implement
+        }
+        "r" => {
+            todo!() //TODO implement
+        }
+        "sd" => {
+            todo!() //TODO implement
+        }
+        "cl" => {
+            todo!() //TODO implement
+        }
+        "sf" => {
+            todo!() //TODO implement
+        }
+        "rf" => {
+            todo!() //TODO implement
+        }
         "q" => Ok(Command::Quit),
         _ => Err(ParseError::Unknown),
+    }
+}
+
+#[derive(Debug)]
+pub enum ParseOpenSocketError {
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug)]
+pub enum ParseDownError {
+    InvalidLinkId,
+    NoLinkId,
+}
+
+#[derive(Debug)]
+pub enum ParseUpError {
+    InvalidLinkId,
+    NoLinkId,
+}
+
+#[derive(Debug)]
+pub enum ParseSendError {
+    NoIp,
+    InvalidIp,
+    NoProtocol,
+    InvalidProtocol,
+    NoPayload,
+}
+
+#[derive(Debug)]
+pub enum ParseError {
+    Unknown,
+    Down(ParseDownError),
+    Up(ParseUpError),
+    Send(ParseSendError),
+    OpenSocket(ParseOpenSocketError),
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::Unknown => write!(f, "Unknown command"),
+            ParseError::Down(e) => write!(
+                f,
+                "Invalid down command. Usage: down <integer>. Error: {:?}",
+                e
+            ),
+            ParseError::Up(e) => {
+                write!(f, "Invalid up command. Usage: up <integer>. Error: {:?}", e)
+            }
+            ParseError::Send(e) => {
+                write!(
+                    f,
+                    "Invalid send command. Usage: send <vip> <proto> <string>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::OpenSocket(e) => {
+                write!(f, "Invalid open socket command. Usage: a <port>. Error: {:?}", e)
+            }
+        }
+    }
+}
+
+
+
+impl From<ParseUpError> for ParseError {
+    fn from(v: ParseUpError) -> Self {
+        ParseError::Up(v)
+    }
+}
+
+impl From<ParseDownError> for ParseError {
+    fn from(v: ParseDownError) -> Self {
+        ParseError::Down(v)
+    }
+}
+
+impl From<ParseSendError> for ParseError {
+    fn from(v: ParseSendError) -> Self {
+        ParseError::Send(v)
+    }
+}
+
+impl From<ParseOpenSocketError> for ParseError {
+    fn from(v: ParseOpenSocketError) -> Self {
+        ParseError::OpenSocket(v)
     }
 }
