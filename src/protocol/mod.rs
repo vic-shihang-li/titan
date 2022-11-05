@@ -1,6 +1,22 @@
+use async_trait::async_trait;
+use etherparse::Ipv4HeaderSlice;
+
+use crate::{net::Net, route::Router};
+
 pub mod rip;
 pub mod tcp;
 pub mod test;
+
+#[async_trait]
+pub trait ProtocolHandler: Send + Sync {
+    async fn handle_packet<'a>(
+        &self,
+        header: &Ipv4HeaderSlice<'a>,
+        payload: &[u8],
+        router: &Router,
+        net: &Net,
+    );
+}
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {

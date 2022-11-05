@@ -1,13 +1,12 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use ip::cli;
-use ip::net;
-use ip::route;
+use ip::node::NodeBuilder;
 use ip::Args;
 
 use cli::Cli;
 use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};
-use ip::route::Router;
 
 const RIP_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const ROUTING_ENTRY_MAX_AGE: Duration = Duration::from_secs(2);
@@ -25,22 +24,20 @@ async fn main() {
         }
     };
 
-    net::bootstrap(&args).await;
-
-    route::bootstrap(
-        route::BootstrapArgs::new(&args)
+    let node = Arc::new(
+        NodeBuilder::new(&args)
             .with_rip_interval(RIP_UPDATE_INTERVAL)
-            .with_entry_max_age(ROUTING_ENTRY_MAX_AGE),
-    )
-    .await;
+            .with_entry_max_age(ROUTING_ENTRY_MAX_AGE)
+            .with_protocol_handler(Protocol::Rip, RipHandler::default())
+            .with_protocol_handler(Protocol::Test, TestHandler::default())
+            .build()
+            .await,
+    );
 
-    let mut router = Router::new(&args.get_my_interface_ips());
-    router.register_handler(Protocol::Rip, RipHandler::default());
-    router.register_handler(Protocol::Test, TestHandler::default());
-
+    let cli_node = node.clone();
     tokio::spawn(async move {
-        router.run().await;
+        Cli::new(cli_node).run().await;
     });
 
-    Cli::default().run().await;
+    node.run().await;
 }

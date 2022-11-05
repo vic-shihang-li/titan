@@ -11,7 +11,6 @@ use std::{
 use utils::localhost_with_port;
 pub use utils::Ipv4PacketBuilder;
 
-use lazy_static::lazy_static;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{
@@ -23,10 +22,6 @@ use tokio::{
 };
 
 use self::link::SendError;
-
-lazy_static! {
-    static ref NET: Net = Net::new();
-}
 
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -42,51 +37,6 @@ impl From<link::SendError> for Error {
             link::SendError::LinkInactive => Error::LinkInactive,
         }
     }
-}
-
-pub async fn get_interfaces() -> RwLockReadGuard<'static, Vec<Link>> {
-    NET.links.0.read().await
-}
-
-/// Send bytes to a destination.
-///
-/// The destination is typically the next-hop address for a packet.
-pub async fn send(message: &[u8], next_hop: Ipv4Addr) -> Result<()> {
-    NET.send(message, next_hop).await
-}
-
-pub async fn find_link_to<'a>(next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
-    NET.find_link_to(next_hop).await
-}
-
-pub async fn find_link_with_interface_ip<'a>(ip: Ipv4Addr) -> Option<LinkRef<'a>> {
-    NET.find_link_with_interface_ip(ip).await
-}
-
-/// Turns on a link interface.
-pub async fn activate(link_no: u16) -> Result<()> {
-    NET.activate_link(link_no).await
-}
-
-/// Turns off a link interface.
-pub async fn deactivate(link_no: u16) -> Result<()> {
-    NET.deactivate_link(link_no).await
-}
-
-pub async fn is_my_addr(addr: Ipv4Addr) -> bool {
-    for link in &*iter_links().await {
-        if link.source() == addr {
-            return true;
-        }
-    }
-    false
-}
-
-/// Iterate all links (both active and inactive) for this host.
-///
-/// This is useful for sending out periodic RIP messages to all links.
-pub async fn iter_links<'a>() -> LinkIter<'a> {
-    NET.iter_links().await
 }
 
 pub struct LinkIter<'a> {
@@ -130,44 +80,36 @@ impl<'a> DerefMut for LinkMutRef<'a> {
     }
 }
 
-/// Subscribe to a stream of packets received by this host.
-///
-/// The received data is a packet in its binary format.
-pub async fn listen() -> Receiver<Vec<u8>> {
-    NET.listen().await
-}
-
-struct Net {
+pub struct Net {
     links: Links,
     listener_sub: Mutex<Option<Sender<Vec<u8>>>>,
 }
 
 impl Net {
-    fn new() -> Self {
-        Self {
-            links: Links::default(),
-            listener_sub: Mutex::new(None),
-        }
-    }
-
-    async fn init(&self, args: &Args) {
+    pub async fn new(args: &Args) -> Self {
         let udp_socket = Arc::new(
             UdpSocket::bind(localhost_with_port(args.host_port))
                 .await
                 .expect("Failed to bind to this router's port"),
         );
 
-        self.links
-            .add_bulk(
-                args.links
-                    .iter()
-                    .map(|l| l.into_link(udp_socket.clone()))
-                    .collect(),
-            )
-            .await;
+        let links = Links::new(
+            args.links
+                .iter()
+                .map(|l| l.into_link(udp_socket.clone()))
+                .collect(),
+        );
+
+        Self {
+            links,
+            listener_sub: Mutex::new(None),
+        }
     }
 
-    async fn send(&self, payload: &[u8], next_hop: Ipv4Addr) -> Result<()> {
+    /// Send bytes to a destination.
+    ///
+    /// The destination is typically the next-hop address for a packet.
+    pub async fn send(&self, payload: &[u8], next_hop: Ipv4Addr) -> Result<()> {
         self.links
             .find(|link| link.dest() == next_hop)
             .await
@@ -179,7 +121,7 @@ impl Net {
             })
     }
 
-    async fn activate_link(&self, link_no: u16) -> Result<()> {
+    pub async fn activate_link(&self, link_no: u16) -> Result<()> {
         self.links
             .get_mut(link_no)
             .await
@@ -189,7 +131,7 @@ impl Net {
         Ok(())
     }
 
-    async fn deactivate_link(&self, link_no: u16) -> Result<()> {
+    pub async fn deactivate_link(&self, link_no: u16) -> Result<()> {
         self.links
             .get_mut(link_no)
             .await
@@ -200,21 +142,24 @@ impl Net {
     }
 
     #[allow(clippy::needless_lifetimes)]
-    async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
+    pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
         self.links.iter().await
     }
 
     #[allow(clippy::needless_lifetimes)]
-    async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
         self.links.find(|link| link.dest() == dest).await
     }
 
     #[allow(clippy::needless_lifetimes)]
-    async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
         self.links.find(|link| link.source() == ip).await
     }
 
-    async fn listen(&self) -> Receiver<Vec<u8>> {
+    /// Subscribe to a stream of packets received by this host.
+    ///
+    /// The received data is a packet in its binary format.
+    pub async fn listen(&self) -> Receiver<Vec<u8>> {
         let mut sub = self.listener_sub.lock().await;
         if let Some(ref sub_handle) = *sub {
             return sub_handle.subscribe();
@@ -253,9 +198,8 @@ impl Net {
 struct Links(RwLock<Vec<Link>>);
 
 impl Links {
-    async fn add_bulk(&self, mut links: Vec<Link>) {
-        let mut ls = self.0.write().await;
-        ls.append(&mut links);
+    fn new(links: Vec<Link>) -> Self {
+        Links(RwLock::new(links))
     }
 
     #[allow(clippy::needless_lifetimes)]
@@ -331,8 +275,4 @@ impl Links {
             inner: self.0.read().await,
         }
     }
-}
-
-pub async fn bootstrap(args: &Args) {
-    NET.init(args).await;
 }

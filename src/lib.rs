@@ -2,6 +2,7 @@ pub mod cli;
 #[cfg(test)]
 mod fixture;
 pub mod net;
+pub mod node;
 pub mod protocol;
 pub mod route;
 mod utils;

@@ -2,14 +2,16 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::{iter_links, Ipv4PacketBuilder, Link},
+    net::{Ipv4PacketBuilder, Link, Net},
     protocol::Protocol,
-    route::{get_forwarding_table_mut, Entry as RoutingEntry, ForwardingTable, ProtocolHandler},
+    route::{Entry as RoutingEntry, ForwardingTable, Router},
 };
 
 use std::{cmp, cmp::Ordering, net::Ipv4Addr};
 
 use crate::Message;
+
+use super::ProtocolHandler;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Entry {
@@ -190,17 +192,23 @@ pub struct RipHandler {}
 
 #[async_trait]
 impl ProtocolHandler for RipHandler {
-    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
+    async fn handle_packet<'a>(
+        &self,
+        header: &Ipv4HeaderSlice<'a>,
+        payload: &[u8],
+        router: &Router,
+        net: &Net,
+    ) {
         let message = RipMessage::from_bytes(payload);
 
         log::info!("Received RIP packet from {}", header.source_addr());
 
-        let mut rt = get_forwarding_table_mut().await;
+        let mut rt = router.get_forwarding_table_mut().await;
         let updates = self
             .update_route_table(&mut rt, message, header.source_addr())
             .await;
         if !updates.is_empty() {
-            for link in &*iter_links().await {
+            for link in &*net.iter_links().await {
                 self.send_triggered_update(&updates, link).await;
             }
         }

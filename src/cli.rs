@@ -1,13 +1,12 @@
-use crate::net::{self, get_interfaces};
+use crate::node::Node;
 use crate::protocol::Protocol;
-use crate::route;
-use crate::route::get_forwarding_table;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
+use std::sync::Arc;
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -24,10 +23,15 @@ pub struct SendCmd {
     payload: String,
 }
 
-#[derive(Default)]
-pub struct Cli;
+pub struct Cli {
+    node: Arc<Node>,
+}
 
 impl Cli {
+    pub fn new(node: Arc<Node>) -> Self {
+        Self { node }
+    }
+
     pub async fn run(&self) {
         let mut rl = Editor::<()>::new().unwrap();
         let mut shutdown_flag = false;
@@ -88,13 +92,13 @@ impl Cli {
             }
             Command::InterfaceDown(interface) => {
                 eprintln!("Turning down interface {}", interface);
-                if let Err(e) = net::deactivate(interface).await {
+                if let Err(e) = self.node.deactivate(interface).await {
                     eprintln!("Failed to turn interface {} down: {:?}", interface, e);
                 }
             }
             Command::InterfaceUp(interface) => {
                 eprintln!("Turning up interface {}", interface);
-                if let Err(e) = net::activate(interface).await {
+                if let Err(e) = self.node.activate(interface).await {
                     eprintln!("Failed to turn interface {} up: {:?}", interface, e);
                 }
             }
@@ -103,8 +107,10 @@ impl Cli {
                     "Sending packet \"{}\" with protocol {:?} to {}",
                     cmd.payload, cmd.protocol, cmd.virtual_ip
                 );
-                if let Err(e) =
-                    route::send(cmd.payload.as_bytes(), cmd.protocol, cmd.virtual_ip).await
+                if let Err(e) = self
+                    .node
+                    .send(cmd.payload.as_bytes(), cmd.protocol, cmd.virtual_ip)
+                    .await
                 {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
@@ -116,27 +122,29 @@ impl Cli {
     }
 
     async fn print_interfaces(&self, file: Option<String>) {
-        let li = get_interfaces().await;
+        let mut id = 0;
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
                 f.write_all(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
-                for x in 0..li.len() {
-                    f.write_all(format!("{}\t{}\n", x, li[x]).as_bytes())
+                for link in &*self.node.iter_links().await {
+                    f.write_all(format!("{}\t{}\n", id, link).as_bytes())
                         .unwrap();
+                    id += 1;
                 }
             }
             None => {
                 println!("id\tstate\tlocal\t\tremote\t        port");
-                for x in 0..li.len() {
-                    println!("{}\t{}", x, li[x])
+                for link in &*self.node.iter_links().await {
+                    println!("{}\t{}", id, link);
+                    id += 1;
                 }
             }
         }
     }
 
     async fn print_routes(&self, file: Option<String>) {
-        let rt = get_forwarding_table().await;
+        let rt = self.node.get_forwarding_table().await;
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();

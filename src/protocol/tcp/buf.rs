@@ -164,6 +164,7 @@ impl<const N: usize> SendBuf<N> {
     }
 
     /// Gets the slice of unconsumed bytes in the buffer.
+    #[allow(clippy::needless_lifetimes)]
     pub fn unconsumed<'a>(&'a self) -> ByteSlice<'a> {
         let start = self.tail % self.size();
         let end = self.head % self.size();
@@ -360,7 +361,7 @@ impl<const N: usize> RecvBuf<N> {
             return Err(WriteRangeError::ExceedBuffer);
         }
 
-        return Ok(());
+        Ok(())
     }
 
     fn write_unchecked(&mut self, seq_no: usize, bytes: &[u8]) {

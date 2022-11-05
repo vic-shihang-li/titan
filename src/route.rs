@@ -1,29 +1,16 @@
-use crate::net::{iter_links, Ipv4PacketBuilder, LinkRef};
+use crate::net::{Ipv4PacketBuilder, Net};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::utils::loop_with_interval;
-use crate::{net, Args, Message};
-use async_trait::async_trait;
-use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
-use lazy_static::lazy_static;
-use std::collections::HashMap;
+use crate::{Args, Message};
+use etherparse::Ipv4HeaderSlice;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{net::Ipv4Addr, time::Instant};
+use tokio::task::JoinHandle;
 
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-lazy_static! {
-    static ref FORWARDING_TABLE: RwLock<ForwardingTable> = RwLock::new(ForwardingTable::default());
-}
-
-pub async fn get_forwarding_table() -> RwLockReadGuard<'static, ForwardingTable> {
-    FORWARDING_TABLE.read().await
-}
-
-pub async fn get_forwarding_table_mut() -> RwLockWriteGuard<'static, ForwardingTable> {
-    FORWARDING_TABLE.write().await
-}
 
 #[derive(Default)]
 pub struct ForwardingTable {
@@ -31,6 +18,10 @@ pub struct ForwardingTable {
 }
 
 impl ForwardingTable {
+    pub fn with_entries(entries: Vec<Entry>) -> Self {
+        Self { entries }
+    }
+
     pub fn has_entry_for(&self, addr: Ipv4Addr) -> bool {
         self.entries.iter().any(|e| e.destination == addr)
     }
@@ -130,20 +121,6 @@ impl Entry {
         self.is_local
     }
 
-    pub async fn get_inner_link<'a>(&self) -> LinkRef<'a> {
-        let r = if self.is_local() {
-            net::find_link_with_interface_ip(self.destination).await
-        } else {
-            net::find_link_to(self.next_hop).await
-        };
-
-        if r.is_none() {
-            panic!("Failed to find link for entry {:?}", self);
-        }
-
-        r.unwrap()
-    }
-
     pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
         log::info!(
             "Update routing entry: old: {}, new next hop: {}, new cost: {}",
@@ -180,23 +157,31 @@ impl fmt::Display for Entry {
     }
 }
 
-async fn prune_routing_table(prune_interval: Duration, max_age: Duration) {
+async fn prune_routing_table(
+    table: Arc<RwLock<ForwardingTable>>,
+    prune_interval: Duration,
+    max_age: Duration,
+) {
     loop_with_interval(prune_interval, || async {
-        let mut table = FORWARDING_TABLE.write().await;
         log::debug!("Pruning table");
+        let mut table = table.write().await;
         table.prune(max_age);
     })
     .await;
 }
 
-async fn periodic_rip_update(interval: Duration) {
-    loop_with_interval(interval, || async move {
-        let table = FORWARDING_TABLE.read().await;
-
-        for link in &*iter_links().await {
+async fn periodic_rip_update(
+    table: Arc<RwLock<ForwardingTable>>,
+    net: Arc<Net>,
+    interval: Duration,
+) {
+    loop_with_interval(interval, || async {
+        for link in &*net.iter_links().await {
             log::info!("Sending periodic update to {}", link.dest());
-            let rip_msg =
-                RipMessage::from_entries_with_poisoned_reverse(table.entries(), link.dest());
+            let rip_msg = RipMessage::from_entries_with_poisoned_reverse(
+                table.read().await.entries(),
+                link.dest(),
+            );
             let rip_msg_bytes = rip_msg.into_bytes();
             let packet = Ipv4PacketBuilder::default()
                 .with_payload(&rip_msg_bytes)
@@ -211,94 +196,92 @@ async fn periodic_rip_update(interval: Duration) {
     .await;
 }
 
-#[async_trait]
-pub trait ProtocolHandler: Send + Sync {
-    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]);
-}
-
 #[derive(PartialEq, Eq, Debug)]
-enum PacketDecision {
+pub enum PacketDecision {
     Drop,
     Forward,
     Consume,
 }
 
+#[derive(Debug)]
+pub enum SendError {
+    NoForwardingEntry,
+    Unreachable,
+    NoLink,
+    Transport(crate::net::Error),
+}
+
+pub struct RouterConfig {
+    pub prune_interval: Duration,
+    pub rip_update_interval: Duration,
+    pub entry_max_age: Duration,
+}
+
 pub struct Router {
+    net: Arc<Net>,
     my_addrs: Vec<Ipv4Addr>,
-    protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
+    routes: Arc<RwLock<ForwardingTable>>,
+    pruner: JoinHandle<()>,
+    rip_updater: JoinHandle<()>,
 }
 
 impl Router {
-    pub fn new(my_addrs: &[Ipv4Addr]) -> Self {
+    pub fn new(net: Arc<Net>, program_args: &Args, config: RouterConfig) -> Self {
+        let my_addrs = program_args.get_my_interface_ips();
+
+        let entries = program_args
+            .links
+            .iter()
+            .map(|l| Entry::new_local(l.interface_ip, l.interface_ip, 0 /* cost */))
+            .collect();
+        let routes = Arc::new(RwLock::new(ForwardingTable::with_entries(entries)));
+
+        let prune_interval = config.prune_interval;
+        let entry_max_age = config.entry_max_age;
+        let rip_update_interval = config.rip_update_interval;
+
+        let pruner_routes = routes.clone();
+        let pruner = tokio::spawn(async move {
+            prune_routing_table(pruner_routes, prune_interval, entry_max_age).await;
+        });
+
+        let rip_updater_routes = routes.clone();
+        let rip_updater_net = net.clone();
+        let rip_updater = tokio::spawn(async move {
+            periodic_rip_update(rip_updater_routes, rip_updater_net, rip_update_interval).await;
+        });
+
         Self {
-            my_addrs: my_addrs.into(),
-            protocol_handlers: HashMap::new(),
+            net,
+            my_addrs,
+            routes,
+            pruner,
+            rip_updater,
         }
     }
 
-    /// Provide a handler for a protocol.
-    ///
-    /// Replaces any handler that is associated with the protocol.
-    pub fn register_handler<H: ProtocolHandler + 'static>(
-        &mut self,
-        protocol: Protocol,
-        handler: H,
-    ) {
-        self.protocol_handlers.insert(protocol, Box::new(handler));
+    #[allow(clippy::needless_lifetimes)]
+    pub async fn get_forwarding_table_mut<'a>(&'a self) -> RwLockWriteGuard<'a, ForwardingTable> {
+        self.routes.write().await
+    }
+
+    #[allow(clippy::needless_lifetimes)]
+    pub async fn get_forwarding_table<'a>(&'a self) -> RwLockReadGuard<'a, ForwardingTable> {
+        self.routes.read().await
     }
 
     pub fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
         self.my_addrs.iter().any(|a| *a == addr)
     }
 
-    pub async fn run(&self) {
-        let mut listener = net::listen().await;
-        while let Ok(bytes) = listener.recv().await {
-            // 0. parse bytes to packet
-            // 1. drop if packet is not valid or TTL = 0
-            // 2. if packet is for "me", pass packet to the correct protocol handler
-            // 3. if forwarding table has rule for packet, send to the next-hop interface
-
-            self.handle_packet_bytes(&bytes).await;
-        }
-    }
-
-    async fn handle_packet_bytes(&self, bytes: &[u8]) {
-        match SlicedPacket::from_ip(bytes) {
-            Err(value) => eprintln!("Err {:?}", value),
-            Ok(packet) => {
-                if packet.ip.is_none() {
-                    eprintln!("Packet has no IP fields");
-                    return;
-                }
-
-                let ip = packet.ip.unwrap();
-                let payload = packet.payload;
-
-                match ip {
-                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, payload).await,
-                    InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
-                };
-            }
-        }
-    }
-
-    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match self.decide_packet(header).await {
-            PacketDecision::Drop => {}
-            PacketDecision::Consume => self.consume_packet(header, payload).await,
-            PacketDecision::Forward => self.forward_packet(header, payload).await,
-        }
-    }
-
-    async fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
+    pub async fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
         if !verify_header_checksum(header) {
             log::debug!("packet header checksum invalid; dropping packet");
             return PacketDecision::Drop;
         }
 
         let sender = header.source_addr();
-        match net::find_link_to(sender).await {
+        match self.net.find_link_to(sender).await {
             Some(link) => {
                 if link.is_disabled() {
                     log::info!("Ignoring RIP packet from {}, link disabled", sender);
@@ -322,24 +305,12 @@ impl Router {
         PacketDecision::Forward
     }
 
-    async fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match header.protocol().try_into() {
-            Ok(protocol) => match self.protocol_handlers.get(&protocol) {
-                Some(handler) => {
-                    handler.handle_packet(header, payload).await;
-                }
-                None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
-            },
-            Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
-        }
-    }
-
-    async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
+    pub async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let dest = header.destination_addr();
-        let rt = FORWARDING_TABLE.read().await;
+        let rt = self.routes.read().await;
 
         if let Some(entry) = rt.find_entry_for(dest) {
-            match net::find_link_to(entry.next_hop).await {
+            match self.net.find_link_to(entry.next_hop).await {
                 Some(link) => {
                     let packet = Ipv4PacketBuilder::default()
                         .with_src(header.source_addr())
@@ -362,97 +333,51 @@ impl Router {
             log::warn!("No route to {}, dropping packet", dest);
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct BootstrapArgs<'a> {
-    program_args: &'a Args,
-    prune_interval: Duration,
-    rip_update_interval: Duration,
-    entry_max_age: Duration,
-}
+    pub async fn send<P: Into<u8>>(
+        &self,
+        payload: &[u8],
+        protocol: P,
+        dest_vip: Ipv4Addr,
+    ) -> Result<(), SendError> {
+        let table = self.routes.read().await;
 
-impl<'a> BootstrapArgs<'a> {
-    pub fn new(args: &'a Args) -> Self {
-        Self {
-            program_args: args,
-            prune_interval: Duration::from_secs(1),
-            rip_update_interval: Duration::from_secs(5),
-            entry_max_age: Duration::from_secs(12),
+        let entry = table
+            .find_entry_for(dest_vip)
+            .ok_or(SendError::NoForwardingEntry)?;
+
+        if entry.is_unreachable() {
+            return Err(SendError::Unreachable);
         }
-    }
 
-    /// Set the interval of sending up periodic RIP updates.
-    pub fn with_rip_interval(&mut self, rip_interval: Duration) -> &mut Self {
-        self.rip_update_interval = rip_interval;
-        self
-    }
+        let link = self
+            .net
+            .find_link_to(entry.next_hop())
+            .await
+            .ok_or_else(|| {
+                log::warn!("No link found for next hop {}", entry.next_hop());
+                SendError::NoLink
+            })?;
 
-    /// Set the maximum time a routing entry can live without receiving an update.
-    pub fn with_entry_max_age(&mut self, max_age: Duration) -> &mut Self {
-        self.entry_max_age = max_age;
-        self
+        let packet = Ipv4PacketBuilder::default()
+            .with_src(link.source())
+            .with_dst(dest_vip)
+            .with_payload(payload)
+            .with_protocol(protocol)
+            .build()
+            .unwrap();
+
+        link.send(&packet)
+            .await
+            .map_err(|e| SendError::Transport(e.into()))
     }
 }
 
-pub async fn bootstrap<'a>(args: &'a BootstrapArgs<'a>) {
-    let mut rt = FORWARDING_TABLE.write().await;
-
-    for link in &args.program_args.links {
-        // Add entry to my interface with a cost of 0.
-        rt.add_entry(Entry::new_local(link.interface_ip, link.interface_ip, 0));
+impl Drop for Router {
+    fn drop(&mut self) {
+        self.pruner.abort();
+        self.rip_updater.abort();
     }
-
-    let prune_interval = args.prune_interval;
-    let entry_max_age = args.entry_max_age;
-    let rip_update_interval = args.rip_update_interval;
-    tokio::spawn(async move {
-        prune_routing_table(prune_interval, entry_max_age).await;
-    });
-    tokio::spawn(async move {
-        periodic_rip_update(rip_update_interval).await;
-    });
-}
-
-#[derive(Debug)]
-pub enum SendError {
-    NoForwardingEntry,
-    Unreachable,
-    NoLink,
-    Transport(crate::net::Error),
-}
-
-pub async fn send<P: Into<u8>>(
-    payload: &[u8],
-    protocol: P,
-    dest_vip: Ipv4Addr,
-) -> Result<(), SendError> {
-    let table = FORWARDING_TABLE.read().await;
-
-    let entry = table
-        .find_entry_for(dest_vip)
-        .ok_or(SendError::NoForwardingEntry)?;
-
-    if entry.is_unreachable() {
-        return Err(SendError::Unreachable);
-    }
-
-    let link = net::find_link_to(entry.next_hop).await.ok_or_else(|| {
-        log::warn!("No link found for next hop {}", entry.next_hop);
-        SendError::NoLink
-    })?;
-
-    let packet = Ipv4PacketBuilder::default()
-        .with_src(link.source())
-        .with_dst(dest_vip)
-        .with_payload(payload)
-        .with_protocol(protocol)
-        .build()
-        .unwrap();
-
-    link.send(&packet)
-        .await
-        .map_err(|e| SendError::Transport(e.into()))
 }
 
 #[allow(clippy::needless_lifetimes)]
