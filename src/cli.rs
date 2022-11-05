@@ -7,6 +7,7 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
+use crate::protocol::tcp::fsm::TcpConnection;
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -129,7 +130,7 @@ impl Cli {
                 todo!() //TODO implement
             }
             Command::OpenSocket(port) => {
-                todo!() //TODO implement
+                TcpConnection::new(port);
             }
             Command::ConnectSocket(ip, port) => {
                 todo!() //TODO implement

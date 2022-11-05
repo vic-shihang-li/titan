@@ -1,6 +1,7 @@
 // TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
+pub mod fsm;
 
 use std::{net::Ipv4Addr, sync::Arc};
 
@@ -184,5 +185,10 @@ mod tests {
             node_runner.run().await;
         });
         node
+    }
+}
+#[async_trait]
+impl ProtocolHandler for TcpHandler {
+    async fn handle_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, _payload: &[u8]) {
     }
 }
