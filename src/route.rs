@@ -217,6 +217,16 @@ pub struct RouterConfig {
     pub entry_max_age: Duration,
 }
 
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            prune_interval: Duration::from_secs(1),
+            rip_update_interval: Duration::from_secs(5),
+            entry_max_age: Duration::from_secs(12),
+        }
+    }
+}
+
 pub struct Router {
     net: Arc<Net>,
     my_addrs: Vec<Ipv4Addr>,
@@ -397,7 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn drop_packet_with_invalid_checksum() {
-        let r = Router::new(&[]);
+        let r = make_mock_router().await;
 
         let valid_packet = make_random_packet();
         let decision = r
@@ -416,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn drop_packet_with_zero_ttl() {
-        let r = Router::new(&[]);
+        let r = make_mock_router().await;
 
         let packet = make_packet_with_zero_ttl();
         let decision = r
@@ -428,11 +438,12 @@ mod tests {
 
     #[tokio::test]
     async fn consume_packet_on_ip_match() {
-        let my_ip = Ipv4Addr::new(1, 2, 3, 4);
-        let r = Router::new(&[my_ip]);
+        let args = crate::fixture::netlinks::abc::A.clone();
+        let my_ips = args.get_my_interface_ips();
+        let r = make_mock_router_with_args(args).await;
 
         let pkt = Ipv4PacketBuilder::default()
-            .with_dst(my_ip)
+            .with_dst(my_ips[0])
             .with_src(Ipv4Addr::new(255, 255, 255, 255))
             .with_protocol(Protocol::Test)
             .with_payload(&[1, 2, 3, 4])
@@ -448,7 +459,7 @@ mod tests {
         // matches our IP.
         let pkt_zero_ttl = Ipv4PacketBuilder::default()
             .with_ttl(0)
-            .with_dst(my_ip)
+            .with_dst(my_ips[0])
             .with_src(Ipv4Addr::new(255, 255, 255, 255))
             .with_protocol(Protocol::Test)
             .with_payload(&[1, 2, 3, 4])
@@ -503,5 +514,16 @@ mod tests {
         );
 
         (header, payload)
+    }
+
+    async fn make_mock_router() -> Router {
+        let args = crate::fixture::netlinks::abc::A.clone();
+        make_mock_router_with_args(args).await
+    }
+
+    async fn make_mock_router_with_args(args: Args) -> Router {
+        let net = Arc::new(Net::new(&args).await);
+        let router = Router::new(net, &args, RouterConfig::default());
+        router
     }
 }
