@@ -121,7 +121,11 @@ mod tests {
 
     use tokio::sync::Barrier;
 
-    use crate::{node::NodeBuilder, protocol::Protocol};
+    use crate::{
+        node::{Node, NodeBuilder},
+        protocol::Protocol,
+        Args,
+    };
 
     use super::TcpHandler;
 
@@ -139,29 +143,19 @@ mod tests {
         let sender_cfg = send_cfg.clone();
         let receiver_cfg = recv_cfg.clone();
         let sender = tokio::spawn(async move {
-            let tcp_stack = Arc::new(Tcp::default());
-            let node = NodeBuilder::new(&sender_cfg, tcp_stack.clone())
-                .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
-                .build()
-                .await;
+            let node = create_and_start_node(sender_cfg).await;
+            listen_barr.wait().await;
 
             let dest_ip = {
                 let recv_ips = receiver_cfg.get_my_interface_ips();
                 recv_ips[0]
             };
-
-            listen_barr.wait().await;
-
             let conn = node.connect(dest_ip, recv_listen_port).await.unwrap();
             conn.send_all(payload.to_string().as_bytes()).await.unwrap();
         });
 
         let receiver = tokio::spawn(async move {
-            let tcp_stack = Arc::new(Tcp::default());
-            let node = NodeBuilder::new(&recv_cfg, tcp_stack.clone())
-                .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
-                .build()
-                .await;
+            let node = create_and_start_node(recv_cfg).await;
 
             let listener = node.listen(recv_listen_port).await.unwrap();
             let conn = listener.accept().await.unwrap();
@@ -170,11 +164,25 @@ mod tests {
 
             let mut buf = [0; 12];
             conn.read_all(&mut buf).await.unwrap();
-
             assert_eq!(String::from_utf8(buf.into()).unwrap(), payload.to_string());
         });
 
         sender.await.unwrap();
         receiver.await.unwrap();
+    }
+
+    async fn create_and_start_node(cfg: Args) -> Arc<Node> {
+        let tcp_stack = Arc::new(Tcp::default());
+        let node = Arc::new(
+            NodeBuilder::new(&cfg, tcp_stack.clone())
+                .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
+                .build()
+                .await,
+        );
+        let node_runner = node.clone();
+        tokio::spawn(async move {
+            node_runner.run().await;
+        });
+        node
     }
 }
