@@ -2,6 +2,7 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
+use crate::protocol::tcp::{Tcp, TcpConn, TcpConnError, TcpListenError, TcpListener};
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 pub struct NodeBuilder<'a> {
     args: &'a Args,
+    tcp: Arc<Tcp>,
     built: bool,
     prune_interval: Duration,
     rip_update_interval: Duration,
@@ -20,9 +22,10 @@ pub struct NodeBuilder<'a> {
 }
 
 impl<'a> NodeBuilder<'a> {
-    pub fn new(args: &'a Args) -> Self {
+    pub fn new(args: &'a Args, tcp: Arc<Tcp>) -> Self {
         Self {
             args,
+            tcp,
             built: false,
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
@@ -79,6 +82,7 @@ impl<'a> NodeBuilder<'a> {
 
         Node {
             net,
+            tcp: self.tcp.clone(),
             router,
             protocol_handlers,
         }
@@ -87,6 +91,7 @@ impl<'a> NodeBuilder<'a> {
 
 pub struct Node {
     net: Arc<Net>,
+    tcp: Arc<Tcp>,
     router: Router,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
@@ -156,6 +161,14 @@ impl Node {
     #[allow(clippy::needless_lifetimes)]
     pub async fn get_forwarding_table<'a>(&'a self) -> RwLockReadGuard<'a, ForwardingTable> {
         self.router.get_forwarding_table().await
+    }
+
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<TcpConn, TcpConnError> {
+        self.tcp.connect(dest_ip, port).await
+    }
+
+    pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
+        self.tcp.listen(port).await
     }
 }
 

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ip::cli;
 use ip::node::NodeBuilder;
+use ip::protocol::tcp::TcpHandler;
 use ip::Args;
+use ip::{cli, protocol::tcp::Tcp};
 
 use cli::Cli;
 use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};
@@ -24,12 +25,15 @@ async fn main() {
         }
     };
 
+    let tcp_stack = Arc::new(Tcp::default());
+
     let node = Arc::new(
-        NodeBuilder::new(&args)
+        NodeBuilder::new(&args, tcp_stack.clone())
             .with_rip_interval(RIP_UPDATE_INTERVAL)
             .with_entry_max_age(ROUTING_ENTRY_MAX_AGE)
             .with_protocol_handler(Protocol::Rip, RipHandler::default())
             .with_protocol_handler(Protocol::Test, TestHandler::default())
+            .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
             .build()
             .await,
     );
