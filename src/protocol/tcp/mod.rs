@@ -1,17 +1,21 @@
 // TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
-pub mod fsm;
+pub mod tsm;
+pub mod socket;
 
 use std::{net::Ipv4Addr, sync::Arc};
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::RwLock;
 
 use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
-use etherparse::Ipv4HeaderSlice;
+use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
+use socket::{TcpListener, TcpConn};
+use crate::protocol::tcp::tsm::{TcpState, Socket};
+use crate::route::PacketDecision::Drop;
 
-pub struct TcpConn {}
-
-pub struct TcpListener {}
 
 #[derive(Debug)]
 pub struct TcpConnError {}
@@ -28,44 +32,14 @@ pub struct TcpSendError {}
 #[derive(Debug)]
 pub struct TcpReadError {}
 
-impl TcpConn {
-    /// Sends bytes over a connection.
-    ///
-    /// Blocks until all bytes have been acknowledged by the other end.
-    pub async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
-        todo!()
-    }
-
-    /// Reads N bytes from the connection, where N is `out_buffer`'s size.
-    pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
-        todo!()
-    }
-}
-
-impl TcpListener {
-    /// Yields new client connections.
-    ///
-    /// To repeatedly accept new client connections:
-    /// ```
-    /// while let Ok(conn) = listener.accept().await {
-    ///     // handle new conn...
-    /// }
-    /// ```
-    pub async fn accept(&self) -> Result<TcpConn, TcpAcceptError> {
-        // TODO: create a new Tcp socket and state machine. (Keep the listener
-        // socket, open a new socket to handle this client).
-        //
-        // 1. The new Tcp state machine should transition to SYN_RECVD after
-        // replying syn+ack to client.
-        // 2. When Tcp handler receives client's ack packet (3rd step in
-        // handshake), the new Tcp state machine should transition to ESTABLISHED.
-        todo!()
-    }
-}
-
 /// A TCP stack.
 #[derive(Default)]
 pub struct Tcp {
+    conns: RwLock<HashMap<u16, Socket>>,
+    port_mappings: RwLock<HashMap<u16, u16>>,
+    states: RwLock<HashMap<u16, Socket>>,
+    router: Arc<Router>,
+    local_window_size: usize,
     // a concurrent data structure holding Tcp stack states
 }
 
@@ -80,7 +54,13 @@ impl Tcp {
         // Tcp state machine should provide some function that blocks until
         // state becomes ESTABLISHED.
 
-        todo!()
+        let blank_state = Socket::new(port, self.router.clone(), self.local_window_size);
+        let mut conns = self.conns.write().unwrap();
+        let syn_sent = blank_state.send_syn().await.nwrap();
+        conns.insert(port, syn_sent);
+        let receive = syn_sent.receiver().clone();
+        drop(conns);
+        let syn_ack = receive.try_recv().await.unwrap();
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
@@ -105,12 +85,24 @@ impl TcpHandler {
 impl ProtocolHandler for TcpHandler {
     async fn handle_packet<'a>(
         &self,
-        _header: &Ipv4HeaderSlice<'a>,
-        _payload: &[u8],
+        header: &Ipv4HeaderSlice<'a>,
+        payload: &[u8],
         _router: &Router,
         _net: &Net,
     ) {
-        todo!()
+        // Step 1: validate checksum
+        let h = TcpHeaderSlice::from_slice(payload).unwrap();
+        let dst_port = h.destination_port();
+        let checksum = h.checksum();
+        if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
+            eprintln!("TCP checksum failed");
+        }
+        // Step 2: find the corresponding Tcp state machine
+        let mut conns = self.tcp.conns.write().unwrap();
+        let tsm = conns.get_mut(&dst_port).unwrap();
+        let tcp_payload = &payload[h.slice().len()..];
+        // Step 3: pass the packet to the state machine
+        tsm.handle_packet(header, &h, tcp_payload).await;
     }
 }
 
@@ -185,10 +177,5 @@ mod tests {
             node_runner.run().await;
         });
         node
-    }
-}
-#[async_trait]
-impl ProtocolHandler for TcpHandler {
-    async fn handle_packet<'a>(&self, _header: &Ipv4HeaderSlice<'a>, _payload: &[u8]) {
     }
 }

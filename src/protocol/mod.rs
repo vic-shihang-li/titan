@@ -22,7 +22,7 @@ pub trait ProtocolHandler: Send + Sync {
 pub enum Protocol {
     Rip,
     Test,
-    TCP,
+    Tcp,
 }
 
 pub enum ParseProtocolError {
@@ -35,9 +35,8 @@ impl TryFrom<u8> for Protocol {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Protocol::Test),
-            6 => Ok(Protocol::Tcp),
             200 => Ok(Protocol::Rip),
-            6 => Ok(Protocol::TCP),
+            6 => Ok(Protocol::Tcp),
             _ => Err(ParseProtocolError::Unsupported),
         }
     }
@@ -59,7 +58,7 @@ impl Into<u8> for Protocol {
         match self {
             Protocol::Rip => 200,
             Protocol::Test => 0,
-            Protocol::TCP => 6,
+            Protocol::Tcp => 6,
         }
     }
 }

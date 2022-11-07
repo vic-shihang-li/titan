@@ -7,7 +7,6 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
-use crate::protocol::tcp::fsm::TcpConnection;
 
 pub enum Command {
     ListInterface(Option<String>),
@@ -23,6 +22,14 @@ pub enum Command {
     Shutdown(u16, u16),
     Close(u16),
     Quit,
+}
+
+pub struct TCPSendCmd {
+
+}
+
+pub struct TCPReadCmd {
+    
 }
 
 pub struct IPv4SendCmd {
@@ -130,7 +137,7 @@ impl Cli {
                 todo!() //TODO implement
             }
             Command::OpenSocket(port) => {
-                TcpConnection::new(port);
+                todo!()
             }
             Command::ConnectSocket(ip, port) => {
                 todo!() //TODO implement

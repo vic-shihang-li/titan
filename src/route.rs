@@ -388,57 +388,6 @@ impl Drop for Router {
         self.pruner.abort();
         self.rip_updater.abort();
     }
-
-    let prune_interval = args.prune_interval;
-    let entry_max_age = args.entry_max_age;
-    let rip_update_interval = args.rip_update_interval;
-    tokio::spawn(async move {
-        prune_routing_table(prune_interval, entry_max_age).await;
-    });
-    tokio::spawn(async move {
-        periodic_rip_update(rip_update_interval).await;
-    });
-}
-
-#[derive(Debug)]
-pub enum SendError {
-    NoForwardingEntry,
-    Unreachable,
-    NoLink,
-    Transport(net::Error),
-}
-
-pub async fn send<P: Into<u8>>(
-    payload: &[u8],
-    protocol: P,
-    dest_vip: Ipv4Addr,
-) -> Result<(), SendError> {
-    let table = FORWARDING_TABLE.read().await;
-
-    let entry = table
-        .find_entry_for(dest_vip)
-        .ok_or(SendError::NoForwardingEntry)?;
-
-    if entry.is_unreachable() {
-        return Err(SendError::Unreachable);
-    }
-
-    let link = net::find_link_to(entry.next_hop).await.ok_or_else(|| {
-        log::warn!("No link found for next hop {}", entry.next_hop);
-        SendError::NoLink
-    })?;
-
-    let packet = Ipv4PacketBuilder::default()
-        .with_src(link.source())
-        .with_dst(dest_vip)
-        .with_payload(payload)
-        .with_protocol(protocol)
-        .build()
-        .unwrap();
-
-    link.send(&packet)
-        .await
-        .map_err(|e| SendError::Transport(e.into()))
 }
 
 #[allow(clippy::needless_lifetimes)]

@@ -2,7 +2,8 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
-use crate::protocol::tcp::{Tcp, TcpConn, TcpConnError, TcpListenError, TcpListener};
+use crate::protocol::tcp::{Tcp, TcpConnError, TcpHandler, TcpListenError};
+use crate::protocol::tcp::socket::{TcpListener, TcpConn};
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;
@@ -65,7 +66,7 @@ impl<'a> NodeBuilder<'a> {
         self.built = true;
 
         let net = Arc::new(Net::new(self.args).await);
-        let router = Router::new(
+        let router = Arc::new(Router::new(
             net.clone(),
             self.args,
             RouterConfig {
@@ -73,7 +74,11 @@ impl<'a> NodeBuilder<'a> {
                 rip_update_interval: self.rip_update_interval,
                 entry_max_age: self.entry_max_age,
             },
+        )
         );
+        let tcp = Arc::new(Tcp::new(router.clone()));
+
+        self.with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp.clone()));
 
         let mut protocol_handlers = HashMap::new();
         self.protocol_handlers.drain().for_each(|(proto, handler)| {
@@ -92,7 +97,7 @@ impl<'a> NodeBuilder<'a> {
 pub struct Node {
     net: Arc<Net>,
     tcp: Arc<Tcp>,
-    router: Router,
+    router: Arc<Router>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 

@@ -25,7 +25,6 @@ async fn main() {
         }
     };
 
-    let tcp_stack = Arc::new(Tcp::default());
 
     let node = Arc::new(
         NodeBuilder::new(&args, tcp_stack.clone())
@@ -33,7 +32,6 @@ async fn main() {
             .with_entry_max_age(ROUTING_ENTRY_MAX_AGE)
             .with_protocol_handler(Protocol::Rip, RipHandler::default())
             .with_protocol_handler(Protocol::Test, TestHandler::default())
-            .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
             .build()
             .await,
     );
