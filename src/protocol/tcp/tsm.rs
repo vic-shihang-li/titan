@@ -121,7 +121,7 @@ impl From<Listen> for SynReceive {
 
 #[async_trait]
 impl TcpState for SynSent {
-    fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
+    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
     where
         Self: Sized,
     {
@@ -146,7 +146,7 @@ impl Socket {
         }
     }
 
-    pub async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, header: &TcpHeaderSlice, payload: &[u8]) {
+    pub async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice<'a>, header: &TcpHeaderSlice<'a>, payload: &[u8]) {
         self.state.handle_packet(ip_header, header, payload, self).await.unwrap();
     }
 
