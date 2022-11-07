@@ -44,6 +44,15 @@ pub struct Tcp {
 }
 
 impl Tcp {
+    pub fn new(router: Arc<Router>, local_window_size: usize) -> Self {
+        Tcp {
+            conns: RwLock::new(HashMap::new()),
+            port_mappings: RwLock::new(HashMap::new()),
+            states: RwLock::new(HashMap::new()),
+            router,
+            local_window_size,
+        }
+    }
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
     pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<TcpConn, TcpConnError> {
         // TODO: create Tcp state machine. State machine should

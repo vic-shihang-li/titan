@@ -76,7 +76,8 @@ impl<'a> NodeBuilder<'a> {
             },
         )
         );
-        let tcp = Arc::new(Tcp::new(router.clone()));
+        let local_window_size = 1024usize;
+        let tcp = Arc::new(Tcp::new(router.clone(), local_window_size));
 
         self.with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp.clone()));
 
