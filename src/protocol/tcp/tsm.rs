@@ -29,6 +29,18 @@ pub trait TcpState: Send + Sync {
         ip_header: &Ipv4HeaderSlice,
         tcp_header: &TcpHeaderSlice,
         payload: &[u8],
+        // TODO: remove this arg.
+        // To perform update on the parent Socket, I think this fn can return
+        // an Option<SocketHandlerAction>, where SocketHandlerAction is a list
+        // of things the Socket should do on behalf of the tcp state.
+        //
+        // For instance, this function can return Some(SocketHandlerAction::NotifyConnEstablished),
+        // and at the Socket level its fn can:
+        // ```
+        // match self.state.handle_packet(..) {
+        //     SocketHandlerAction::NotifyConnEstablished => self.sender.notify(..)
+        // }
+        // ```
         tsm: &mut Socket,
     );
 }

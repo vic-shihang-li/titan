@@ -32,7 +32,6 @@ pub struct TcpSendError {}
 pub struct TcpReadError {}
 
 /// A TCP stack.
-#[derive(Default)]
 pub struct Tcp {
     port_mappings: RwLock<HashMap<u16, u16>>,
     states: RwLock<HashMap<u16, Socket>>,
@@ -67,9 +66,14 @@ impl Tcp {
             .await
             .expect("TODO: panic message");
         states.insert(port, blank_state);
+        // TODO: transition state into syn_sent here?
+        // After syn_sent, "move" state.receiver out of state and into this function.
+        // One way to do this is to make `receiver` of type Option<oneshot::Receiver>,
+        // and do `state.receiver.take()` in this function.
         drop(states);
         let syn_ack = receiver.try_recv().unwrap();
-        Ok(())
+
+        todo!()
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
