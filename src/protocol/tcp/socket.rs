@@ -1,5 +1,5 @@
+use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSendError};
 use etherparse::TcpHeader;
-use crate::protocol::tcp::{TcpReadError, TcpListenError, TcpSendError, TcpAcceptError};
 
 pub struct TcpConn {
     // sendBuf: SendBuf<n>,

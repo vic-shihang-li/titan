@@ -1,21 +1,20 @@
 // TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
-pub mod tsm;
 pub mod socket;
+pub mod tsm;
 
-use std::{net::Ipv4Addr, sync::Arc};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::RwLock;
+use std::{net::Ipv4Addr, sync::Arc};
 
+use crate::protocol::tcp::tsm::{Closed, Socket, TcpState};
+use crate::route::PacketDecision::Drop;
 use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
-use socket::{TcpListener, TcpConn};
-use crate::protocol::tcp::tsm::{TcpState, Socket, Closed};
-use crate::route::PacketDecision::Drop;
-
+use socket::{TcpConn, TcpListener};
 
 #[derive(Debug)]
 pub struct TcpConnError {}
@@ -52,7 +51,7 @@ impl Tcp {
         }
     }
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<(), TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<TcpConn, TcpConnError> {
         // TODO: create Tcp state machine. State machine should
         // 1. Send syn packet, transition to SYN_SENT.
         // 2. When TCP handler receives syn+ack packet, send a syn packet and
@@ -63,8 +62,11 @@ impl Tcp {
 
         let mut blank_state = Socket::new(port, self.router.clone(), self.local_window_size);
         let mut states = self.states.write().unwrap();
-        blank_state.connect(dest_ip, port).await.expect("TODO: panic message");
-        states.insert(port,blank_state);
+        blank_state
+            .connect(dest_ip, port)
+            .await
+            .expect("TODO: panic message");
+        states.insert(port, blank_state);
         drop(states);
         let syn_ack = receiver.try_recv().unwrap();
         Ok(())

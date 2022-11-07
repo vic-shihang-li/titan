@@ -2,8 +2,8 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
+use crate::protocol::tcp::socket::{TcpConn, TcpListener};
 use crate::protocol::tcp::{Tcp, TcpConnError, TcpHandler, TcpListenError};
-use crate::protocol::tcp::socket::{TcpListener, TcpConn};
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;
@@ -74,8 +74,7 @@ impl<'a> NodeBuilder<'a> {
                 rip_update_interval: self.rip_update_interval,
                 entry_max_age: self.entry_max_age,
             },
-        )
-        );
+        ));
         let local_window_size = 1024usize;
         let tcp = Arc::new(Tcp::new(router.clone(), local_window_size));
 

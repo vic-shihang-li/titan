@@ -25,7 +25,6 @@ async fn main() {
         }
     };
 
-
     let node = Arc::new(
         NodeBuilder::new(&args, tcp_stack.clone())
             .with_rip_interval(RIP_UPDATE_INTERVAL)

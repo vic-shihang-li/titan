@@ -24,13 +24,9 @@ pub enum Command {
     Quit,
 }
 
-pub struct TCPSendCmd {
+pub struct TCPSendCmd {}
 
-}
-
-pub struct TCPReadCmd {
-    
-}
+pub struct TCPReadCmd {}
 
 pub struct IPv4SendCmd {
     virtual_ip: Ipv4Addr,
@@ -204,7 +200,8 @@ impl Cli {
         match file {
             Some(file) => {
                 let mut f = File::create(file).unwrap();
-                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n").unwrap();
+                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
+                    .unwrap();
                 f.write_all(format!("{}\n", sockets).as_bytes()).unwrap();
             }
             None => {
@@ -214,7 +211,6 @@ impl Cli {
         }
     }
 }
-
 
 fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseError> {
     match cmd {
@@ -299,7 +295,9 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
         }
         "a" => {
             let arg = tokens.next().ok_or(ParseOpenSocketError::NoPort)?;
-            let port = arg.parse::<u16>().map_err(|_| ParseOpenSocketError::InvalidPort)?;
+            let port = arg
+                .parse::<u16>()
+                .map_err(|_| ParseOpenSocketError::InvalidPort)?;
             Ok(Command::OpenSocket(port))
         }
         "c" => {
@@ -384,13 +382,15 @@ impl Display for ParseError {
                 )
             }
             ParseError::OpenSocket(e) => {
-                write!(f, "Invalid open socket command. Usage: a <port>. Error: {:?}", e)
+                write!(
+                    f,
+                    "Invalid open socket command. Usage: a <port>. Error: {:?}",
+                    e
+                )
             }
         }
     }
 }
-
-
 
 impl From<ParseUpError> for ParseError {
     fn from(v: ParseUpError) -> Self {
