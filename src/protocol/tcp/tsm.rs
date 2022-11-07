@@ -91,6 +91,14 @@ impl Listen {
     }
 }
 
+#[async_trait]
+impl TcpState for Closed {
+    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
+    where Self: Sized {
+        todo!();
+    }
+}
+
 
 #[async_trait]
 impl TcpState for Established {
