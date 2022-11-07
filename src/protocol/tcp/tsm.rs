@@ -25,9 +25,7 @@ pub struct Socket {
 
 #[async_trait]
 pub trait TcpState: Send + Sync {
-    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
-    where
-        Self: Sized;
+    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket);
 }
 
 struct Closed { port: u16, }
@@ -93,8 +91,7 @@ impl Listen {
 
 #[async_trait]
 impl TcpState for Closed {
-    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
-    where Self: Sized {
+    async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket) {
         todo!();
     }
 }
@@ -103,7 +100,7 @@ impl TcpState for Closed {
 #[async_trait]
 impl TcpState for Established {
     async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
-    where Self: Sized {
+    {
         todo!();
     }
 }
@@ -112,8 +109,6 @@ impl TcpState for Established {
 #[async_trait]
 impl TcpState for Listen {
     async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
-    where
-        Self: Sized,
     {
         if tcp_header.syn() {
             let syn_ack = self.send_syn_ack(ip_header, tcp_header, tsm).await.unwrap();
@@ -130,8 +125,6 @@ impl From<Listen> for SynReceive {
 #[async_trait]
 impl TcpState for SynSent {
     async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket)
-    where
-        Self: Sized,
     {
         tsm.sender.send(()).unwrap();
         tsm.state = Box::new(Established { conn: Arc::new(TcpConn {}) });
@@ -155,7 +148,7 @@ impl Socket {
     }
 
     pub async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice<'a>, header: &TcpHeaderSlice<'a>, payload: &[u8]) {
-        self.state.handle_packet(ip_header, header, payload, self).await.unwrap();
+        self.state.handle_packet(ip_header, header, payload, self).await;
     }
 
     pub fn receiver(&self) -> &oneshot::Receiver<()> {
