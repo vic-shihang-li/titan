@@ -17,8 +17,8 @@ pub struct Socket {
     pub state: Box<dyn TcpState>,
     local_window_size: usize,
     remote_window_size: Option<u16>,
-    sender: oneshot::Sender<()>,
-    receiver: oneshot::Receiver<()>,
+    pub sender: oneshot::Sender<()>,
+    pub receiver: oneshot::Receiver<()>,
     router: Arc<Router>,
 }
 
@@ -28,7 +28,7 @@ pub trait TcpState: Send + Sync {
     async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice, tcp_header: &TcpHeaderSlice, payload: &[u8], tsm: &mut Socket);
 }
 
-struct Closed { port: u16, }
+pub struct Closed { port: u16, }
 
 struct Listen { port: u16, listener: TcpListener}
 
@@ -47,7 +47,7 @@ impl Closed {
         }
     }
 
-    async fn send_syn(&mut self, tsm: &mut Socket) -> Result<Socket, TcpSendError> {
+    pub async fn send_syn(&mut self, tsm: &mut Socket) -> Result<Socket, TcpSendError> {
         let (sender, receiver) = oneshot::channel();
         // TODO send syn packet
         let syn_sent = Socket {
@@ -147,11 +147,15 @@ impl Socket {
         }
     }
 
-    pub async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice<'a>, header: &TcpHeaderSlice<'a>, payload: &[u8]) {
-        self.state.handle_packet(ip_header, header, payload, self).await;
+    pub async fn connect(&mut self, dst_addr: Ipv4Addr, dst_port: u16) -> Result<(), TcpSendError> {
+        let mut state = self.state.as_mut();
+        let syn_sent = state.send_syn(self).await?;
+        self.state = Box::new(syn_sent);
+        self.receiver.await.unwrap();
+        Ok(())
     }
 
-    pub fn receiver(&self) -> &oneshot::Receiver<()> {
-        &self.receiver
+    pub async fn handle_packet<'a>(&mut self, ip_header: &Ipv4HeaderSlice<'a>, header: &TcpHeaderSlice<'a>, payload: &[u8]) {
+        self.state.handle_packet(ip_header, header, payload, self).await;
     }
 }

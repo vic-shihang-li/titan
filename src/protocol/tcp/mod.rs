@@ -13,7 +13,7 @@ use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::{TcpListener, TcpConn};
-use crate::protocol::tcp::tsm::{TcpState, Socket};
+use crate::protocol::tcp::tsm::{TcpState, Socket, Closed};
 use crate::route::PacketDecision::Drop;
 
 
@@ -35,7 +35,6 @@ pub struct TcpReadError {}
 /// A TCP stack.
 #[derive(Default)]
 pub struct Tcp {
-    conns: RwLock<HashMap<u16, Socket>>,
     port_mappings: RwLock<HashMap<u16, u16>>,
     states: RwLock<HashMap<u16, Socket>>,
     router: Arc<Router>,
@@ -46,7 +45,6 @@ pub struct Tcp {
 impl Tcp {
     pub fn new(router: Arc<Router>, local_window_size: usize) -> Self {
         Tcp {
-            conns: RwLock::new(HashMap::new()),
             port_mappings: RwLock::new(HashMap::new()),
             states: RwLock::new(HashMap::new()),
             router,
@@ -54,7 +52,7 @@ impl Tcp {
         }
     }
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<TcpConn, TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<(), TcpConnError> {
         // TODO: create Tcp state machine. State machine should
         // 1. Send syn packet, transition to SYN_SENT.
         // 2. When TCP handler receives syn+ack packet, send a syn packet and
@@ -63,13 +61,13 @@ impl Tcp {
         // Tcp state machine should provide some function that blocks until
         // state becomes ESTABLISHED.
 
-        let blank_state = Socket::new(port, self.router.clone(), self.local_window_size);
-        let mut conns = self.conns.write().unwrap();
-        let syn_sent = blank_state.send_syn().await.nwrap();
-        conns.insert(port, syn_sent);
-        let receive = syn_sent.receiver().clone();
-        drop(conns);
-        let syn_ack = receive.try_recv().await.unwrap();
+        let mut blank_state = Socket::new(port, self.router.clone(), self.local_window_size);
+        let mut states = self.states.write().unwrap();
+        blank_state.connect(dest_ip, port).await.expect("TODO: panic message");
+        states.insert(port,blank_state);
+        drop(states);
+        let syn_ack = receiver.try_recv().unwrap();
+        Ok(())
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
@@ -107,7 +105,7 @@ impl ProtocolHandler for TcpHandler {
             eprintln!("TCP checksum failed");
         }
         // Step 2: find the corresponding Tcp state machine
-        let mut conns = self.tcp.conns.write().unwrap();
+        let mut conns = self.tcp.states.write().unwrap();
         let tsm = conns.get_mut(&dst_port).unwrap();
         let tcp_payload = &payload[h.slice().len()..];
         // Step 3: pass the packet to the state machine
