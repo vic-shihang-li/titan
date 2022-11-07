@@ -6,7 +6,6 @@ pub mod tsm;
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::RwLock;
 use std::{net::Ipv4Addr, sync::Arc};
 
 use crate::protocol::tcp::tsm::{Closed, Socket, TcpState};
@@ -15,6 +14,7 @@ use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::{TcpConn, TcpListener};
+use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct TcpConnError {}
@@ -60,7 +60,7 @@ impl Tcp {
         // state becomes ESTABLISHED.
 
         let mut blank_state = Socket::new(port, self.router.clone(), self.local_window_size);
-        let mut states = self.states.write().unwrap();
+        let mut states = self.states.write().await;
         blank_state
             .connect(dest_ip, port)
             .await
@@ -111,7 +111,7 @@ impl ProtocolHandler for TcpHandler {
             eprintln!("TCP checksum failed");
         }
         // Step 2: find the corresponding Tcp state machine
-        let mut conns = self.tcp.states.write().unwrap();
+        let mut conns = self.tcp.states.write().await;
         let tsm = conns.get_mut(&dst_port).unwrap();
         let tcp_payload = &payload[h.slice().len()..];
         // Step 3: pass the packet to the state machine
