@@ -12,14 +12,27 @@ use tokio::sync::oneshot;
 /// Tcp State Machine (TSM)
 ///
 /// responsible for handling the state of a single Tcp Connection
+///
 pub struct Socket {
     id: u16,
     pub state: Box<dyn TcpState>,
     local_window_size: usize,
     remote_window_size: Option<u16>,
     pub sender: oneshot::Sender<()>,
-    pub receiver: oneshot::Receiver<()>,
+    pub receiver: Option<oneshot::Receiver<()>>,
     router: Arc<Router>,
+}
+
+pub enum SocketHandlerEvent {
+    ReceivedSyn(Box<dyn TcpState>),
+    ReceivedSynAck(Box<dyn TcpState>),
+}
+
+pub enum StateTransition {
+    toSynSent,
+    toEstablished,
+    toClosed,
+    toSynReceived,
 }
 
 #[async_trait]
@@ -34,32 +47,29 @@ pub trait TcpState: Send + Sync {
         // an Option<SocketHandlerAction>, where SocketHandlerAction is a list
         // of things the Socket should do on behalf of the tcp state.
         //
-        // For instance, this function can return Some(SocketHandlerAction::NotifyConnEstablished),
-        // and at the Socket level its fn can:
         // ```
-        // match self.state.handle_packet(..) {
-        //     SocketHandlerAction::NotifyConnEstablished => self.sender.notify(..)
-        // }
-        // ```
-        tsm: &mut Socket,
-    );
+    ) -> Option<SocketHandlerEvent>;
+
+    async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>>;
 }
 
 pub struct Closed {
     port: u16,
 }
 
-struct Listen {
+pub struct Listen {
     port: u16,
     listener: TcpListener,
 }
 
-struct SynSent {}
+pub struct SynSent {
+    conn: Option<TcpConn>,
+}
 
-struct SynReceive {}
+pub struct SynReceive {}
 
-struct Established {
-    conn: Arc<TcpConn>,
+pub struct Established {
+    conn: TcpConn,
 }
 
 impl Closed {
@@ -72,11 +82,11 @@ impl Closed {
         // TODO send syn packet
         let syn_sent = Socket {
             id: self.port,
-            state: Box::new(SynSent {}),
+            state: Box::new(SynSent {conn: None}),
             local_window_size: tsm.local_window_size,
             remote_window_size: None,
             sender,
-            receiver,
+            receiver: Some(receiver),
             router: tsm.router.clone(),
         };
         Ok(syn_sent)
@@ -88,27 +98,23 @@ impl Listen {
         &mut self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
-        tsm: &mut Socket,
-    ) -> Result<(), TcpSendError> {
-        // TODO send syn ack packet
-        let src_port = tcp_header.destination_port();
-        let dst_port = tcp_header.source_port();
-        let ack_num = tcp_header.sequence_number() + 1;
-        let seq_num = random::<u32>();
-        let mut packet = TcpHeader::new(dst_port, src_port, seq_num, tsm.local_window_size as u16);
-        packet.ack = true;
-        packet.syn = true;
-        packet.acknowledgment_number = ack_num;
-        let payload = [];
-        packet.checksum = packet
-            .calc_checksum_ipv4_raw(ip_header.destination(), ip_header.source(), &payload)
-            .unwrap();
-        let mut buf = Vec::new();
-        let len = packet.write(&mut buf).unwrap();
-        tsm.router
-            .send(buf.as_slice(), Protocol::Tcp, ip_header.source_addr())
-            .await
-            .map_err(|e| TcpSendError {})
+    ) {
+        // TODO send syn ack packet. Move this to TSM-LEVEL
+        todo!();
+        // let src_port = tcp_header.destination_port();
+        // let dst_port = tcp_header.source_port();
+        // let ack_num = tcp_header.sequence_number() + 1;
+        // let seq_num = random::<u32>();
+        // let mut packet = TcpHeader::new(dst_port, src_port, seq_num, tsm.local_window_size as u16);
+        // packet.ack = true;
+        // packet.syn = true;
+        // packet.acknowledgment_number = ack_num;
+        // let payload = [];
+        // packet.checksum = packet
+        //     .calc_checksum_ipv4_raw(ip_header.destination(), ip_header.source(), &payload)
+        //     .unwrap();
+        // let mut buf = Vec::new();
+        // let len = packet.write(&mut buf).unwrap();
     }
 }
 
@@ -119,9 +125,18 @@ impl TcpState for Closed {
         ip_header: &Ipv4HeaderSlice,
         tcp_header: &TcpHeaderSlice,
         payload: &[u8],
-        tsm: &mut Socket,
-    ) {
-        todo!();
+    ) -> Option<SocketHandlerEvent> {
+        None
+    }
+
+    async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>> {
+        match event {
+            StateTransition::toSynSent => {
+                let syn_sent = SynSent::from(*self);
+                Some(Box::new(syn_sent))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -132,8 +147,11 @@ impl TcpState for Established {
         ip_header: &Ipv4HeaderSlice,
         tcp_header: &TcpHeaderSlice,
         payload: &[u8],
-        tsm: &mut Socket,
-    ) {
+    ) -> Option<SocketHandlerEvent> {
+        todo!();
+    }
+
+    async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>> {
         todo!();
     }
 }
@@ -145,10 +163,22 @@ impl TcpState for Listen {
         ip_header: &Ipv4HeaderSlice,
         tcp_header: &TcpHeaderSlice,
         payload: &[u8],
-        tsm: &mut Socket,
-    ) {
+    ) -> Option<SocketHandlerEvent> {
         if tcp_header.syn() {
-            let syn_ack = self.send_syn_ack(ip_header, tcp_header, tsm).await.unwrap();
+            let syn_ack = self.send_syn_ack(ip_header, tcp_header).await;
+        }
+        todo!();
+    }
+
+    async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>> {
+        todo!();
+    }
+}
+
+impl From<SynSent> for Established {
+    fn from(syn_sent: SynSent) -> Self {
+        Established {
+            conn: syn_sent.conn.unwrap(),
         }
     }
 }
@@ -159,6 +189,12 @@ impl From<Listen> for SynReceive {
     }
 }
 
+impl From<Closed> for SynSent {
+    fn from(closed: Closed) -> Self {
+        SynSent { conn: None }
+    }
+}
+
 #[async_trait]
 impl TcpState for SynSent {
     async fn handle_packet<'a>(
@@ -166,34 +202,36 @@ impl TcpState for SynSent {
         ip_header: &Ipv4HeaderSlice,
         tcp_header: &TcpHeaderSlice,
         payload: &[u8],
-        tsm: &mut Socket,
-    ) {
-        tsm.sender.send(()).unwrap();
-        tsm.state = Box::new(Established {
-            conn: Arc::new(TcpConn {}),
-        });
+    ) -> Option<SocketHandlerEvent> {
+        eprintln!("SYNSENT received packet");
+        // hopefully it's a syn-ack
+        if tcp_header.syn() && tcp_header.ack() {
+            // it's a syn-ack, so we can move to established
+        }
         eprintln!("SYN-SENT -> ESTABLISHED");
+        None
     }
 }
 
 impl Socket {
     pub fn new(port: u16, router: Arc<Router>, local_window_size: usize) -> Self {
+        let (sender, receiver) = oneshot::channel();
         Self {
             id: port,
             state: Box::new(Closed::new(port)),
             local_window_size,
             remote_window_size: None,
-            sender: oneshot::channel().0,
-            receiver: oneshot::channel().1,
+            sender,
+            receiver: Some(receiver),
             router,
         }
     }
 
     pub async fn connect(&mut self, dst_addr: Ipv4Addr, dst_port: u16) -> Result<(), TcpSendError> {
-        let mut state = self.state.as_mut();
-        let syn_sent = state.send_syn(self).await?;
-        self.state = Box::new(syn_sent);
-        self.receiver.await.unwrap();
+        let mut state = self.state.transition(StateTransition::toSynSent).await;
+        if let Some(s) = state {
+            self.state = s;
+        }
         Ok(())
     }
 
@@ -203,8 +241,29 @@ impl Socket {
         header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) {
-        self.state
-            .handle_packet(ip_header, header, payload, self)
-            .await;
+        match self.state
+            .handle_packet(ip_header, header, payload).await {
+            Some(SocketHandlerEvent::ReceivedSyn(s)) => {
+                self.state = s;
+                let random_sequence_number = random::<u32>();
+                let mut packet = TcpHeader::new(
+                    header.destination_port(),
+                    header.source_port(),
+                    random_sequence_number as u32,
+                    self.local_window_size as u16,
+                );
+                packet.syn = true;
+                packet.ack = true;
+                packet.acknowledgment_number = header.sequence_number() + 1;
+                eprintln!("Checksum: {}", packet.checksum);
+                // TODO: send syn ack back to the "connection" connection
+            }
+            Some(SocketHandlerEvent::ReceivedSynAck(s)) => {
+                self.state = s;
+                // TODO: send ack back to the "listening" connection
+                todo!();
+            }
+            None => {}
+        }
     }
 }

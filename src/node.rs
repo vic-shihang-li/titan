@@ -175,6 +175,10 @@ impl Node {
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
         self.tcp.listen(port).await
     }
+
+    // pub async fn get_socket_table(&self) -> RwLockReadGuard<'_, SocketTable> {
+    //     self.tcp.get_socket_table().await
+    // }
 }
 
 impl Node {
