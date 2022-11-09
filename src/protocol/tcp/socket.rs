@@ -381,7 +381,7 @@ impl<const N: usize> Socket<N> {
     ) {
         let established_before = matches!(self.state, Some(TcpState::Established(_)));
 
-        self.update_state(ip_header, tcp_header, payload);
+        self.update_state(ip_header, tcp_header, payload).await;
 
         let established_after = matches!(self.state, Some(TcpState::Established(_)));
         let did_establish_conn = !established_before && established_after;
