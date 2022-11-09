@@ -190,17 +190,23 @@ impl Listen {
 
         let reply_ip = ip_header.source_addr();
 
-        let ack_pkt = self.make_syn_ack_packet(syn_packet);
+        let ack_pkt = self.make_syn_ack_packet(&syn_packet);
 
         self.router
             .send(&ack_pkt, Protocol::Tcp, reply_ip)
             .await
             .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
 
-        Ok(SynReceived {})
+        Ok(SynReceived {
+            seq_no: self.seq_no,
+            src_port: self.port,
+            dest_ip: ip_header.source_addr(),
+            dest_port: Port(syn_packet.source_port()),
+            router: self.router.clone(),
+        })
     }
 
-    fn make_syn_ack_packet<'a>(&self, syn_packet: TcpHeaderSlice<'a>) -> Vec<u8> {
+    fn make_syn_ack_packet<'a>(&self, syn_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let src_port = self.port.0;
@@ -236,7 +242,7 @@ impl SynSent {
         syn_ack_packet: TcpHeaderSlice<'a>,
     ) -> Result<Established, TransportError> {
         assert!(syn_ack_packet.ack());
-        let ack_pkt = self.make_ack_packet(syn_ack_packet);
+        let ack_pkt = self.make_ack_packet(&syn_ack_packet);
 
         self.router
             .send(&ack_pkt, Protocol::Tcp, self.dest_ip)
@@ -249,10 +255,11 @@ impl SynSent {
             dest_ip: self.dest_ip,
             dest_port: self.dest_port,
             router: self.router,
+            last_ack_no: syn_ack_packet.acknowledgment_number(),
         })
     }
 
-    fn make_ack_packet<'a>(&mut self, syn_ack_packet: TcpHeaderSlice<'a>) -> Vec<u8> {
+    fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let seq_no = {
@@ -276,8 +283,28 @@ impl SynSent {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct SynReceived {}
+pub struct SynReceived {
+    seq_no: u32,
+    src_port: Port,
+    dest_ip: Ipv4Addr,
+    dest_port: Port,
+    router: Arc<Router>,
+}
+
+impl SynReceived {
+    pub async fn establish<'a>(self, ack_packet: TcpHeaderSlice<'a>) -> Established {
+        assert!(ack_packet.ack());
+
+        Established {
+            seq_no: self.seq_no,
+            src_port: self.src_port,
+            dest_ip: self.dest_ip,
+            dest_port: self.dest_port,
+            router: self.router,
+            last_ack_no: ack_packet.acknowledgment_number(),
+        }
+    }
+}
 
 pub struct Established {
     seq_no: u32,
@@ -285,6 +312,7 @@ pub struct Established {
     dest_ip: Ipv4Addr,
     dest_port: Port,
     router: Arc<Router>,
+    last_ack_no: u32,
     // TODO:
     // conn: TcpConn,
 }
