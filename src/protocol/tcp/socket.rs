@@ -157,7 +157,7 @@ impl Closed {
     fn make_syn_packet(&self, src_port: Port, dest_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        let header = TcpHeader::new(
+        let mut header = TcpHeader::new(
             src_port.0,
             dest_port.0,
             self.seq_no,
@@ -212,7 +212,7 @@ impl Listen {
         let src_port = self.port.0;
         let dst_port = syn_packet.source_port();
 
-        let header = TcpHeader::new(
+        let mut header = TcpHeader::new(
             src_port,
             dst_port,
             self.seq_no,
@@ -267,7 +267,7 @@ impl SynSent {
             self.seq_no
         };
 
-        let header = TcpHeader::new(
+        let mut header = TcpHeader::new(
             self.src_port.0,
             self.dest_port.0,
             seq_no,
