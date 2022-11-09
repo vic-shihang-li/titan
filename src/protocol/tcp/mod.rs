@@ -119,14 +119,24 @@ impl<const N: usize> SocketTable<N> {
         Ok(sock_ref)
     }
 
-    pub fn get_socket_by_port(&mut self, port: Port) -> Option<&Socket<N>> {
+    pub fn get_socket_by_port(&self, port: Port) -> Option<&Socket<N>> {
         self.socket_map.get(&port)
     }
 
-    pub fn get_socket_by_id(&mut self, id: SocketId) -> Option<&Socket<N>> {
+    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket<N>> {
         self.socket_id_map
             .get(&id)
             .and_then(|port| self.socket_map.get(port))
+    }
+
+    pub fn get_mut_socket_by_port(&mut self, port: Port) -> Option<&mut Socket<N>> {
+        self.socket_map.get_mut(&port)
+    }
+
+    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket<N>> {
+        self.socket_id_map
+            .get(&id)
+            .and_then(|port| self.socket_map.get_mut(port))
     }
 }
 
@@ -177,12 +187,14 @@ impl<const WINDOW_SZ: usize> ProtocolHandler for TcpHandler<WINDOW_SZ> {
         if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
             eprintln!("TCP checksum failed");
         }
-        // Step 2: find the corresponding Tcp state machine
+
+        // Step 2: find the corresponding TCP socket
         let mut sockets = self.tcp.sockets.write().await;
-        let tsm = sockets.get_socket_by_port(dst_port).unwrap();
+        let socket = sockets.get_mut_socket_by_port(dst_port).unwrap();
         let tcp_payload = &payload[h.slice().len()..];
-        // Step 3: pass the packet to the state machine
-        // tsm.handle_packet(header, &h, tcp_payload).await;
+
+        // Step 3: let socket handle TCP packet
+        socket.handle_packet(header, &h, tcp_payload).await;
     }
 }
 
