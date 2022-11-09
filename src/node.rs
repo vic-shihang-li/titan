@@ -167,7 +167,7 @@ impl<const TCP_WINDOW_SZ: usize> Node<TCP_WINDOW_SZ> {
         self.router.get_forwarding_table().await
     }
 
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<(), TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<TcpConn, TcpConnError> {
         self.tcp.connect(dest_ip, port).await
     }
 

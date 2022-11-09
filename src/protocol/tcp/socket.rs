@@ -8,12 +8,37 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+use super::buf::{RecvBuf, SendBuf};
 use super::{Port, SocketId, TCP_DEFAULT_WINDOW_SZ};
 
-#[derive(Copy, Clone)]
+struct InnerTcpConn<const N: usize> {
+    send_buf: SendBuf<N>,
+    recv_buf: RecvBuf<N>,
+}
+
+#[derive(Clone)]
 pub struct TcpConn {
-    // sendBuf: SendBuf<n>,
-    // recvBuf: RecvBuf<n>,
+    inner: Arc<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ>>,
+}
+
+impl TcpConn {
+    fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
+        Self {
+            inner: Arc::new(InnerTcpConn::new(start_seq_no, start_ack_no)),
+        }
+    }
+
+    /// Sends bytes over a connection.
+    ///
+    /// Blocks until all bytes have been acknowledged by the other end.
+    pub async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
+        self.inner.send_all(bytes).await
+    }
+
+    /// Reads N bytes from the connection, where N is `out_buffer`'s size.
+    pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
+        self.inner.read_all(out_buffer).await
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -26,16 +51,19 @@ pub struct TcpMessage {
     payload: Vec<u8>,
 }
 
-impl TcpConn {
-    /// Sends bytes over a connection.
-    ///
-    /// Blocks until all bytes have been acknowledged by the other end.
-    pub async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
+impl<const N: usize> InnerTcpConn<N> {
+    fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
+        Self {
+            send_buf: SendBuf::new( /* TODO: start_seq_no */ ),
+            recv_buf: RecvBuf::new(start_ack_no),
+        }
+    }
+
+    async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
         todo!()
     }
 
-    /// Reads N bytes from the connection, where N is `out_buffer`'s size.
-    pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
+    async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
         todo!()
     }
 }
@@ -55,7 +83,7 @@ impl TcpListener {
     ///     // handle new conn...
     /// }
     /// ```
-    pub async fn accept(&self) -> Result<TcpConn, TcpAcceptError> {
+    pub async fn accept(&self) -> Result<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ>, TcpAcceptError> {
         // TODO: create a new Tcp socket and state machine. (Keep the listener
         // socket, open a new socket to handle this client).
         //
@@ -249,13 +277,19 @@ impl SynSent {
             .await
             .map_err(|_| TransportError::DestUnreachable(self.dest_ip))?;
 
+        let last_ack_no = syn_ack_packet.acknowledgment_number();
+
         Ok(Established {
             seq_no: self.seq_no,
             src_port: self.src_port,
             dest_ip: self.dest_ip,
             dest_port: self.dest_port,
             router: self.router,
-            last_ack_no: syn_ack_packet.acknowledgment_number(),
+            last_ack_no,
+            conn: TcpConn::new(
+                self.seq_no.try_into().unwrap(),
+                last_ack_no.try_into().unwrap(),
+            ),
         })
     }
 
@@ -295,13 +329,19 @@ impl SynReceived {
     pub async fn establish<'a>(self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
         assert!(ack_packet.ack());
 
+        let last_ack_no = ack_packet.acknowledgment_number();
+
         Established {
             seq_no: self.seq_no,
             src_port: self.src_port,
             dest_ip: self.dest_ip,
             dest_port: self.dest_port,
             router: self.router,
-            last_ack_no: ack_packet.acknowledgment_number(),
+            last_ack_no,
+            conn: TcpConn::new(
+                self.seq_no.try_into().unwrap(),
+                last_ack_no.try_into().unwrap(),
+            ),
         }
     }
 }
@@ -313,8 +353,7 @@ pub struct Established {
     dest_port: Port,
     router: Arc<Router>,
     last_ack_no: u32,
-    // TODO:
-    // conn: TcpConn,
+    conn: TcpConn,
 }
 
 #[derive(Debug)]
@@ -327,8 +366,8 @@ pub struct Socket<const N: usize> {
     id: SocketId,
     port: Port,
     state: Option<TcpState>,
-    established_tx: Option<oneshot::Sender<()>>,
-    established_rx: Option<oneshot::Receiver<()>>,
+    established_tx: Option<oneshot::Sender<TcpConn>>,
+    established_rx: Option<oneshot::Receiver<TcpConn>>,
 }
 
 impl<const N: usize> Socket<N> {
@@ -351,7 +390,7 @@ impl<const N: usize> Socket<N> {
         &mut self,
         dst_addr: Ipv4Addr,
         dst_port: Port,
-    ) -> Result<oneshot::Receiver<()>, TcpConnectError> {
+    ) -> Result<oneshot::Receiver<TcpConn>, TcpConnectError> {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
@@ -383,16 +422,15 @@ impl<const N: usize> Socket<N> {
 
         self.update_state(ip_header, tcp_header, payload).await;
 
-        let established_after = matches!(self.state, Some(TcpState::Established(_)));
-        let did_establish_conn = !established_before && established_after;
-        if did_establish_conn {
-            let tx = self
-                .established_tx
-                .take()
-                .expect("Cannot establish connection multiple times");
-            // only the connecting-side (client-side) is waiting for connection
-            // to be established.
-            tx.send(()).ok();
+        if !established_before {
+            if let Some(TcpState::Established(s)) = &self.state {
+                // just established connection; send notification.
+                let tx = self
+                    .established_tx
+                    .take()
+                    .expect("Cannot establish connection multiple times");
+                tx.send(s.conn.clone()).ok();
+            }
         }
     }
 

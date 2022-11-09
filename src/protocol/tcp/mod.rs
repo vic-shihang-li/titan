@@ -55,7 +55,7 @@ impl<const N: usize> Tcp<N> {
     }
 
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<(), TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<TcpConn, TcpConnError> {
         // TODO: create Tcp state machine. State machine should
         // 1. Send syn packet, transition to SYN_SENT.
         // 2. When TCP handler receives syn+ack packet, send a syn packet and
@@ -75,9 +75,9 @@ impl<const N: usize> Tcp<N> {
             .expect("Failed to send SYN packet");
         drop(sockets);
 
-        on_connected.await.unwrap();
+        let tcp_conn = on_connected.await.unwrap();
 
-        Ok(())
+        Ok(tcp_conn)
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
