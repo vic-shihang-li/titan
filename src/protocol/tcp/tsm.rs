@@ -53,21 +53,25 @@ pub trait TcpState: Send + Sync {
     async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>>;
 }
 
+#[derive(Copy, Clone)]
 pub struct Closed {
     port: u16,
 }
-
+#[derive(Copy, Clone)]
 pub struct Listen {
     port: u16,
     listener: TcpListener,
 }
 
+#[derive(Copy, Clone)]
 pub struct SynSent {
     conn: Option<TcpConn>,
 }
 
+#[derive(Copy, Clone)]
 pub struct SynReceive {}
 
+#[derive(Copy, Clone)]
 pub struct Established {
     conn: TcpConn,
 }
@@ -210,6 +214,16 @@ impl TcpState for SynSent {
         }
         eprintln!("SYN-SENT -> ESTABLISHED");
         None
+    }
+
+    async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>> {
+        match event {
+            StateTransition::toEstablished => {
+                let established = Established::from(*self);
+                Some(Box::new(established))
+            }
+            _ => None,
+        }
     }
 }
 

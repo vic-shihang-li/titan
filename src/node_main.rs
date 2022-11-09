@@ -26,7 +26,7 @@ async fn main() {
     };
 
     let node = Arc::new(
-        NodeBuilder::new(&args, tcp_stack.clone())
+        NodeBuilder::new(&args)
             .with_rip_interval(RIP_UPDATE_INTERVAL)
             .with_entry_max_age(ROUTING_ENTRY_MAX_AGE)
             .with_protocol_handler(Protocol::Rip, RipHandler::default())

@@ -1,11 +1,13 @@
 use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSendError};
 use etherparse::TcpHeader;
 
+#[derive(Copy, Clone)]
 pub struct TcpConn {
     // sendBuf: SendBuf<n>,
     // recvBuf: RecvBuf<n>,
 }
 
+#[derive(Copy, Clone)]
 pub struct TcpListener {
     port: u16,
 }

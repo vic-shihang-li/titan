@@ -14,7 +14,6 @@ use std::time::Duration;
 
 pub struct NodeBuilder<'a> {
     args: &'a Args,
-    tcp: Arc<Tcp>,
     built: bool,
     prune_interval: Duration,
     rip_update_interval: Duration,
@@ -23,10 +22,9 @@ pub struct NodeBuilder<'a> {
 }
 
 impl<'a> NodeBuilder<'a> {
-    pub fn new(args: &'a Args, tcp: Arc<Tcp>) -> Self {
+    pub fn new(args: &'a Args) -> Self {
         Self {
             args,
-            tcp,
             built: false,
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
@@ -87,7 +85,7 @@ impl<'a> NodeBuilder<'a> {
 
         Node {
             net,
-            tcp: self.tcp.clone(),
+            tcp,
             router,
             protocol_handlers,
         }
@@ -168,7 +166,7 @@ impl Node {
         self.router.get_forwarding_table().await
     }
 
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<TcpConn, TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<(), TcpConnError> {
         self.tcp.connect(dest_ip, port).await
     }
 
