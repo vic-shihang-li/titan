@@ -2,13 +2,13 @@ use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSend
 use crate::protocol::Protocol;
 use crate::route::{Router, SendError};
 use async_trait::async_trait;
-use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
-use rand::random;
+use etherparse::{Ipv4HeaderSlice, Ipv6RoutingExtensions, TcpHeader, TcpHeaderSlice};
+use rand::{random, thread_rng, Rng};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-use super::{Port, SocketId};
+use super::{Port, SocketId, TCP_DEFAULT_WINDOW_SZ};
 
 #[derive(Copy, Clone)]
 pub struct TcpConn {
@@ -107,19 +107,63 @@ pub trait TcpState: Send + Sync {
     async fn transition(&mut self, event: StateTransition) -> Option<Box<dyn TcpState>>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct Closed {
-    port: Port,
+    src_port: Port,
+    router: Arc<Router>,
 }
+
+pub enum ConnectError {
+    DestUnreachable(Ipv4Addr),
+}
+
+impl Closed {
+    pub fn new(src_port: Port, router: Arc<Router>) -> Self {
+        Self { src_port, router }
+    }
+
+    pub async fn connect(self, dest_ip: Ipv4Addr, port: Port) -> Result<SynSent, ConnectError> {
+        let syn_pkt = self.make_syn_packet(port);
+        self.router
+            .send(&syn_pkt, Protocol::Tcp, dest_ip)
+            .await
+            .map_err(|_| ConnectError::DestUnreachable(dest_ip))?;
+
+        Ok(SynSent {
+            src_port: self.src_port,
+            router: self.router,
+        })
+    }
+
+    fn make_syn_packet(&self, dest_port: Port) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let header = TcpHeader::new(
+            self.src_port.0,
+            dest_port.0,
+            self.gen_rand_seq_no(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.write(&mut bytes).unwrap();
+
+        bytes
+    }
+
+    fn gen_rand_seq_no(&self) -> u32 {
+        thread_rng().gen_range(0..u16::MAX).into()
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct Listen {
     port: u16,
     listener: TcpListener,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct SynSent {
-    conn: Option<TcpConn>,
+    src_port: Port,
+    router: Arc<Router>,
 }
 
 #[derive(Copy, Clone)]
@@ -128,31 +172,6 @@ pub struct SynReceive {}
 #[derive(Copy, Clone)]
 pub struct Established {
     conn: TcpConn,
-}
-
-impl Closed {
-    fn new(port: Port) -> Self {
-        Closed { port }
-    }
-
-    pub async fn send_syn<const N: usize>(
-        &mut self,
-        tsm: &mut Socket<N>,
-    ) -> Result<(), TcpSendError> {
-        // let (sender, receiver) = oneshot::channel();
-        // TODO send syn packet
-        // let syn_sent = Socket {
-        //     id: self.id,
-        //     port: self.port,
-        //     state: Box::new(SynSent { conn: None }),
-        //     sender,
-        //     receiver: Some(receiver),
-        //     router: tsm.router.clone(),
-        // };
-        // Ok(syn_sent)
-
-        Ok(())
-    }
 }
 
 impl Listen {

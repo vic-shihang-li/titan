@@ -69,18 +69,13 @@ impl<const N: usize> Tcp<N> {
             AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
         })?;
 
-        socket
+        let connected = socket
             .connect(dest_ip, port)
             .await
-            .expect("TODO: panic message");
-        let rec = socket.receiver.take().unwrap();
-
-        // TODO: transition state into syn_sent here?
-        // After syn_sent, "move" state.receiver out of state and into this function.
-        // One way to do this is to make `receiver` of type Option<oneshot::Receiver>,
-        // and do `state.receiver.take()` in this function.
+            .expect("Failed to send SYN packet");
         drop(sockets);
-        let conn = rec.await.unwrap();
+
+        let conn = connected.await.unwrap();
         Ok(())
     }
 
