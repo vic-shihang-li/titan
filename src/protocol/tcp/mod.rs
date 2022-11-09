@@ -35,19 +35,13 @@ pub struct TcpSendError {}
 pub struct TcpReadError {}
 
 /// A TCP stack.
-pub struct Tcp<const N: usize> {
-    sockets: RwLock<SocketTable<N>>,
+pub struct Tcp {
+    sockets: RwLock<SocketTable>,
     router: Arc<Router>,
     // a concurrent data structure holding Tcp stack states
 }
 
-impl Tcp<TCP_DEFAULT_WINDOW_SZ> {
-    pub fn with_default_window_size(router: Arc<Router>) -> Self {
-        Tcp::<TCP_DEFAULT_WINDOW_SZ>::new(router)
-    }
-}
-
-impl<const N: usize> Tcp<N> {
+impl Tcp {
     pub fn new(router: Arc<Router>) -> Self {
         let sockets = RwLock::new(SocketTable::new(router.clone()));
         Tcp { router, sockets }
@@ -89,13 +83,13 @@ enum AddSocketError {
     PortOccupied,
 }
 
-struct SocketTable<const N: usize> {
+struct SocketTable {
     socket_id_map: HashMap<SocketId, Port>,
-    socket_map: HashMap<Port, Socket<N>>,
-    socket_builder: SocketBuilder<N>,
+    socket_map: HashMap<Port, Socket>,
+    socket_builder: SocketBuilder,
 }
 
-impl<const N: usize> SocketTable<N> {
+impl SocketTable {
     pub fn new(router: Arc<Router>) -> Self {
         Self {
             socket_builder: SocketBuilder::new(router),
@@ -103,7 +97,7 @@ impl<const N: usize> SocketTable<N> {
             socket_map: HashMap::new(),
         }
     }
-    pub fn add_new_socket(&mut self, port: Port) -> Result<&mut Socket<N>, AddSocketError> {
+    pub fn add_new_socket(&mut self, port: Port) -> Result<&mut Socket, AddSocketError> {
         let socket = self.socket_builder.make_with_port(port);
         let socket_id = socket.id();
 
@@ -119,33 +113,33 @@ impl<const N: usize> SocketTable<N> {
         Ok(sock_ref)
     }
 
-    pub fn get_socket_by_port(&self, port: Port) -> Option<&Socket<N>> {
+    pub fn get_socket_by_port(&self, port: Port) -> Option<&Socket> {
         self.socket_map.get(&port)
     }
 
-    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket<N>> {
+    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket> {
         self.socket_id_map
             .get(&id)
             .and_then(|port| self.socket_map.get(port))
     }
 
-    pub fn get_mut_socket_by_port(&mut self, port: Port) -> Option<&mut Socket<N>> {
+    pub fn get_mut_socket_by_port(&mut self, port: Port) -> Option<&mut Socket> {
         self.socket_map.get_mut(&port)
     }
 
-    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket<N>> {
+    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket> {
         self.socket_id_map
             .get(&id)
             .and_then(|port| self.socket_map.get_mut(port))
     }
 }
 
-struct SocketBuilder<const N: usize> {
+struct SocketBuilder {
     next_socket_id: usize,
     router: Arc<Router>,
 }
 
-impl<const N: usize> SocketBuilder<N> {
+impl SocketBuilder {
     fn new(router: Arc<Router>) -> Self {
         Self {
             router,
@@ -153,7 +147,7 @@ impl<const N: usize> SocketBuilder<N> {
         }
     }
 
-    fn make_with_port(&mut self, port: Port) -> Socket<N> {
+    fn make_with_port(&mut self, port: Port) -> Socket {
         let sid = SocketId(self.next_socket_id.try_into().expect("Socket ID overflow"));
         let sock = Socket::new(sid, port, self.router.clone());
         self.next_socket_id += 1;
@@ -161,18 +155,18 @@ impl<const N: usize> SocketBuilder<N> {
     }
 }
 
-pub struct TcpHandler<const WINDOW_SZ: usize> {
-    tcp: Arc<Tcp<WINDOW_SZ>>,
+pub struct TcpHandler {
+    tcp: Arc<Tcp>,
 }
 
-impl<const WINDOW_SZ: usize> TcpHandler<WINDOW_SZ> {
-    pub fn new(tcp: Arc<Tcp<WINDOW_SZ>>) -> Self {
+impl TcpHandler {
+    pub fn new(tcp: Arc<Tcp>) -> Self {
         Self { tcp }
     }
 }
 
 #[async_trait]
-impl<const WINDOW_SZ: usize> ProtocolHandler for TcpHandler<WINDOW_SZ> {
+impl ProtocolHandler for TcpHandler {
     async fn handle_packet<'a>(
         &self,
         header: &Ipv4HeaderSlice<'a>,

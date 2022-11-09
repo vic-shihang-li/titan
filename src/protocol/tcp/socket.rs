@@ -361,7 +361,7 @@ pub enum TcpConnectError {
     AlreadyConnected,
 }
 
-pub struct Socket<const N: usize> {
+pub struct Socket {
     id: SocketId,
     port: Port,
     state: Option<TcpState>,
@@ -369,7 +369,7 @@ pub struct Socket<const N: usize> {
     established_rx: Option<oneshot::Receiver<TcpConn>>,
 }
 
-impl<const N: usize> Socket<N> {
+impl Socket {
     pub fn new(id: SocketId, port: Port, router: Arc<Router>) -> Self {
         let (established_tx, established_rx) = oneshot::channel();
         Self {
