@@ -337,7 +337,7 @@ impl<const N: usize> Socket<N> {
         Self {
             id,
             port,
-            state: Some(TcpState::new(router.clone())),
+            state: Some(TcpState::new(router)),
             established_tx: Some(established_tx),
             established_rx: Some(established_rx),
         }
