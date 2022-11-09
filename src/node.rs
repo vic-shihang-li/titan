@@ -4,7 +4,6 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Tcp, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
-    TCP_DEFAULT_WINDOW_SZ,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};

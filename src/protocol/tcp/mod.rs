@@ -37,14 +37,12 @@ pub struct TcpReadError {}
 /// A TCP stack.
 pub struct Tcp {
     sockets: RwLock<SocketTable>,
-    router: Arc<Router>,
-    // a concurrent data structure holding Tcp stack states
 }
 
 impl Tcp {
     pub fn new(router: Arc<Router>) -> Self {
-        let sockets = RwLock::new(SocketTable::new(router.clone()));
-        Tcp { router, sockets }
+        let sockets = RwLock::new(SocketTable::new(router));
+        Tcp { sockets }
     }
 
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
