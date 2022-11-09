@@ -55,14 +55,6 @@ impl<const N: usize> Tcp<N> {
 
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
     pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<TcpConn, TcpConnError> {
-        // TODO: create Tcp state machine. State machine should
-        // 1. Send syn packet, transition to SYN_SENT.
-        // 2. When TCP handler receives syn+ack packet, send a syn packet and
-        //    transition to ESTABLISHED.
-        //
-        // Tcp state machine should provide some function that blocks until
-        // state becomes ESTABLISHED.
-
         let mut sockets = self.sockets.write().await;
         let socket = sockets.add_new_socket(port).map_err(|e| match e {
             AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
