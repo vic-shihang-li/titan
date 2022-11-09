@@ -1,3 +1,5 @@
+#![feature(map_try_insert)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

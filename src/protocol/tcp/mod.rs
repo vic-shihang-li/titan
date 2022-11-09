@@ -20,7 +20,9 @@ use tokio::sync::RwLock;
 pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
 
 #[derive(Debug)]
-pub struct TcpConnError {}
+pub enum TcpConnError {
+    PortOccupied(Port),
+}
 
 #[derive(Debug)]
 pub struct TcpListenError {}
@@ -36,8 +38,7 @@ pub struct TcpReadError {}
 
 /// A TCP stack.
 pub struct Tcp<const N: usize> {
-    port_mappings: RwLock<HashMap<u16, u16>>,
-    sockets: RwLock<HashMap<u16, Socket<N>>>,
+    sockets: RwLock<SocketTable<N>>,
     router: Arc<Router>,
     // a concurrent data structure holding Tcp stack states
 }
@@ -50,15 +51,12 @@ impl Tcp<TCP_DEFAULT_WINDOW_SZ> {
 
 impl<const N: usize> Tcp<N> {
     pub fn new(router: Arc<Router>) -> Self {
-        Tcp {
-            port_mappings: RwLock::new(HashMap::new()),
-            sockets: RwLock::new(HashMap::new()),
-            router,
-        }
+        let sockets = RwLock::new(SocketTable::new(router.clone()));
+        Tcp { router, sockets }
     }
 
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<(), TcpConnError> {
+    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<(), TcpConnError> {
         // TODO: create Tcp state machine. State machine should
         // 1. Send syn packet, transition to SYN_SENT.
         // 2. When TCP handler receives syn+ack packet, send a syn packet and
@@ -67,14 +65,17 @@ impl<const N: usize> Tcp<N> {
         // Tcp state machine should provide some function that blocks until
         // state becomes ESTABLISHED.
 
-        let mut socket = Socket::new(port, self.router.clone());
         let mut sockets = self.sockets.write().await;
-        socket
-            .connect(dest_ip, port)
-            .await
-            .expect("TODO: panic message");
+        let socket = sockets.add_new_socket(port).map_err(|e| match e {
+            AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
+        })?;
+
+        // socket
+        //     .connect(dest_ip, port)
+        //     .await
+        //     .expect("TODO: panic message");
         let rec = socket.receiver.take().unwrap();
-        sockets.insert(port, socket);
+
         // TODO: transition state into syn_sent here?
         // After syn_sent, "move" state.receiver out of state and into this function.
         // One way to do this is to make `receiver` of type Option<oneshot::Receiver>,
@@ -89,6 +90,78 @@ impl<const N: usize> Tcp<N> {
         // TODO: create Tcp machine that starts with LISTEN state. Open listen socket.
 
         todo!()
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
+pub struct SocketId(u16);
+
+#[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
+pub struct Port(u16);
+
+enum AddSocketError {
+    PortOccupied,
+}
+
+struct SocketTable<const N: usize> {
+    socket_id_map: HashMap<SocketId, Port>,
+    socket_map: HashMap<Port, Socket<N>>,
+    socket_builder: SocketBuilder<N>,
+}
+
+impl<const N: usize> SocketTable<N> {
+    pub fn new(router: Arc<Router>) -> Self {
+        Self {
+            socket_builder: SocketBuilder::new(router),
+            socket_id_map: HashMap::new(),
+            socket_map: HashMap::new(),
+        }
+    }
+    pub fn add_new_socket(&mut self, port: Port) -> Result<&mut Socket<N>, AddSocketError> {
+        let socket = self.socket_builder.make_with_port(port);
+        let socket_id = socket.id();
+
+        let sock_ref = self
+            .socket_map
+            .try_insert(port, socket)
+            .map_err(|_| AddSocketError::PortOccupied)?;
+
+        self.socket_id_map
+            .try_insert(socket_id, port)
+            .expect("Found duplicate socket ID");
+
+        Ok(sock_ref)
+    }
+
+    pub fn get_socket_by_port(&mut self, port: Port) -> Option<&Socket<N>> {
+        self.socket_map.get(&port)
+    }
+
+    pub fn get_socket_by_id(&mut self, id: SocketId) -> Option<&Socket<N>> {
+        self.socket_id_map
+            .get(&id)
+            .and_then(|port| self.socket_map.get(port))
+    }
+}
+
+struct SocketBuilder<const N: usize> {
+    next_socket_id: usize,
+    router: Arc<Router>,
+}
+
+impl<const N: usize> SocketBuilder<N> {
+    fn new(router: Arc<Router>) -> Self {
+        Self {
+            router,
+            next_socket_id: 0,
+        }
+    }
+
+    fn make_with_port(&mut self, port: Port) -> Socket<N> {
+        let sid = SocketId(self.next_socket_id.try_into().expect("Socket ID overflow"));
+        let sock = Socket::new(sid, port, self.router.clone());
+        self.next_socket_id += 1;
+        sock
     }
 }
 
@@ -113,17 +186,17 @@ impl<const WindowSize: usize> ProtocolHandler for TcpHandler<WindowSize> {
     ) {
         // Step 1: validate checksum
         let h = TcpHeaderSlice::from_slice(payload).unwrap();
-        let dst_port = h.destination_port();
+        let dst_port = Port(h.destination_port());
         let checksum = h.checksum();
         if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
             eprintln!("TCP checksum failed");
         }
         // Step 2: find the corresponding Tcp state machine
-        let mut conns = self.tcp.sockets.write().await;
-        let tsm = conns.get_mut(&dst_port).unwrap();
+        let mut sockets = self.tcp.sockets.write().await;
+        let tsm = sockets.get_socket_by_port(dst_port).unwrap();
         let tcp_payload = &payload[h.slice().len()..];
         // Step 3: pass the packet to the state machine
-        tsm.handle_packet(header, &h, tcp_payload).await;
+        // tsm.handle_packet(header, &h, tcp_payload).await;
     }
 }
 

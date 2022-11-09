@@ -9,12 +9,15 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+use super::{Port, SocketId};
+
 /// Tcp State Machine (TSM)
 ///
 /// responsible for handling the state of a single Tcp Connection
 ///
 pub struct Socket<const N: usize> {
-    id: u16,
+    id: SocketId,
+    port: Port,
     pub state: Box<dyn TcpState>,
     pub sender: oneshot::Sender<()>,
     pub receiver: Option<oneshot::Receiver<()>>,
@@ -53,7 +56,7 @@ pub trait TcpState: Send + Sync {
 
 #[derive(Copy, Clone)]
 pub struct Closed {
-    port: u16,
+    port: Port,
 }
 #[derive(Copy, Clone)]
 pub struct Listen {
@@ -75,24 +78,27 @@ pub struct Established {
 }
 
 impl Closed {
-    fn new(port: u16) -> Self {
+    fn new(port: Port) -> Self {
         Closed { port }
     }
 
     pub async fn send_syn<const N: usize>(
         &mut self,
         tsm: &mut Socket<N>,
-    ) -> Result<Socket<N>, TcpSendError> {
-        let (sender, receiver) = oneshot::channel();
+    ) -> Result<(), TcpSendError> {
+        // let (sender, receiver) = oneshot::channel();
         // TODO send syn packet
-        let syn_sent = Socket {
-            id: self.port,
-            state: Box::new(SynSent { conn: None }),
-            sender,
-            receiver: Some(receiver),
-            router: tsm.router.clone(),
-        };
-        Ok(syn_sent)
+        // let syn_sent = Socket {
+        //     id: self.id,
+        //     port: self.port,
+        //     state: Box::new(SynSent { conn: None }),
+        //     sender,
+        //     receiver: Some(receiver),
+        //     router: tsm.router.clone(),
+        // };
+        // Ok(syn_sent)
+
+        Ok(())
     }
 }
 
@@ -227,10 +233,11 @@ impl TcpState for SynSent {
 }
 
 impl<const N: usize> Socket<N> {
-    pub fn new(port: u16, router: Arc<Router>) -> Self {
+    pub fn new(id: SocketId, port: Port, router: Arc<Router>) -> Self {
         let (sender, receiver) = oneshot::channel();
         Self {
-            id: port,
+            id,
+            port,
             state: Box::new(Closed::new(port)),
             sender,
             receiver: Some(receiver),
@@ -238,7 +245,15 @@ impl<const N: usize> Socket<N> {
         }
     }
 
-    pub async fn connect(&mut self, dst_addr: Ipv4Addr, dst_port: u16) -> Result<(), TcpSendError> {
+    pub fn id(&self) -> SocketId {
+        self.id
+    }
+
+    pub async fnu16 connect(
+        &mut self,
+        dst_addr: Ipv4Addr,
+        dst_port: Port,
+    ) -> Result<(), TcpSendError> {
         let mut state = self.state.transition(StateTransition::toSynSent).await;
         if let Some(s) = state {
             self.state = s;
