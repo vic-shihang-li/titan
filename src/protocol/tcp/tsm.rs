@@ -13,11 +13,9 @@ use tokio::sync::oneshot;
 ///
 /// responsible for handling the state of a single Tcp Connection
 ///
-pub struct Socket {
+pub struct Socket<const N: usize> {
     id: u16,
     pub state: Box<dyn TcpState>,
-    local_window_size: usize,
-    remote_window_size: Option<u16>,
     pub sender: oneshot::Sender<()>,
     pub receiver: Option<oneshot::Receiver<()>>,
     router: Arc<Router>,
@@ -81,14 +79,15 @@ impl Closed {
         Closed { port }
     }
 
-    pub async fn send_syn(&mut self, tsm: &mut Socket) -> Result<Socket, TcpSendError> {
+    pub async fn send_syn<const N: usize>(
+        &mut self,
+        tsm: &mut Socket<N>,
+    ) -> Result<Socket<N>, TcpSendError> {
         let (sender, receiver) = oneshot::channel();
         // TODO send syn packet
         let syn_sent = Socket {
             id: self.port,
-            state: Box::new(SynSent {conn: None}),
-            local_window_size: tsm.local_window_size,
-            remote_window_size: None,
+            state: Box::new(SynSent { conn: None }),
             sender,
             receiver: Some(receiver),
             router: tsm.router.clone(),
@@ -227,14 +226,12 @@ impl TcpState for SynSent {
     }
 }
 
-impl Socket {
-    pub fn new(port: u16, router: Arc<Router>, local_window_size: usize) -> Self {
+impl<const N: usize> Socket<N> {
+    pub fn new(port: u16, router: Arc<Router>) -> Self {
         let (sender, receiver) = oneshot::channel();
         Self {
             id: port,
             state: Box::new(Closed::new(port)),
-            local_window_size,
-            remote_window_size: None,
             sender,
             receiver: Some(receiver),
             router,
@@ -255,8 +252,7 @@ impl Socket {
         header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) {
-        match self.state
-            .handle_packet(ip_header, header, payload).await {
+        match self.state.handle_packet(ip_header, header, payload).await {
             Some(SocketHandlerEvent::ReceivedSyn(s)) => {
                 self.state = s;
                 let random_sequence_number = random::<u32>();
@@ -264,7 +260,7 @@ impl Socket {
                     header.destination_port(),
                     header.source_port(),
                     random_sequence_number as u32,
-                    self.local_window_size as u16,
+                    N.try_into().unwrap(),
                 );
                 packet.syn = true;
                 packet.ack = true;

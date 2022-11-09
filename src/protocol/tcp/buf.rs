@@ -3,6 +3,8 @@ use std::{
     collections::BinaryHeap,
 };
 
+use super::TCP_DEFAULT_WINDOW_SZ;
+
 /// A fixed-sized buffer for buffering data to be sent over TCP.
 ///
 /// This is akin to a producer-consumer buffer. Here, the producer is application code putting more
@@ -25,14 +27,12 @@ pub struct SendBuf<const N: usize> {
     buf: [u8; N],
 }
 
-const DEFAULT_BUF_SZ: usize = 1 << 16;
-
-pub fn make_default_sendbuf() -> SendBuf<DEFAULT_BUF_SZ> {
-    SendBuf::<DEFAULT_BUF_SZ>::new()
+pub fn make_default_sendbuf() -> SendBuf<TCP_DEFAULT_WINDOW_SZ> {
+    SendBuf::<TCP_DEFAULT_WINDOW_SZ>::new()
 }
 
-pub fn make_default_recvbuf(starting_seq_no: usize) -> RecvBuf<DEFAULT_BUF_SZ> {
-    RecvBuf::<DEFAULT_BUF_SZ>::new(starting_seq_no)
+pub fn make_default_recvbuf(starting_seq_no: usize) -> RecvBuf<TCP_DEFAULT_WINDOW_SZ> {
+    RecvBuf::<TCP_DEFAULT_WINDOW_SZ>::new(starting_seq_no)
 }
 
 #[derive(Debug)]

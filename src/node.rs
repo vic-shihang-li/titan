@@ -3,7 +3,7 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::socket::{TcpConn, TcpListener};
-use crate::protocol::tcp::{Tcp, TcpConnError, TcpHandler, TcpListenError};
+use crate::protocol::tcp::{Tcp, TcpConnError, TcpHandler, TcpListenError, TCP_DEFAULT_WINDOW_SZ};
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;
@@ -57,7 +57,7 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
-    pub async fn build(&mut self) -> Node {
+    pub async fn build(&mut self) -> Node<TCP_DEFAULT_WINDOW_SZ> {
         if self.built {
             panic!("A NodeBuilder can only be built once.");
         }
@@ -73,8 +73,7 @@ impl<'a> NodeBuilder<'a> {
                 entry_max_age: self.entry_max_age,
             },
         ));
-        let local_window_size = 1024usize;
-        let tcp = Arc::new(Tcp::new(router.clone(), local_window_size));
+        let tcp = Arc::new(Tcp::with_default_window_size(router.clone()));
 
         self.with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp.clone()));
 
@@ -92,14 +91,14 @@ impl<'a> NodeBuilder<'a> {
     }
 }
 
-pub struct Node {
+pub struct Node<const TcpWindowSize: usize> {
     net: Arc<Net>,
-    tcp: Arc<Tcp>,
+    tcp: Arc<Tcp<TcpWindowSize>>,
     router: Arc<Router>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
-impl Node {
+impl<const TcpWindowSize: usize> Node<TcpWindowSize> {
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_to<'a>(&'a self, next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
         self.net.find_link_to(next_hop).await
@@ -179,7 +178,7 @@ impl Node {
     // }
 }
 
-impl Node {
+impl<const TcpWindowSize: usize> Node<TcpWindowSize> {
     async fn handle_packet_bytes(&self, bytes: &[u8]) {
         match SlicedPacket::from_ip(bytes) {
             Err(value) => eprintln!("Err {:?}", value),

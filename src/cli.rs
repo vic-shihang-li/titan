@@ -34,12 +34,12 @@ pub struct IPv4SendCmd {
     payload: String,
 }
 
-pub struct Cli {
-    node: Arc<Node>,
+pub struct Cli<const TcpWindowSize: usize> {
+    node: Arc<Node<TcpWindowSize>>,
 }
 
-impl Cli {
-    pub fn new(node: Arc<Node>) -> Self {
+impl<const TcpWindowSize: usize> Cli<TcpWindowSize> {
+    pub fn new(node: Arc<Node<TcpWindowSize>>) -> Self {
         Self { node }
     }
 

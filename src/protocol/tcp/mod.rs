@@ -6,15 +6,18 @@ pub mod tsm;
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
 
-use crate::protocol::tcp::tsm::{Closed, Socket, TcpState, SynSent};
+use crate::protocol::tcp::tsm::{Closed, Socket, SynSent, TcpState};
 use crate::route::PacketDecision::Drop;
 use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::{TcpConn, TcpListener};
 use tokio::sync::RwLock;
+
+pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
 
 #[derive(Debug)]
 pub struct TcpConnError {}
@@ -32,23 +35,28 @@ pub struct TcpSendError {}
 pub struct TcpReadError {}
 
 /// A TCP stack.
-pub struct Tcp {
+pub struct Tcp<const N: usize> {
     port_mappings: RwLock<HashMap<u16, u16>>,
-    sockets: RwLock<HashMap<u16, Socket>>,
+    sockets: RwLock<HashMap<u16, Socket<N>>>,
     router: Arc<Router>,
-    local_window_size: usize,
     // a concurrent data structure holding Tcp stack states
 }
 
-impl Tcp {
-    pub fn new(router: Arc<Router>, local_window_size: usize) -> Self {
+impl Tcp<TCP_DEFAULT_WINDOW_SZ> {
+    pub fn with_default_window_size(router: Arc<Router>) -> Self {
+        Tcp::<TCP_DEFAULT_WINDOW_SZ>::new(router)
+    }
+}
+
+impl<const N: usize> Tcp<N> {
+    pub fn new(router: Arc<Router>) -> Self {
         Tcp {
             port_mappings: RwLock::new(HashMap::new()),
             sockets: RwLock::new(HashMap::new()),
             router,
-            local_window_size,
         }
     }
+
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
     pub async fn connect(&self, dest_ip: Ipv4Addr, port: u16) -> Result<(), TcpConnError> {
         // TODO: create Tcp state machine. State machine should
@@ -59,7 +67,7 @@ impl Tcp {
         // Tcp state machine should provide some function that blocks until
         // state becomes ESTABLISHED.
 
-        let mut socket = Socket::new(port, self.router.clone(), self.local_window_size);
+        let mut socket = Socket::new(port, self.router.clone());
         let mut sockets = self.sockets.write().await;
         socket
             .connect(dest_ip, port)
@@ -84,18 +92,18 @@ impl Tcp {
     }
 }
 
-pub struct TcpHandler {
-    tcp: Arc<Tcp>,
+pub struct TcpHandler<const WindowSize: usize> {
+    tcp: Arc<Tcp<WindowSize>>,
 }
 
-impl TcpHandler {
-    pub fn new(tcp: Arc<Tcp>) -> Self {
+impl<const WindowSize: usize> TcpHandler<WindowSize> {
+    pub fn new(tcp: Arc<Tcp<WindowSize>>) -> Self {
         Self { tcp }
     }
 }
 
 #[async_trait]
-impl ProtocolHandler for TcpHandler {
+impl<const WindowSize: usize> ProtocolHandler for TcpHandler<WindowSize> {
     async fn handle_packet<'a>(
         &self,
         header: &Ipv4HeaderSlice<'a>,
