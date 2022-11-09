@@ -4,7 +4,6 @@ use crate::route::{Router, SendError};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, Ipv6RoutingExtensions, TcpHeader, TcpHeaderSlice};
 use rand::{random, thread_rng, Rng};
-use replace_with::replace_with_or_abort;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -72,15 +71,6 @@ impl TcpListener {
 #[derive(Debug)]
 pub enum TransportError {
     DestUnreachable(Ipv4Addr),
-}
-
-pub struct Socket<const N: usize> {
-    id: SocketId,
-    port: Port,
-    pub state: Option<TcpState>,
-    pub sender: oneshot::Sender<()>,
-    pub receiver: Option<oneshot::Receiver<()>>,
-    router: Arc<Router>,
 }
 
 pub enum TcpState {
@@ -327,16 +317,29 @@ pub struct Established {
     // conn: TcpConn,
 }
 
+#[derive(Debug)]
+pub enum TcpConnectError {
+    Transport(TransportError),
+    AlreadyConnected,
+}
+
+pub struct Socket<const N: usize> {
+    id: SocketId,
+    port: Port,
+    state: Option<TcpState>,
+    established_tx: Option<oneshot::Sender<()>>,
+    established_rx: Option<oneshot::Receiver<()>>,
+}
+
 impl<const N: usize> Socket<N> {
     pub fn new(id: SocketId, port: Port, router: Arc<Router>) -> Self {
-        let (sender, receiver) = oneshot::channel();
+        let (established_tx, established_rx) = oneshot::channel();
         Self {
             id,
             port,
             state: Some(TcpState::new(router.clone())),
-            sender,
-            receiver: Some(receiver),
-            router,
+            established_tx: Some(established_tx),
+            established_rx: Some(established_rx),
         }
     }
 
@@ -344,18 +347,56 @@ impl<const N: usize> Socket<N> {
         self.id
     }
 
-    pub async fn connect(
+    pub async fn initiate_connection(
         &mut self,
         dst_addr: Ipv4Addr,
         dst_port: Port,
-    ) -> Result<(), TcpSendError> {
-        if let Some(s) = state {
-            self.state = s;
+    ) -> Result<oneshot::Receiver<()>, TcpConnectError> {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Closed(s) => {
+                self.state = Some(
+                    s.connect(self.port, (dst_addr, dst_port))
+                        .await
+                        .map_err(TcpConnectError::Transport)?
+                        .into(),
+                );
+                Ok(self
+                    .established_rx
+                    .take()
+                    .expect("Cannot initiate connection multiple times"))
+            }
+            _ => {
+                self.state = Some(state);
+                Err(TcpConnectError::AlreadyConnected)
+            }
         }
-        Ok(())
     }
 
     pub async fn handle_packet<'a>(
+        &mut self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) {
+        let established_before = matches!(self.state, Some(TcpState::Established(_)));
+
+        self.update_state(ip_header, tcp_header, payload);
+
+        let established_after = matches!(self.state, Some(TcpState::Established(_)));
+        let did_establish_conn = !established_before && established_after;
+        if did_establish_conn {
+            let tx = self
+                .established_tx
+                .take()
+                .expect("Cannot establish connection multiple times");
+            // only the connecting-side (client-side) is waiting for connection
+            // to be established.
+            tx.send(()).ok();
+        }
+    }
+
+    async fn update_state<'a>(
         &mut self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,

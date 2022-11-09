@@ -69,13 +69,14 @@ impl<const N: usize> Tcp<N> {
             AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
         })?;
 
-        let connected = socket
-            .connect(dest_ip, port)
+        let on_connected = socket
+            .initiate_connection(dest_ip, port)
             .await
             .expect("Failed to send SYN packet");
         drop(sockets);
 
-        let conn = connected.await.unwrap();
+        on_connected.await.unwrap();
+
         Ok(())
     }
 
