@@ -1,9 +1,8 @@
-use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSendError};
+use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
-use crate::route::{Router, SendError};
-use async_trait::async_trait;
-use etherparse::{Ipv4HeaderSlice, Ipv6RoutingExtensions, TcpHeader, TcpHeaderSlice};
-use rand::{random, thread_rng, Rng};
+use crate::route::Router;
+use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
+use rand::{thread_rng, Rng};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::oneshot;

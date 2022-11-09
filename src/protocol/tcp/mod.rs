@@ -1,19 +1,18 @@
 // TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
-pub mod socket;
+mod socket;
 
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
 
-use crate::protocol::tcp::socket::{Closed, Socket, SynSent, TcpState};
-use crate::route::PacketDecision::Drop;
 use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
-use socket::{TcpConn, TcpListener};
+use socket::Socket;
+pub use socket::{TcpConn, TcpListener};
 use tokio::sync::RwLock;
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
