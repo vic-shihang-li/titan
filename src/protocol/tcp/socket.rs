@@ -109,7 +109,6 @@ pub trait TcpState: Send + Sync {
 
 pub struct Closed {
     seq_no: u32,
-    src_port: Port,
     router: Arc<Router>,
 }
 
@@ -118,39 +117,53 @@ pub enum TransportError {
 }
 
 impl Closed {
-    pub fn new(src_port: Port, router: Arc<Router>) -> Self {
+    pub fn new(router: Arc<Router>) -> Self {
         Self {
-            src_port,
             router,
             seq_no: Self::gen_rand_seq_no(),
         }
     }
 
-    pub async fn connect(self, dest_ip: Ipv4Addr, port: Port) -> Result<SynSent, TransportError> {
-        let syn_pkt = self.make_syn_packet(port);
+    pub async fn connect(
+        self,
+        src_port: Port,
+        dest: (Ipv4Addr, Port),
+    ) -> Result<SynSent, TransportError> {
+        let (dest_ip, dest_port) = dest;
+
+        let syn_pkt = self.make_syn_packet(src_port, dest_port);
         self.router
             .send(&syn_pkt, Protocol::Tcp, dest_ip)
             .await
             .map_err(|_| TransportError::DestUnreachable(dest_ip))?;
 
         Ok(SynSent {
-            src_port: self.src_port,
-            dest_port: port,
+            src_port,
+            dest_port,
             dest_ip,
             router: self.router,
             seq_no: self.seq_no,
         })
     }
 
-    fn make_syn_packet(&self, dest_port: Port) -> Vec<u8> {
+    pub async fn listen(self, port: Port) -> Listen {
+        Listen {
+            port,
+            seq_no: self.seq_no,
+            router: self.router,
+        }
+    }
+
+    fn make_syn_packet(&self, src_port: Port, dest_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let header = TcpHeader::new(
-            self.src_port.0,
+            src_port.0,
             dest_port.0,
             self.seq_no,
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
+        header.syn = true;
         header.write(&mut bytes).unwrap();
 
         bytes
@@ -161,10 +174,52 @@ impl Closed {
     }
 }
 
-#[derive(Copy, Clone)]
 pub struct Listen {
-    port: u16,
-    listener: TcpListener,
+    port: Port,
+    seq_no: u32,
+    router: Arc<Router>,
+}
+
+impl Listen {
+    pub async fn handle_connection_request<'a>(
+        &self,
+        ip_header: Ipv4HeaderSlice<'a>,
+        syn_packet: TcpHeaderSlice<'a>,
+    ) -> Result<SynReceived, TransportError> {
+        assert!(syn_packet.syn());
+
+        let reply_ip = ip_header.source_addr();
+
+        let ack_pkt = self.make_syn_ack_packet(syn_packet);
+
+        self.router
+            .send(&ack_pkt, Protocol::Tcp, reply_ip)
+            .await
+            .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
+
+        Ok(SynReceived {})
+    }
+
+    fn make_syn_ack_packet<'a>(&self, syn_packet: TcpHeaderSlice<'a>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let src_port = self.port.0;
+        let dst_port = syn_packet.source_port();
+
+        let header = TcpHeader::new(
+            src_port,
+            dst_port,
+            self.seq_no,
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.syn = true;
+        header.ack = true;
+        header.acknowledgment_number = syn_packet.acknowledgment_number() + 1;
+
+        header.write(&mut bytes).unwrap();
+
+        bytes
+    }
 }
 
 pub struct SynSent {
@@ -211,6 +266,7 @@ impl SynSent {
             seq_no,
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
+        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = syn_ack_packet.acknowledgment_number() + 1;
 
@@ -221,7 +277,7 @@ impl SynSent {
 }
 
 #[derive(Copy, Clone)]
-pub struct SynReceive {}
+pub struct SynReceived {}
 
 pub struct Established {
     seq_no: u32,
@@ -231,31 +287,6 @@ pub struct Established {
     router: Arc<Router>,
     // TODO:
     // conn: TcpConn,
-}
-
-impl Listen {
-    async fn send_syn_ack<'a>(
-        &mut self,
-        ip_header: &Ipv4HeaderSlice<'a>,
-        tcp_header: &TcpHeaderSlice<'a>,
-    ) {
-        // TODO send syn ack packet. Move this to TSM-LEVEL
-        todo!();
-        // let src_port = tcp_header.destination_port();
-        // let dst_port = tcp_header.source_port();
-        // let ack_num = tcp_header.sequence_number() + 1;
-        // let seq_num = random::<u32>();
-        // let mut packet = TcpHeader::new(dst_port, src_port, seq_num, tsm.local_window_size as u16);
-        // packet.ack = true;
-        // packet.syn = true;
-        // packet.acknowledgment_number = ack_num;
-        // let payload = [];
-        // packet.checksum = packet
-        //     .calc_checksum_ipv4_raw(ip_header.destination(), ip_header.source(), &payload)
-        //     .unwrap();
-        // let mut buf = Vec::new();
-        // let len = packet.write(&mut buf).unwrap();
-    }
 }
 
 #[async_trait]
@@ -323,9 +354,9 @@ impl From<SynSent> for Established {
     }
 }
 
-impl From<Listen> for SynReceive {
+impl From<Listen> for SynReceived {
     fn from(listen: Listen) -> Self {
-        SynReceive {}
+        SynReceived {}
     }
 }
 
