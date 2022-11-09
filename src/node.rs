@@ -3,7 +3,9 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::socket::{TcpConn, TcpListener};
-use crate::protocol::tcp::{Tcp, TcpConnError, TcpHandler, TcpListenError, TCP_DEFAULT_WINDOW_SZ};
+use crate::protocol::tcp::{
+    Port, Tcp, TcpConnError, TcpHandler, TcpListenError, TCP_DEFAULT_WINDOW_SZ,
+};
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;

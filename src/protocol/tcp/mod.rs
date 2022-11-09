@@ -2,14 +2,13 @@
 #[allow(dead_code)]
 mod buf;
 pub mod socket;
-pub mod tsm;
 
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
 
-use crate::protocol::tcp::tsm::{Closed, Socket, SynSent, TcpState};
+use crate::protocol::tcp::socket::{Closed, Socket, SynSent, TcpState};
 use crate::route::PacketDecision::Drop;
 use crate::{net::Net, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
@@ -70,10 +69,10 @@ impl<const N: usize> Tcp<N> {
             AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
         })?;
 
-        // socket
-        //     .connect(dest_ip, port)
-        //     .await
-        //     .expect("TODO: panic message");
+        socket
+            .connect(dest_ip, port)
+            .await
+            .expect("TODO: panic message");
         let rec = socket.receiver.take().unwrap();
 
         // TODO: transition state into syn_sent here?
