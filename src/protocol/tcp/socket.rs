@@ -82,7 +82,7 @@ impl TcpListener {
     ///     // handle new conn...
     /// }
     /// ```
-    pub async fn accept(&self) -> Result<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ>, TcpAcceptError> {
+    pub async fn accept(&self) -> Result<TcpConn, TcpAcceptError> {
         // TODO: create a new Tcp socket and state machine. (Keep the listener
         // socket, open a new socket to handle this client).
         //
