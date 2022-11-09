@@ -34,12 +34,12 @@ pub struct IPv4SendCmd {
     payload: String,
 }
 
-pub struct Cli<const TcpWindowSize: usize> {
-    node: Arc<Node<TcpWindowSize>>,
+pub struct Cli<const TCP_WINDOW_SZ: usize> {
+    node: Arc<Node<TCP_WINDOW_SZ>>,
 }
 
-impl<const TcpWindowSize: usize> Cli<TcpWindowSize> {
-    pub fn new(node: Arc<Node<TcpWindowSize>>) -> Self {
+impl<const TCP_WINDOW_SZ: usize> Cli<TCP_WINDOW_SZ> {
+    pub fn new(node: Arc<Node<TCP_WINDOW_SZ>>) -> Self {
         Self { node }
     }
 
@@ -129,22 +129,22 @@ impl<const TcpWindowSize: usize> Cli<TcpWindowSize> {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }
-            Command::SendTCPPacket(cmd) => {
+            Command::SendTCPPacket(_cmd) => {
                 todo!() //TODO implement
             }
-            Command::OpenSocket(port) => {
+            Command::OpenSocket(_port) => {
                 todo!()
             }
-            Command::ConnectSocket(ip, port) => {
+            Command::ConnectSocket(_ip, _port) => {
                 todo!() //TODO implement
             }
-            Command::ReadSocket(cmd) => {
+            Command::ReadSocket(_cmd) => {
                 todo!() //TODO implement
             }
-            Command::Shutdown(socket, option) => {
+            Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
             }
-            Command::Close(socket) => {
+            Command::Close(_socket) => {
                 todo!() //TODO implement
             }
             Command::Quit => {

@@ -3,10 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ip::cli;
 use ip::node::NodeBuilder;
-use ip::protocol::tcp::TcpHandler;
 use ip::Args;
-use ip::{cli, protocol::tcp::Tcp};
 
 use cli::Cli;
 use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};

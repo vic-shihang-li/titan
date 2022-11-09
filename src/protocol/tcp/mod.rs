@@ -164,18 +164,18 @@ impl<const N: usize> SocketBuilder<N> {
     }
 }
 
-pub struct TcpHandler<const WindowSize: usize> {
-    tcp: Arc<Tcp<WindowSize>>,
+pub struct TcpHandler<const WINDOW_SZ: usize> {
+    tcp: Arc<Tcp<WINDOW_SZ>>,
 }
 
-impl<const WindowSize: usize> TcpHandler<WindowSize> {
-    pub fn new(tcp: Arc<Tcp<WindowSize>>) -> Self {
+impl<const WINDOW_SZ: usize> TcpHandler<WINDOW_SZ> {
+    pub fn new(tcp: Arc<Tcp<WINDOW_SZ>>) -> Self {
         Self { tcp }
     }
 }
 
 #[async_trait]
-impl<const WindowSize: usize> ProtocolHandler for TcpHandler<WindowSize> {
+impl<const WINDOW_SZ: usize> ProtocolHandler for TcpHandler<WINDOW_SZ> {
     async fn handle_packet<'a>(
         &self,
         header: &Ipv4HeaderSlice<'a>,

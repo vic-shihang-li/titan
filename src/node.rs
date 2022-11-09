@@ -93,14 +93,14 @@ impl<'a> NodeBuilder<'a> {
     }
 }
 
-pub struct Node<const TcpWindowSize: usize> {
+pub struct Node<const TCP_WINDOW_SZ: usize> {
     net: Arc<Net>,
-    tcp: Arc<Tcp<TcpWindowSize>>,
+    tcp: Arc<Tcp<TCP_WINDOW_SZ>>,
     router: Arc<Router>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
-impl<const TcpWindowSize: usize> Node<TcpWindowSize> {
+impl<const TCP_WINDOW_SZ: usize> Node<TCP_WINDOW_SZ> {
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_to<'a>(&'a self, next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
         self.net.find_link_to(next_hop).await
@@ -180,7 +180,7 @@ impl<const TcpWindowSize: usize> Node<TcpWindowSize> {
     // }
 }
 
-impl<const TcpWindowSize: usize> Node<TcpWindowSize> {
+impl<const TCP_WINDOW_SZ: usize> Node<TCP_WINDOW_SZ> {
     async fn handle_packet_bytes(&self, bytes: &[u8]) {
         match SlicedPacket::from_ip(bytes) {
             Err(value) => eprintln!("Err {:?}", value),
