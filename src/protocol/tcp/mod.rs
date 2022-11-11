@@ -106,10 +106,6 @@ pub struct SocketId {
 }
 
 impl SocketId {
-    pub fn new(remote: (Ipv4Addr, Port), local_port: Port) -> Self {
-        Self { remote, local_port }
-    }
-
     pub fn build() -> SocketIdBuilder {
         SocketIdBuilder::default()
     }
