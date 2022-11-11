@@ -255,10 +255,8 @@ mod tests {
     }
 
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {
-        let tcp_stack = Arc::new(Tcp::default());
         let node = Arc::new(
             NodeBuilder::new(&cfg)
-                .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
                 .build()
                 .await,
         );

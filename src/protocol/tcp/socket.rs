@@ -476,7 +476,7 @@ impl Socket {
                         .await.unwrap()
                         .into()
                 } else {
-                    s.into()
+                    panic!("Should ignore receive non-syn packet under listen state");
                 }
             }
             TcpState::SynSent(s) => s.establish(tcp_header).await.unwrap().into(),

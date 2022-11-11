@@ -559,7 +559,7 @@ mod tests {
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
             let mut buf = make_default_recvbuf(start_seq_no);
-            assert!(buf.write_remaining_size() == DEFAULT_BUF_SZ);
+            assert!(buf.write_remaining_size() == TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
                 (start_seq_no, start_seq_no + buf.write_remaining_size())
@@ -576,7 +576,7 @@ mod tests {
                         assert_eq!(buf.expected_next(), start_seq_no + total);
                         assert_eq!(
                             buf.write_range(),
-                            (start_seq_no + total, start_seq_no + DEFAULT_BUF_SZ)
+                            (start_seq_no + total, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
                         );
                     }
                     Err(_) => {
@@ -588,12 +588,12 @@ mod tests {
                 }
             }
 
-            assert_eq!(total, DEFAULT_BUF_SZ);
+            assert_eq!(total, TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(buf.write_remaining_size(), 0);
-            assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ);
+            assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + DEFAULT_BUF_SZ, start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + TCP_DEFAULT_WINDOW_SZ, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
         }
 
@@ -606,10 +606,10 @@ mod tests {
             fill_buf(&mut buf, start_seq_no, &data);
 
             assert_eq!(buf.write_remaining_size(), 0);
-            assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ);
+            assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + DEFAULT_BUF_SZ, start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + TCP_DEFAULT_WINDOW_SZ, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
 
             let mut total_consumed = 0;
@@ -622,18 +622,18 @@ mod tests {
                 assert_eq!(&consumed, &data);
                 total_consumed += consumed.len();
 
-                assert_eq!(buf.read_remaining_size(), DEFAULT_BUF_SZ - total_consumed);
+                assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ - total_consumed);
                 assert_eq!(buf.write_remaining_size(), total_consumed);
                 assert_eq!(
                     buf.write_range(),
                     (
-                        start_seq_no + DEFAULT_BUF_SZ,
-                        start_seq_no + DEFAULT_BUF_SZ + total_consumed
+                        start_seq_no + TCP_DEFAULT_WINDOW_SZ,
+                        start_seq_no + TCP_DEFAULT_WINDOW_SZ + total_consumed
                     )
                 );
             }
 
-            assert_eq!(total_consumed, DEFAULT_BUF_SZ);
+            assert_eq!(total_consumed, TCP_DEFAULT_WINDOW_SZ);
         }
 
         #[test]
@@ -706,11 +706,11 @@ mod tests {
 
             buf.write(start_seq_no, &data).unwrap();
             assert!(!buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
 
             //      |-------------WRITEABLE------------|
@@ -720,11 +720,11 @@ mod tests {
 
             buf.write(start_seq_no + 100, &data).unwrap();
             assert!(buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
 
             //      |-------------WRITEABLE------------|
@@ -734,11 +734,11 @@ mod tests {
 
             buf.write(start_seq_no + 135, &data).unwrap();
             assert!(buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), DEFAULT_BUF_SZ - data.len());
+            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
 
             //            |---------WRITEABLE----------|
@@ -752,13 +752,13 @@ mod tests {
             assert_eq!(buf.expected_next(), 63);
             assert_eq!(
                 buf.write_remaining_size(),
-                DEFAULT_BUF_SZ - data.len() - payload.len()
+                TCP_DEFAULT_WINDOW_SZ - data.len() - payload.len()
             );
             assert_eq!(
                 buf.write_range(),
                 (
                     start_seq_no + data.len() + payload.len(),
-                    start_seq_no + DEFAULT_BUF_SZ
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
                 )
             );
 
@@ -773,7 +773,7 @@ mod tests {
             assert_eq!(buf.expected_next(), 108);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + 108, start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + 108, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
 
             //                                    |-WT-|
@@ -787,7 +787,7 @@ mod tests {
             assert_eq!(buf.expected_next(), 208);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + 208, start_seq_no + DEFAULT_BUF_SZ)
+                (start_seq_no + 208, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
             );
         }
 
