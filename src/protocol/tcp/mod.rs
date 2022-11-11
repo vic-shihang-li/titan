@@ -18,9 +18,27 @@ use tokio::sync::RwLock;
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
 
+/// A tuple that uniquely identifies a remote location.
+#[derive(Debug)]
+pub struct Remote((Ipv4Addr, Port));
+
+impl Remote {
+    pub fn new(addr: Ipv4Addr, port: Port) -> Self {
+        Self((addr, port))
+    }
+
+    pub fn ip(&self) -> Ipv4Addr {
+        self.0 .0
+    }
+
+    pub fn port(&self) -> Port {
+        self.0 .1
+    }
+}
+
 #[derive(Debug)]
 pub enum TcpConnError {
-    PortOccupied(Port),
+    ConnectionExists(Remote),
 }
 
 #[derive(Debug)]
@@ -49,14 +67,14 @@ impl Tcp {
     }
 
     /// Attempts to connect to a host, establishing the client side of a TCP connection.
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<TcpConn, TcpConnError> {
+    pub async fn connect(&self, remote: Remote) -> Result<TcpConn, TcpConnError> {
         let mut sockets = self.sockets.write().await;
-        let socket = sockets.add_new_socket(port).map_err(|e| match e {
-            AddSocketError::PortOccupied => TcpConnError::PortOccupied(port),
+        let socket = sockets.add_new_socket(remote).map_err(|e| match e {
+            AddSocketError::ConnectionExists(sid) => TcpConnError::ConnectionExists(sid.remote()),
         })?;
 
         let on_connected = socket
-            .initiate_connection(dest_ip, port)
+            .initiate_connection()
             .await
             .expect("Failed to send SYN packet");
         drop(sockets);
@@ -70,26 +88,65 @@ impl Tcp {
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
         // TODO: create Tcp machine that starts with LISTEN state. Open listen socket.
         let mut sockets = self.sockets.write().await;
-        let socket = sockets.add_new_socket(Port(port)).map_err(|e| match e {
-            AddSocketError::PortOccupied => TcpListenError::PortOccupied(Port(port)),
-        })?;
+        let socket = sockets
+            .add_new_listen_socket(Port(port))
+            .map_err(|e| match e {
+                AddSocketError::ConnectionExists(sid) => {
+                    TcpListenError::PortOccupied(sid.local_port())
+                }
+            })?;
         todo!()
     }
 }
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
-pub struct SocketId(u16);
+pub struct SocketId {
+    remote: (Ipv4Addr, Port),
+    local_port: Port,
+}
+
+impl SocketId {
+    pub fn new(remote: (Ipv4Addr, Port), local_port: Port) -> Self {
+        Self { remote, local_port }
+    }
+
+    pub fn for_listen_socket(local_port: Port) -> Self {
+        Self {
+            remote: (Ipv4Addr::new(0, 0, 0, 0), Port(0)),
+            local_port,
+        }
+    }
+
+    pub fn remote(&self) -> Remote {
+        Remote::new(self.remote_ip(), self.remote_port())
+    }
+
+    pub fn remote_ip(&self) -> Ipv4Addr {
+        self.remote.0
+    }
+
+    pub fn remote_port(&self) -> Port {
+        self.remote.1
+    }
+
+    pub fn local_port(&self) -> Port {
+        self.local_port
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
+pub struct SocketDescriptor(u16);
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Port(u16);
 
 enum AddSocketError {
-    PortOccupied,
+    ConnectionExists(SocketId),
 }
 
 struct SocketTable {
-    socket_id_map: HashMap<SocketId, Port>,
-    socket_map: HashMap<Port, Socket>,
+    socket_id_map: HashMap<SocketDescriptor, SocketId>,
+    socket_map: HashMap<SocketId, Socket>,
     socket_builder: SocketBuilder,
 }
 
@@ -101,45 +158,71 @@ impl SocketTable {
             socket_map: HashMap::new(),
         }
     }
-    pub fn add_new_socket(&mut self, port: Port) -> Result<&mut Socket, AddSocketError> {
-        let socket = self.socket_builder.make_with_port(port);
+
+    pub fn add_new_socket(&mut self, remote: Remote) -> Result<&mut Socket, AddSocketError> {
+        let sock_id = self.socket_builder.make_socket_id(remote);
+        let (descriptor, socket) = self.socket_builder.build_with_id(sock_id);
+
+        self.insert(descriptor, socket)
+    }
+
+    pub fn add_new_listen_socket(
+        &mut self,
+        local_port: Port,
+    ) -> Result<&mut Socket, AddSocketError> {
+        let (descriptor, socket) = self
+            .socket_builder
+            .build_with_id(SocketId::for_listen_socket(local_port));
+
+        self.insert(descriptor, socket)
+    }
+
+    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket> {
+        self.socket_map.get(&id)
+    }
+
+    pub fn get_socket_by_descriptor(&self, descriptor: SocketDescriptor) -> Option<&Socket> {
+        self.socket_id_map
+            .get(&descriptor)
+            .and_then(|port| self.socket_map.get(port))
+    }
+
+    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket> {
+        self.socket_map.get_mut(&id)
+    }
+
+    pub fn get_mut_socket_by_descriptor(
+        &mut self,
+        descriptor: SocketDescriptor,
+    ) -> Option<&mut Socket> {
+        self.socket_id_map
+            .get(&descriptor)
+            .and_then(|port| self.socket_map.get_mut(port))
+    }
+
+    fn insert(
+        &mut self,
+        descriptor: SocketDescriptor,
+        socket: Socket,
+    ) -> Result<&mut Socket, AddSocketError> {
         let socket_id = socket.id();
 
         let sock_ref = self
             .socket_map
-            .try_insert(port, socket)
-            .map_err(|_| AddSocketError::PortOccupied)?;
+            .try_insert(socket_id, socket)
+            .map_err(|_| AddSocketError::ConnectionExists(socket_id))?;
 
         self.socket_id_map
-            .try_insert(socket_id, port)
-            .expect("Found duplicate socket ID");
+            .try_insert(descriptor, socket_id)
+            .expect("Found duplicate socket descriptor");
 
         Ok(sock_ref)
-    }
-
-    pub fn get_socket_by_port(&self, port: Port) -> Option<&Socket> {
-        self.socket_map.get(&port)
-    }
-
-    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket> {
-        self.socket_id_map
-            .get(&id)
-            .and_then(|port| self.socket_map.get(port))
-    }
-
-    pub fn get_mut_socket_by_port(&mut self, port: Port) -> Option<&mut Socket> {
-        self.socket_map.get_mut(&port)
-    }
-
-    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket> {
-        self.socket_id_map
-            .get(&id)
-            .and_then(|port| self.socket_map.get_mut(port))
     }
 }
 
 struct SocketBuilder {
-    next_socket_id: usize,
+    next_socket_descriptor: usize,
+    next_port: u16,
     router: Arc<Router>,
 }
 
@@ -147,15 +230,31 @@ impl SocketBuilder {
     fn new(router: Arc<Router>) -> Self {
         Self {
             router,
-            next_socket_id: 0,
+            next_port: 1024,
+            next_socket_descriptor: 0,
         }
     }
 
-    fn make_with_port(&mut self, port: Port) -> Socket {
-        let sid = SocketId(self.next_socket_id.try_into().expect("Socket ID overflow"));
-        let sock = Socket::new(sid, port, self.router.clone());
-        self.next_socket_id += 1;
-        sock
+    fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
+        let descriptor = self.make_socket_descriptor();
+        let sock = Socket::new(socket_id, self.router.clone());
+        (descriptor, sock)
+    }
+
+    fn make_socket_id(&mut self, remote: Remote) -> SocketId {
+        let port = self.next_port;
+        self.next_port += 1;
+        SocketId::new((remote.ip(), remote.port()), Port(port))
+    }
+
+    fn make_socket_descriptor(&mut self) -> SocketDescriptor {
+        let descriptor = SocketDescriptor(
+            self.next_socket_descriptor
+                .try_into()
+                .expect("Socket descriptor overflow"),
+        );
+        self.next_socket_descriptor += 1;
+        descriptor
     }
 }
 
@@ -180,7 +279,10 @@ impl ProtocolHandler for TcpHandler {
     ) {
         // Step 1: validate checksum
         let h = TcpHeaderSlice::from_slice(payload).unwrap();
-        let dst_port = Port(h.destination_port());
+        let sock_id = SocketId::new(
+            (header.source_addr(), Port(h.source_port())),
+            Port(h.destination_port()),
+        );
         let checksum = h.checksum();
         if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
             eprintln!("TCP checksum failed");
@@ -188,7 +290,7 @@ impl ProtocolHandler for TcpHandler {
 
         // Step 2: find the corresponding TCP socket
         let mut sockets = self.tcp.sockets.write().await;
-        let socket = sockets.get_mut_socket_by_port(dst_port).unwrap();
+        let socket = sockets.get_mut_socket_by_id(sock_id).unwrap();
         let tcp_payload = &payload[h.slice().len()..];
 
         // Step 3: let socket handle TCP packet

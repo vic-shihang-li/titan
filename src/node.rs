@@ -3,7 +3,7 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    Port, Tcp, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
+    Port, Remote, Tcp, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -166,8 +166,12 @@ impl Node {
         self.router.get_forwarding_table().await
     }
 
-    pub async fn connect(&self, dest_ip: Ipv4Addr, port: Port) -> Result<TcpConn, TcpConnError> {
-        self.tcp.connect(dest_ip, port).await
+    pub async fn connect(
+        &self,
+        dest_ip: Ipv4Addr,
+        dest_port: Port,
+    ) -> Result<TcpConn, TcpConnError> {
+        self.tcp.connect(Remote::new(dest_ip, dest_port)).await
     }
 
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {

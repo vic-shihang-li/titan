@@ -370,18 +370,16 @@ pub enum TcpConnectError {
 
 pub struct Socket {
     id: SocketId,
-    port: Port,
     state: Option<TcpState>,
     established_tx: Option<oneshot::Sender<TcpConn>>,
     established_rx: Option<oneshot::Receiver<TcpConn>>,
 }
 
 impl Socket {
-    pub fn new(id: SocketId, port: Port, router: Arc<Router>) -> Self {
+    pub fn new(id: SocketId, router: Arc<Router>) -> Self {
         let (established_tx, established_rx) = oneshot::channel();
         Self {
             id,
-            port,
             state: Some(TcpState::new(router)),
             established_tx: Some(established_tx),
             established_rx: Some(established_rx),
@@ -392,16 +390,30 @@ impl Socket {
         self.id
     }
 
+    pub fn local_port(&self) -> Port {
+        self.id.local_port()
+    }
+
+    pub fn remote_ip(&self) -> Ipv4Addr {
+        self.id.remote_ip()
+    }
+
+    pub fn remote_port(&self) -> Port {
+        self.id.remote_port()
+    }
+
+    pub fn remote_ip_port(&self) -> (Ipv4Addr, Port) {
+        (self.remote_ip(), self.remote_port())
+    }
+
     pub async fn initiate_connection(
         &mut self,
-        dst_addr: Ipv4Addr,
-        dst_port: Port,
     ) -> Result<oneshot::Receiver<TcpConn>, TcpConnectError> {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
                 self.state = Some(
-                    s.connect(self.port, (dst_addr, dst_port))
+                    s.connect(self.local_port(), self.remote_ip_port())
                         .await
                         .map_err(TcpConnectError::Transport)?
                         .into(),
@@ -422,7 +434,7 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
-                self.state = Some(s.listen(self.port).await.into());
+                self.state = Some(s.listen(self.local_port()).await.into());
                 Ok(self
                     .established_rx
                     .take()
