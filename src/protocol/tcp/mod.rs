@@ -110,6 +110,10 @@ impl SocketId {
         Self { remote, local_port }
     }
 
+    pub fn build() -> SocketIdBuilder {
+        SocketIdBuilder::default()
+    }
+
     pub fn for_listen_socket(local_port: Port) -> Self {
         Self {
             remote: (Ipv4Addr::new(0, 0, 0, 0), Port(0)),
@@ -134,11 +138,58 @@ impl SocketId {
     }
 }
 
+#[derive(Default)]
+pub struct SocketIdBuilder {
+    remote_ip: Option<Ipv4Addr>,
+    remote_port: Option<Port>,
+    local_port: Option<Port>,
+}
+
+#[derive(Debug)]
+pub enum BuildSocketIdError {
+    NoRemoteIp,
+    NoRemotePort,
+    NoLocalPort,
+}
+
+impl SocketIdBuilder {
+    fn with_remote_ip(&mut self, remote_ip: Ipv4Addr) -> &mut Self {
+        self.remote_ip = Some(remote_ip);
+        self
+    }
+
+    fn with_remote_port(&mut self, remote_port: Port) -> &mut Self {
+        self.remote_port = Some(remote_port);
+        self
+    }
+
+    fn with_local_port(&mut self, local_port: Port) -> &mut Self {
+        self.local_port = Some(local_port);
+        self
+    }
+
+    fn build(&self) -> Result<SocketId, BuildSocketIdError> {
+        Ok(SocketId {
+            remote: (
+                self.remote_ip.ok_or(BuildSocketIdError::NoRemoteIp)?,
+                self.remote_port.ok_or(BuildSocketIdError::NoRemotePort)?,
+            ),
+            local_port: self.local_port.ok_or(BuildSocketIdError::NoLocalPort)?,
+        })
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct SocketDescriptor(u16);
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Port(u16);
+
+impl From<u16> for Port {
+    fn from(p: u16) -> Self {
+        Port(p)
+    }
+}
 
 enum AddSocketError {
     ConnectionExists(SocketId),
@@ -242,9 +293,14 @@ impl SocketBuilder {
     }
 
     fn make_socket_id(&mut self, remote: Remote) -> SocketId {
-        let port = self.next_port;
+        let local_port = Port(self.next_port);
         self.next_port += 1;
-        SocketId::new((remote.ip(), remote.port()), Port(port))
+        SocketId::build()
+            .with_remote_ip(remote.ip())
+            .with_remote_port(remote.port())
+            .with_local_port(local_port)
+            .build()
+            .unwrap()
     }
 
     fn make_socket_descriptor(&mut self) -> SocketDescriptor {
@@ -279,10 +335,12 @@ impl ProtocolHandler for TcpHandler {
     ) {
         // Step 1: validate checksum
         let h = TcpHeaderSlice::from_slice(payload).unwrap();
-        let sock_id = SocketId::new(
-            (header.source_addr(), Port(h.source_port())),
-            Port(h.destination_port()),
-        );
+        let sock_id = SocketId::build()
+            .with_remote_ip(header.source_addr())
+            .with_remote_port(h.source_port().into())
+            .with_local_port(h.destination_port().into())
+            .build()
+            .unwrap();
         let checksum = h.checksum();
         if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
             eprintln!("TCP checksum failed");
