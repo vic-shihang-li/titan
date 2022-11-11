@@ -23,7 +23,9 @@ pub enum TcpConnError {
 }
 
 #[derive(Debug)]
-pub struct TcpListenError {}
+pub enum TcpListenError {
+    PortOccupied(Port),
+}
 
 #[derive(Debug)]
 pub struct TcpAcceptError {}
@@ -66,7 +68,10 @@ impl Tcp {
     /// Starts listening for incoming connections at a port. Opens a listener socket.
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
         // TODO: create Tcp machine that starts with LISTEN state. Open listen socket.
-
+        let mut sockets = self.sockets.write().await;
+        let socket = sockets.add_new_socket(Port(port)).map_err(|e| match e {
+            AddSocketError::PortOccupied => TcpListenError::PortOccupied(Port(port)),
+        })?;
         todo!()
     }
 }
@@ -227,7 +232,7 @@ mod tests {
                 let recv_ips = receiver_cfg.get_my_interface_ips();
                 recv_ips[0]
             };
-            let conn = node.connect(dest_ip, recv_listen_port).await.unwrap();
+            let conn = node.connect(dest_ip, Port(recv_listen_port)).await.unwrap();
             conn.send_all(payload.to_string().as_bytes()).await.unwrap();
         });
 
@@ -251,7 +256,7 @@ mod tests {
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {
         let tcp_stack = Arc::new(Tcp::default());
         let node = Arc::new(
-            NodeBuilder::new(&cfg, tcp_stack.clone())
+            NodeBuilder::new(&cfg)
                 .with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp_stack))
                 .build()
                 .await,
