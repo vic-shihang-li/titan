@@ -224,7 +224,7 @@ impl Listen {
 
         let reply_ip = ip_header.source_addr();
 
-        let ack_pkt = self.make_syn_ack_packet(&syn_packet);
+        let ack_pkt = self.make_syn_ack_packet(syn_packet);
 
         self.router
             .send(&ack_pkt, Protocol::Tcp, reply_ip)

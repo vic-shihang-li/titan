@@ -206,11 +206,8 @@ mod tests {
 
     use crate::{
         node::{Node, NodeBuilder},
-        protocol::Protocol,
         Args,
     };
-
-    use super::TcpHandler;
 
     #[tokio::test]
     #[ignore]
