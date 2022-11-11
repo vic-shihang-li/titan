@@ -77,7 +77,7 @@ impl TcpListener {
     /// Yields new client connections.
     ///
     /// To repeatedly accept new client connections:
-    /// ```
+    /// ```ignore
     /// while let Ok(conn) = listener.accept().await {
     ///     // handle new conn...
     /// }
@@ -140,7 +140,9 @@ impl From<Established> for TcpState {
 }
 
 impl From<Listen> for TcpState {
-    fn from(s: Listen) -> Self { Self::Listen(s) }
+    fn from(s: Listen) -> Self {
+        Self::Listen(s)
+    }
 }
 
 pub struct Closed {
@@ -473,7 +475,8 @@ impl Socket {
             TcpState::Listen(s) => {
                 if tcp_header.syn() {
                     s.handle_connection_request(ip_header, tcp_header)
-                        .await.unwrap()
+                        .await
+                        .unwrap()
                         .into()
                 } else {
                     panic!("Should ignore receive non-syn packet under listen state");
