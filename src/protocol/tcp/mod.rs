@@ -216,8 +216,10 @@ mod tests {
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
 
-        let send_cfg = crate::fixture::netlinks::abc::A.clone();
-        let recv_cfg = crate::fixture::netlinks::abc::B.clone();
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let send_cfg = abc_net.a.clone();
+        let recv_cfg = abc_net.b.clone();
+
         let payload = "hello world!";
         let recv_listen_port = 5656;
         let barr = Arc::new(Barrier::new(2));
@@ -255,11 +257,7 @@ mod tests {
     }
 
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {
-        let node = Arc::new(
-            NodeBuilder::new(&cfg)
-                .build()
-                .await,
-        );
+        let node = Arc::new(NodeBuilder::new(&cfg).build().await);
         let node_runner = node.clone();
         tokio::spawn(async move {
             node_runner.run().await;

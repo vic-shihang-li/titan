@@ -438,7 +438,8 @@ mod tests {
 
     #[tokio::test]
     async fn consume_packet_on_ip_match() {
-        let args = crate::fixture::netlinks::abc::A.clone();
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let args = abc_net.a;
         let my_ips = args.get_my_interface_ips();
         let r = make_mock_router_with_args(args).await;
 
@@ -517,8 +518,8 @@ mod tests {
     }
 
     async fn make_mock_router() -> Router {
-        let args = crate::fixture::netlinks::abc::A.clone();
-        make_mock_router_with_args(args).await
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        make_mock_router_with_args(abc_net.a).await
     }
 
     async fn make_mock_router_with_args(args: Args) -> Router {

@@ -129,7 +129,8 @@ mod tests {
 
     #[test]
     fn parse_link_file() {
-        let args = crate::fixture::netlinks::abc::B.clone();
+        let abc_net = crate::fixture::netlinks::abc::load();
+        let args = abc_net.b;
 
         assert_eq!(
             args,

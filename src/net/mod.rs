@@ -90,7 +90,9 @@ impl Net {
         let udp_socket = Arc::new(
             UdpSocket::bind(localhost_with_port(args.host_port))
                 .await
-                .expect("Failed to bind to this router's port"),
+                .expect(
+                    format!("Failed to bind to this router's port {}", args.host_port).as_str(),
+                ),
         );
 
         let links = Links::new(
