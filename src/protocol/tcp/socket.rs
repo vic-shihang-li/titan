@@ -105,6 +105,7 @@ pub enum TcpState {
     SynSent(SynSent),
     SynReceived(SynReceived),
     Established(Established),
+    Listen(Listen),
     // TODO: add more state variants
 }
 
@@ -136,6 +137,10 @@ impl From<Established> for TcpState {
     fn from(s: Established) -> Self {
         Self::Established(s)
     }
+}
+
+impl From<Listen> for TcpState {
+    fn from(s: Listen) -> Self { Self::Listen(s) }
 }
 
 pub struct Closed {
@@ -210,8 +215,8 @@ pub struct Listen {
 impl Listen {
     pub async fn handle_connection_request<'a>(
         &self,
-        ip_header: Ipv4HeaderSlice<'a>,
-        syn_packet: TcpHeaderSlice<'a>,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        syn_packet: &TcpHeaderSlice<'a>,
     ) -> Result<SynReceived, TransportError> {
         assert!(syn_packet.syn());
 
@@ -411,6 +416,23 @@ impl Socket {
         }
     }
 
+    pub async fn listen(&mut self) -> Result<oneshot::Receiver<TcpConn>, TcpConnectError> {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Closed(s) => {
+                self.state = Some(s.listen(self.port).await.into());
+                Ok(self
+                    .established_rx
+                    .take()
+                    .expect("Cannot listen multiple times"))
+            }
+            _ => {
+                self.state = Some(state);
+                Err(TcpConnectError::AlreadyConnected)
+            }
+        }
+    }
+
     pub async fn handle_packet<'a>(
         &mut self,
         ip_header: &Ipv4HeaderSlice<'a>,
@@ -447,6 +469,15 @@ impl Socket {
         self.state = Some(match state {
             TcpState::Closed(s) => {
                 panic!("Should not receive packet under closed state");
+            }
+            TcpState::Listen(s) => {
+                if tcp_header.syn() {
+                    s.handle_connection_request(ip_header, tcp_header)
+                        .await.unwrap()
+                        .into()
+                } else {
+                    s.into()
+                }
             }
             TcpState::SynSent(s) => s.establish(tcp_header).await.unwrap().into(),
             TcpState::SynReceived(s) => s.establish(tcp_header).await.into(),
