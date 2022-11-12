@@ -424,7 +424,7 @@ mod tests {
         let receiver = tokio::spawn(async move {
             let node = create_and_start_node(recv_cfg).await;
 
-            let listener = node.listen(recv_listen_port).await.unwrap();
+            let mut listener = node.listen(recv_listen_port).await.unwrap();
             let conn = listener.accept().await.unwrap();
 
             barr.wait().await;
