@@ -232,9 +232,16 @@ impl SocketTable {
     pub fn add_new_syn_recvd_socket(
         &mut self,
         remote: Remote,
+        local_port: Port,
         syn_recvd_state: SynReceived,
     ) -> Result<&mut Socket, AddSocketError> {
-        let sock_id = self.socket_builder.make_socket_id(remote);
+        let sock_id = SocketId::build()
+            .with_remote_ip(remote.ip())
+            .with_remote_port(remote.port())
+            .with_local_port(local_port)
+            .build()
+            .unwrap();
+
         let (descriptor, socket) = self
             .socket_builder
             .build_with_id_state(sock_id, syn_recvd_state.into());
@@ -263,6 +270,11 @@ impl SocketTable {
         self.socket_id_map
             .get(&descriptor)
             .and_then(|port| self.socket_map.get_mut(port))
+    }
+
+    pub fn get_mut_listener_socket(&mut self, port: Port) -> Option<&mut Socket> {
+        let id = SocketId::for_listen_socket(port);
+        self.get_mut_socket_by_id(id)
     }
 
     fn insert(
@@ -352,31 +364,53 @@ impl TcpHandler {
 impl ProtocolHandler for TcpHandler {
     async fn handle_packet<'a>(
         &self,
-        header: &Ipv4HeaderSlice<'a>,
+        ip_header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         _router: &Router,
         _net: &Net,
     ) {
         // Step 1: validate checksum
-        let h = TcpHeaderSlice::from_slice(payload).unwrap();
+        let tcp_header = TcpHeaderSlice::from_slice(payload).expect("Failed to parse TCP Header");
+        log::debug!(
+            "Received packet tcp header len: {}, source: {}:{}, dest: {}:{}",
+            payload.len(),
+            ip_header.source_addr(),
+            tcp_header.source_port(),
+            ip_header.destination_addr(),
+            tcp_header.destination_port()
+        );
+
         let sock_id = SocketId::build()
-            .with_remote_ip(header.source_addr())
-            .with_remote_port(h.source_port().into())
-            .with_local_port(h.destination_port().into())
+            .with_remote_ip(ip_header.source_addr())
+            .with_remote_port(tcp_header.source_port().into())
+            .with_local_port(tcp_header.destination_port().into())
             .build()
             .unwrap();
-        let checksum = h.checksum();
-        if checksum != h.calc_checksum_ipv4(header, payload).unwrap() {
+        let checksum = tcp_header.checksum();
+        if checksum != tcp_header.calc_checksum_ipv4(ip_header, payload).unwrap() {
             eprintln!("TCP checksum failed");
+            // TODO: do not proceed if checksum fails
         }
+        let tcp_payload = &payload[tcp_header.slice().len()..];
 
-        // Step 2: find the corresponding TCP socket
         let mut sockets = self.tcp.sockets.write().await;
-        let socket = sockets.get_mut_socket_by_id(sock_id).unwrap();
-        let tcp_payload = &payload[h.slice().len()..];
-
-        // Step 3: let socket handle TCP packet
-        socket.handle_packet(header, &h, tcp_payload).await;
+        match sockets.get_mut_socket_by_id(sock_id) {
+            Some(socket) => {
+                socket
+                    .handle_packet(ip_header, &tcp_header, tcp_payload)
+                    .await;
+            }
+            None => match sockets.get_mut_listener_socket(tcp_header.destination_port().into()) {
+                Some(listener_sock) => {
+                    listener_sock
+                        .handle_packet(ip_header, &tcp_header, payload)
+                        .await
+                }
+                None => {
+                    println!("Received TCP packet that doesn't match with any connection")
+                }
+            },
+        };
     }
 }
 

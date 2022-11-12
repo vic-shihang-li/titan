@@ -256,6 +256,7 @@ impl Listen {
         socket_table
             .add_new_syn_recvd_socket(
                 Remote::new(syn_recvd.dest_ip, syn_recvd.dest_port),
+                self.port,
                 syn_recvd,
             )
             .expect("Failed to create new socket for new connection");
@@ -299,6 +300,7 @@ impl SynSent {
         mut self,
         syn_ack_packet: &TcpHeaderSlice<'a>,
     ) -> Result<Established, TransportError> {
+        assert!(syn_ack_packet.syn());
         assert!(syn_ack_packet.ack());
         let ack_pkt = self.make_ack_packet(syn_ack_packet);
 

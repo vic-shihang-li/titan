@@ -196,10 +196,13 @@ impl Node {
                 }
 
                 let ip = packet.ip.unwrap();
-                let payload = packet.payload;
 
                 match ip {
-                    InternetSlice::Ipv4(header, _) => self.handle_packet(&header, payload).await,
+                    InternetSlice::Ipv4(header, _) => {
+                        let ipv4_header_len = 20;
+                        let payload = &bytes[ipv4_header_len..];
+                        self.handle_packet(&header, payload).await;
+                    }
                     InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
                 };
             }
