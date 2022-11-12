@@ -158,7 +158,8 @@ impl Closed {
         self,
         src_port: Port,
         dest: (Ipv4Addr, Port),
-    ) -> Result<SynSent, TransportError> {
+    ) -> Result<(oneshot::Receiver<TcpConn>, SynSent), TransportError> {
+        let (established_tx, established_rx) = oneshot::channel();
         let (dest_ip, dest_port) = dest;
 
         let syn_pkt = self.make_syn_packet(src_port, dest_port);
@@ -167,13 +168,15 @@ impl Closed {
             .await
             .map_err(|_| TransportError::DestUnreachable(dest_ip))?;
 
-        Ok(SynSent {
+        let syn_sent = SynSent {
             src_port,
             dest_port,
             dest_ip,
+            established_tx,
             router: self.router,
             seq_no: self.seq_no,
-        })
+        };
+        Ok((established_rx, syn_sent))
     }
 
     pub fn listen(
@@ -288,6 +291,7 @@ pub struct SynSent {
     dest_ip: Ipv4Addr,
     dest_port: Port,
     router: Arc<Router>,
+    established_tx: oneshot::Sender<TcpConn>,
 }
 
 impl SynSent {
@@ -305,6 +309,15 @@ impl SynSent {
 
         let last_ack_no = syn_ack_packet.acknowledgment_number();
 
+        let conn = TcpConn::new(
+            self.seq_no.try_into().unwrap(),
+            last_ack_no.try_into().unwrap(),
+        );
+
+        self.established_tx
+            .send(conn.clone())
+            .expect("Failed to notify new connection established");
+
         Ok(Established {
             seq_no: self.seq_no,
             src_port: self.src_port,
@@ -312,10 +325,7 @@ impl SynSent {
             dest_port: self.dest_port,
             router: self.router,
             last_ack_no,
-            conn: TcpConn::new(
-                self.seq_no.try_into().unwrap(),
-                last_ack_no.try_into().unwrap(),
-            ),
+            conn,
         })
     }
 
@@ -398,8 +408,6 @@ pub enum TcpConnectError {
 pub struct Socket {
     id: SocketId,
     state: Option<TcpState>,
-    established_tx: Option<oneshot::Sender<TcpConn>>,
-    established_rx: Option<oneshot::Receiver<TcpConn>>,
 }
 
 #[derive(Debug)]
@@ -411,22 +419,16 @@ pub enum ListenTransitionError {
 
 impl Socket {
     pub fn new(id: SocketId, router: Arc<Router>) -> Self {
-        let (established_tx, established_rx) = oneshot::channel();
         Self {
             id,
             state: Some(TcpState::new(router)),
-            established_tx: Some(established_tx),
-            established_rx: Some(established_rx),
         }
     }
 
     pub fn with_state(id: SocketId, state: TcpState) -> Self {
-        let (established_tx, established_rx) = oneshot::channel();
         Self {
             id,
             state: Some(state),
-            established_tx: Some(established_tx),
-            established_rx: Some(established_rx),
         }
     }
 
@@ -476,16 +478,12 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
-                self.state = Some(
-                    s.connect(self.local_port(), self.remote_ip_port())
-                        .await
-                        .map_err(TcpConnectError::Transport)?
-                        .into(),
-                );
-                Ok(self
-                    .established_rx
-                    .take()
-                    .expect("Cannot initiate connection multiple times"))
+                let (established_rx, syn_sent) = s
+                    .connect(self.local_port(), self.remote_ip_port())
+                    .await
+                    .map_err(TcpConnectError::Transport)?;
+                self.state = Some(syn_sent.into());
+                Ok(established_rx)
             }
             _ => {
                 self.state = Some(state);
@@ -500,20 +498,7 @@ impl Socket {
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) {
-        let established_before = matches!(self.state, Some(TcpState::Established(_)));
-
         self.update_state(ip_header, tcp_header, payload).await;
-
-        if !established_before {
-            if let Some(TcpState::Established(s)) = &self.state {
-                // just established connection; send notification.
-                let tx = self
-                    .established_tx
-                    .take()
-                    .expect("Cannot establish connection multiple times");
-                tx.send(s.conn.clone()).ok();
-            }
-        }
     }
 
     async fn update_state<'a>(
