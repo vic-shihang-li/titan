@@ -16,7 +16,13 @@ use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
 use tokio::sync::RwLock;
 
+use self::socket::{SynReceived, TcpState};
+
 pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
+
+// The maximum number of TCP connections that are waiting to be accepted on a
+// listener port.
+pub const MAX_PENDING_TCP_CONNECTIONS: usize = 1024;
 
 /// A tuple that uniquely identifies a remote location.
 #[derive(Debug)]
@@ -44,12 +50,11 @@ pub enum TcpConnError {
 #[derive(Debug)]
 pub enum TcpListenError {
     PortOccupied(Port),
-    AlreadyConnected,
 }
 
 #[derive(Debug)]
 pub enum TcpAcceptError {
-    AcceptError,
+    ListenSocketClosed,
 }
 
 #[derive(Debug)]
@@ -60,12 +65,12 @@ pub struct TcpReadError {}
 
 /// A TCP stack.
 pub struct Tcp {
-    sockets: RwLock<SocketTable>,
+    sockets: Arc<RwLock<SocketTable>>,
 }
 
 impl Tcp {
     pub fn new(router: Arc<Router>) -> Self {
-        let sockets = RwLock::new(SocketTable::new(router));
+        let sockets = Arc::new(RwLock::new(SocketTable::new(router)));
         Tcp { sockets }
     }
 
@@ -89,18 +94,12 @@ impl Tcp {
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
+        let port = Port(port);
         let mut sockets = self.sockets.write().await;
-        let socket = sockets
-            .add_new_listen_socket(Port(port))
-            .map_err(|e| match e {
-                AddSocketError::ConnectionExists(sid) => {
-                    TcpListenError::PortOccupied(sid.local_port())
-                }
-            })?;
-        drop(sockets);
-        let socket_id = SocketId::for_listen_socket(Port(port));
-
-        todo!();
+        let socket = sockets.add_new_listen_socket(port).map_err(|e| match e {
+            AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
+        })?;
+        Ok(socket.listen(port, self.sockets.clone()).unwrap())
     }
 }
 
@@ -192,11 +191,12 @@ impl From<u16> for Port {
     }
 }
 
-enum AddSocketError {
+#[derive(Debug)]
+pub enum AddSocketError {
     ConnectionExists(SocketId),
 }
 
-struct SocketTable {
+pub struct SocketTable {
     socket_id_map: HashMap<SocketDescriptor, SocketId>,
     socket_map: HashMap<SocketId, Socket>,
     socket_builder: SocketBuilder,
@@ -225,6 +225,19 @@ impl SocketTable {
         let (descriptor, socket) = self
             .socket_builder
             .build_with_id(SocketId::for_listen_socket(local_port));
+
+        self.insert(descriptor, socket)
+    }
+
+    pub fn add_new_syn_recvd_socket(
+        &mut self,
+        remote: Remote,
+        syn_recvd_state: SynReceived,
+    ) -> Result<&mut Socket, AddSocketError> {
+        let sock_id = self.socket_builder.make_socket_id(remote);
+        let (descriptor, socket) = self
+            .socket_builder
+            .build_with_id_state(sock_id, syn_recvd_state.into());
 
         self.insert(descriptor, socket)
     }
@@ -290,6 +303,16 @@ impl SocketBuilder {
     fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
         let descriptor = self.make_socket_descriptor();
         let sock = Socket::new(socket_id, self.router.clone());
+        (descriptor, sock)
+    }
+
+    fn build_with_id_state(
+        &mut self,
+        socket_id: SocketId,
+        state: TcpState,
+    ) -> (SocketDescriptor, Socket) {
+        let descriptor = self.make_socket_descriptor();
+        let sock = Socket::with_state(socket_id, state);
         (descriptor, sock)
     }
 

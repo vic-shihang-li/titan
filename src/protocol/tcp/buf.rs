@@ -14,6 +14,7 @@ use super::TCP_DEFAULT_WINDOW_SZ;
 /// This struct does not know about usable window size, i.e. how much data can be transmitted. It is
 /// up to the caller to maintain usable window size, and advance the consumed portion upon
 /// acknowledgement.
+#[derive(Debug)]
 pub struct SendBuf<const N: usize> {
     // Index of the last unacked byte in the byte stream.
     // This is the "tail" of a producer-consumer buffer.
@@ -215,7 +216,7 @@ impl<const N: usize> SendBuf<N> {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 struct SegmentMeta {
     seq_no: usize,
     size: usize,
@@ -238,6 +239,7 @@ impl Ord for SegmentMeta {
 /// Upon receiving a packet, the payload can be written into this buffer via
 /// `RecvBuf::write()`. Additionally, window size can be probed by inspecting
 /// `RecvBuf::write_remaining_size()`.
+#[derive(Debug)]
 pub struct RecvBuf<const N: usize> {
     buf: [u8; N],
     tail: usize,
@@ -593,7 +595,10 @@ mod tests {
             assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + TCP_DEFAULT_WINDOW_SZ, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
+                (
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ,
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
+                )
             );
         }
 
@@ -609,7 +614,10 @@ mod tests {
             assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + TCP_DEFAULT_WINDOW_SZ, start_seq_no + TCP_DEFAULT_WINDOW_SZ)
+                (
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ,
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
+                )
             );
 
             let mut total_consumed = 0;
@@ -622,7 +630,10 @@ mod tests {
                 assert_eq!(&consumed, &data);
                 total_consumed += consumed.len();
 
-                assert_eq!(buf.read_remaining_size(), TCP_DEFAULT_WINDOW_SZ - total_consumed);
+                assert_eq!(
+                    buf.read_remaining_size(),
+                    TCP_DEFAULT_WINDOW_SZ - total_consumed
+                );
                 assert_eq!(buf.write_remaining_size(), total_consumed);
                 assert_eq!(
                     buf.write_range(),
@@ -706,11 +717,17 @@ mod tests {
 
             buf.write(start_seq_no, &data).unwrap();
             assert!(!buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
+            assert_eq!(
+                buf.write_remaining_size(),
+                TCP_DEFAULT_WINDOW_SZ - data.len()
+            );
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
+                (
+                    start_seq_no + data.len(),
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
+                )
             );
 
             //      |-------------WRITEABLE------------|
@@ -720,11 +737,17 @@ mod tests {
 
             buf.write(start_seq_no + 100, &data).unwrap();
             assert!(buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
+            assert_eq!(
+                buf.write_remaining_size(),
+                TCP_DEFAULT_WINDOW_SZ - data.len()
+            );
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
+                (
+                    start_seq_no + data.len(),
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
+                )
             );
 
             //      |-------------WRITEABLE------------|
@@ -734,11 +757,17 @@ mod tests {
 
             buf.write(start_seq_no + 135, &data).unwrap();
             assert!(buf.has_early_arrival());
-            assert_eq!(buf.write_remaining_size(), TCP_DEFAULT_WINDOW_SZ - data.len());
+            assert_eq!(
+                buf.write_remaining_size(),
+                TCP_DEFAULT_WINDOW_SZ - data.len()
+            );
             assert_eq!(buf.expected_next(), 8);
             assert_eq!(
                 buf.write_range(),
-                (start_seq_no + data.len(), start_seq_no + TCP_DEFAULT_WINDOW_SZ)
+                (
+                    start_seq_no + data.len(),
+                    start_seq_no + TCP_DEFAULT_WINDOW_SZ
+                )
             );
 
             //            |---------WRITEABLE----------|

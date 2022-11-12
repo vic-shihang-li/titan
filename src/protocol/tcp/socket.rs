@@ -1,21 +1,23 @@
-use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSendError};
+use crate::protocol::tcp::{Remote, TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc::{self, channel};
+use tokio::sync::{oneshot, RwLock};
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, SocketId, TCP_DEFAULT_WINDOW_SZ};
+use super::{Port, SocketId, SocketTable, TCP_DEFAULT_WINDOW_SZ};
 
+#[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
     send_buf: SendBuf<N>,
     recv_buf: RecvBuf<N>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TcpConn {
     inner: Arc<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ>>,
 }
@@ -62,28 +64,31 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 }
 
-
 pub struct TcpListener {
-    receiver: oneshot::Receiver<TcpConn>,
+    receiver: mpsc::Receiver<TcpConn>,
 }
 
 impl TcpListener {
     /// Creates a new TcpListener.
     ///
     /// The listener can be used to accept incoming connections
-    pub fn new(receiver: oneshot::Receiver<TcpConn>) -> Self {
+    pub fn new(receiver: mpsc::Receiver<TcpConn>) -> Self {
         Self { receiver }
     }
     /// Yields new client connections.
     ///
     /// To repeatedly accept new client connections:
     /// ```ignore
+    /// let mut listener = node.listen(5353).unwrap();
     /// while let Ok(conn) = listener.accept().await {
     ///     // handle new conn...
     /// }
     /// ```
-    pub async fn accept(&self) -> Result<TcpConn, TcpAcceptError> {
-        todo!();
+    pub async fn accept(&mut self) -> Result<TcpConn, TcpAcceptError> {
+        self.receiver
+            .recv()
+            .await
+            .ok_or(TcpAcceptError::ListenSocketClosed)
     }
 }
 
@@ -171,6 +176,21 @@ impl Closed {
         })
     }
 
+    pub fn listen(
+        self,
+        port: Port,
+        socket_table: Arc<RwLock<SocketTable>>,
+        tx: mpsc::Sender<TcpConn>,
+    ) -> Listen {
+        Listen {
+            port,
+            seq_no: self.seq_no,
+            router: self.router,
+            new_conn_tx: tx,
+            socket_table,
+        }
+    }
+
     fn make_syn_packet(&self, src_port: Port, dest_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -195,14 +215,20 @@ pub struct Listen {
     port: Port,
     seq_no: u32,
     router: Arc<Router>,
+    // Notifies when new connections are established with a new TcpConn.
+    // The TcpListener has the receiving end of this channel.
+    new_conn_tx: mpsc::Sender<TcpConn>,
+    // An Arc of the socket table.
+    // Used to create new sockets when attempting to establish a new connection.
+    socket_table: Arc<RwLock<SocketTable>>,
 }
 
 impl Listen {
-    pub async fn handle_connection_request<'a>(
+    pub async fn syn_received<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         syn_packet: &TcpHeaderSlice<'a>,
-    ) -> Result<SynReceived, TransportError> {
+    ) -> Result<(), TransportError> {
         assert!(syn_packet.syn());
 
         let reply_ip = ip_header.source_addr();
@@ -214,13 +240,24 @@ impl Listen {
             .await
             .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
 
-        Ok(SynReceived {
-            seq_no: self.seq_no.clone(),
-            src_port: self.port.clone(),
-            dest_ip: ip_header.source_addr().clone(),
-            dest_port: Port(syn_packet.source_port().clone()),
+        let syn_recvd = SynReceived {
+            seq_no: self.seq_no,
+            src_port: self.port,
+            dest_ip: ip_header.source_addr(),
+            dest_port: Port(syn_packet.source_port()),
             router: self.router.clone(),
-        })
+            new_conn_tx: self.new_conn_tx.clone(),
+        };
+
+        let mut socket_table = self.socket_table.write().await;
+        socket_table
+            .add_new_syn_recvd_socket(
+                Remote::new(syn_recvd.dest_ip, syn_recvd.dest_port),
+                syn_recvd,
+            )
+            .expect("Failed to create new socket for new connection");
+
+        Ok(())
     }
 
     fn make_syn_ack_packet<'a>(&self, syn_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -312,6 +349,7 @@ pub struct SynReceived {
     dest_ip: Ipv4Addr,
     dest_port: Port,
     router: Arc<Router>,
+    new_conn_tx: mpsc::Sender<TcpConn>,
 }
 
 impl SynReceived {
@@ -319,6 +357,15 @@ impl SynReceived {
         assert!(ack_packet.ack());
 
         let last_ack_no = ack_packet.acknowledgment_number();
+        let conn = TcpConn::new(
+            self.seq_no.try_into().unwrap(),
+            last_ack_no.try_into().unwrap(),
+        );
+
+        self.new_conn_tx
+            .send(conn.clone())
+            .await
+            .expect("TcpListener not notified");
 
         Established {
             seq_no: self.seq_no,
@@ -327,10 +374,7 @@ impl SynReceived {
             dest_port: self.dest_port,
             router: self.router,
             last_ack_no,
-            conn: TcpConn::new(
-                self.seq_no.try_into().unwrap(),
-                last_ack_no.try_into().unwrap(),
-            ),
+            conn,
         }
     }
 }
@@ -356,7 +400,13 @@ pub struct Socket {
     state: Option<TcpState>,
     established_tx: Option<oneshot::Sender<TcpConn>>,
     established_rx: Option<oneshot::Receiver<TcpConn>>,
-    listener_tx: Option<oneshot::Sender<TcpConn>>,
+}
+
+#[derive(Debug)]
+pub enum ListenTransitionError {
+    // Errs when attempting to transition into Listen state from a state that's
+    // not Closed.
+    NotFromClosed,
 }
 
 impl Socket {
@@ -367,18 +417,36 @@ impl Socket {
             state: Some(TcpState::new(router)),
             established_tx: Some(established_tx),
             established_rx: Some(established_rx),
-            listener_tx: None,
         }
     }
 
-    pub fn new_listener(id: SocketId, router: Arc<Router>, sender: oneshot::Sender<TcpConn>) -> Self {
+    pub fn with_state(id: SocketId, state: TcpState) -> Self {
         let (established_tx, established_rx) = oneshot::channel();
         Self {
             id,
-            state: Some(TcpState::new(router)),
+            state: Some(state),
             established_tx: Some(established_tx),
             established_rx: Some(established_rx),
-            listener_tx: Some(sender),
+        }
+    }
+
+    pub fn listen(
+        &mut self,
+        port: Port,
+        socket_table: Arc<RwLock<SocketTable>>,
+    ) -> Result<TcpListener, ListenTransitionError> {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Closed(s) => {
+                let (new_conn_tx, new_conn_rx) = channel(1024);
+                let listener = TcpListener::new(new_conn_rx);
+                self.state = Some(s.listen(port, socket_table, new_conn_tx).into());
+                Ok(listener)
+            }
+            _ => {
+                self.state = Some(state);
+                Err(ListenTransitionError::NotFromClosed)
+            }
         }
     }
 
@@ -465,10 +533,9 @@ impl Socket {
             }
             TcpState::Listen(s) => {
                 if tcp_header.syn() {
-                    s.handle_connection_request(ip_header, tcp_header)
-                        .await
-                        .unwrap()
-                        .into()
+                    s.syn_received(ip_header, tcp_header).await.unwrap();
+                    // Listen socket remains in Listen state
+                    s.into()
                 } else {
                     eprintln!("Should ignore receive non-syn packet under listen state");
                     TcpState::Listen(s)
