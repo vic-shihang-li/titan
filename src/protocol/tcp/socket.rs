@@ -6,10 +6,10 @@ use rand::{thread_rng, Rng};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::oneshot;
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, SocketId, SocketTable, TCP_DEFAULT_WINDOW_SZ};
+use super::{Port, SocketId, TCP_DEFAULT_WINDOW_SZ};
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
@@ -179,18 +179,12 @@ impl Closed {
         Ok((established_rx, syn_sent))
     }
 
-    pub fn listen(
-        self,
-        port: Port,
-        socket_table: Arc<RwLock<SocketTable>>,
-        tx: mpsc::Sender<TcpConn>,
-    ) -> Listen {
+    pub fn listen(self, port: Port, tx: mpsc::Sender<TcpConn>) -> Listen {
         Listen {
             port,
             seq_no: self.seq_no,
             router: self.router,
             new_conn_tx: tx,
-            socket_table,
         }
     }
 
@@ -221,9 +215,6 @@ pub struct Listen {
     // Notifies when new connections are established with a new TcpConn.
     // The TcpListener has the receiving end of this channel.
     new_conn_tx: mpsc::Sender<TcpConn>,
-    // An Arc of the socket table.
-    // Used to create new sockets when attempting to establish a new connection.
-    socket_table: Arc<RwLock<SocketTable>>,
 }
 
 impl Listen {
@@ -429,17 +420,13 @@ impl Socket {
         }
     }
 
-    pub fn listen(
-        &mut self,
-        port: Port,
-        socket_table: Arc<RwLock<SocketTable>>,
-    ) -> Result<TcpListener, ListenTransitionError> {
+    pub fn listen(&mut self, port: Port) -> Result<TcpListener, ListenTransitionError> {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
                 let (new_conn_tx, new_conn_rx) = channel(1024);
                 let listener = TcpListener::new(new_conn_rx);
-                self.state = Some(s.listen(port, socket_table, new_conn_tx).into());
+                self.state = Some(s.listen(port, new_conn_tx).into());
                 Ok(listener)
             }
             _ => {

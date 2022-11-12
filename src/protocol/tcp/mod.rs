@@ -66,12 +66,12 @@ pub struct TcpReadError {}
 
 /// A TCP stack.
 pub struct Tcp {
-    sockets: Arc<RwLock<SocketTable>>,
+    sockets: RwLock<SocketTable>,
 }
 
 impl Tcp {
     pub fn new(router: Arc<Router>) -> Self {
-        let sockets = Arc::new(RwLock::new(SocketTable::new(router)));
+        let sockets = RwLock::new(SocketTable::new(router));
         Tcp { sockets }
     }
 
@@ -100,7 +100,7 @@ impl Tcp {
         let socket = sockets.add_new_listen_socket(port).map_err(|e| match e {
             AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
         })?;
-        Ok(socket.listen(port, self.sockets.clone()).unwrap())
+        Ok(socket.listen(port).unwrap())
     }
 }
 
@@ -444,7 +444,6 @@ mod tests {
     };
 
     #[tokio::test]
-    #[ignore]
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
 
@@ -468,7 +467,7 @@ mod tests {
                 recv_ips[0]
             };
             let conn = node.connect(dest_ip, Port(recv_listen_port)).await.unwrap();
-            // conn.send_all(payload.to_string().as_bytes()).await.unwrap();
+            conn.send_all(payload.to_string().as_bytes()).await.unwrap();
         });
 
         let receiver = tokio::spawn(async move {
@@ -479,9 +478,9 @@ mod tests {
 
             let conn = listener.accept().await.unwrap();
 
-            // let mut buf = [0; 12];
-            // conn.read_all(&mut buf).await.unwrap();
-            // assert_eq!(String::from_utf8(buf.into()).unwrap(), payload.to_string());
+            let mut buf = [0; 12];
+            conn.read_all(&mut buf).await.unwrap();
+            assert_eq!(String::from_utf8(buf.into()).unwrap(), payload.to_string());
         });
 
         sender.await.unwrap();
