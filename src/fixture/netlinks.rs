@@ -1,8 +1,9 @@
 use crate::Args;
-use lazy_static::lazy_static;
 
 pub mod abc {
     use rand::{thread_rng, Rng};
+
+    use crate::net::LinkDefinition;
 
     use super::*;
 
@@ -21,12 +22,45 @@ pub mod abc {
             }
         }
 
-        fn into_shuffled(mut self) -> ABCNet {
+        fn into_shuffled(self) -> ABCNet {
+            let mut args = [self.a, self.b, self.c];
+
+            Self::replace_ports(&mut args);
+
+            let mut args_iter = args.into_iter();
+            let (a, b, c) = (
+                args_iter.next().unwrap(),
+                args_iter.next().unwrap(),
+                args_iter.next().unwrap(),
+            );
+
+            ABCNet { a, b, c }
+        }
+
+        fn replace_ports(args: &mut [Args]) {
             let mut rng = thread_rng();
-            self.a.host_port = rng.gen_range(1024..65535);
-            self.b.host_port = rng.gen_range(1024..65535);
-            self.c.host_port = rng.gen_range(1024..65535);
-            self
+            let mut replacements = Vec::new();
+            for arg in args.iter_mut() {
+                let old = arg.host_port;
+                let new = rng.gen_range(1024..65535);
+                arg.host_port = new;
+                replacements.push((old, new));
+            }
+
+            for arg in args {
+                for mut link in &mut arg.links {
+                    Self::replace_link_ports(&mut link, &replacements);
+                }
+            }
+        }
+
+        fn replace_link_ports(link: &mut LinkDefinition, replacements: &[(u16, u16)]) {
+            for (old, new) in replacements {
+                if link.dest_port == *old {
+                    link.dest_port = *new;
+                    break;
+                }
+            }
         }
     }
 
