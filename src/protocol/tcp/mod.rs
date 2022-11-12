@@ -44,10 +44,13 @@ pub enum TcpConnError {
 #[derive(Debug)]
 pub enum TcpListenError {
     PortOccupied(Port),
+    AlreadyConnected,
 }
 
 #[derive(Debug)]
-pub struct TcpAcceptError {}
+pub enum TcpAcceptError {
+    AcceptError,
+}
 
 #[derive(Debug)]
 pub struct TcpSendError {}
@@ -86,7 +89,6 @@ impl Tcp {
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
     pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
-        // TODO: create Tcp machine that starts with LISTEN state. Open listen socket.
         let mut sockets = self.sockets.write().await;
         let socket = sockets
             .add_new_listen_socket(Port(port))
@@ -95,7 +97,10 @@ impl Tcp {
                     TcpListenError::PortOccupied(sid.local_port())
                 }
             })?;
-        todo!()
+        drop(sockets);
+        let socket_id = SocketId::for_listen_socket(Port(port));
+
+        todo!();
     }
 }
 

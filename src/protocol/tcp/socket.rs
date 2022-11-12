@@ -1,4 +1,4 @@
-use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
+use crate::protocol::tcp::{TcpAcceptError, TcpListenError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
@@ -40,11 +40,6 @@ impl TcpConn {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct TcpListener {
-    port: u16,
-}
-
 pub struct TcpMessage {
     header: TcpHeader,
     payload: Vec<u8>,
@@ -67,12 +62,17 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 }
 
+
+pub struct TcpListener {
+    receiver: oneshot::Receiver<TcpConn>,
+}
+
 impl TcpListener {
     /// Creates a new TcpListener.
     ///
     /// The listener can be used to accept incoming connections
-    pub fn new(port: u16) -> Self {
-        Self { port }
+    pub fn new(receiver: oneshot::Receiver<TcpConn>) -> Self {
+        Self { receiver }
     }
     /// Yields new client connections.
     ///
@@ -83,15 +83,7 @@ impl TcpListener {
     /// }
     /// ```
     pub async fn accept(&self) -> Result<TcpConn, TcpAcceptError> {
-        // TODO: create a new Tcp socket and state machine. (Keep the listener
-        // socket, open a new socket to handle this client).
-        //
-
-        // 1. The new Tcp state machine should transition to SYN_RECVD after
-        // replying syn+ack to client.
-        // 2. When Tcp handler receives client's ack packet (3rd step in
-        // handshake), the new Tcp state machine should transition to ESTABLISHED.
-        todo!()
+        todo!();
     }
 }
 
@@ -106,7 +98,6 @@ pub enum TcpState {
     SynReceived(SynReceived),
     Established(Established),
     Listen(Listen),
-    // TODO: add more state variants
 }
 
 impl TcpState {
@@ -180,14 +171,6 @@ impl Closed {
         })
     }
 
-    pub async fn listen(self, port: Port) -> Listen {
-        Listen {
-            port,
-            seq_no: self.seq_no,
-            router: self.router,
-        }
-    }
-
     fn make_syn_packet(&self, src_port: Port, dest_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -232,10 +215,10 @@ impl Listen {
             .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
 
         Ok(SynReceived {
-            seq_no: self.seq_no,
-            src_port: self.port,
-            dest_ip: ip_header.source_addr(),
-            dest_port: Port(syn_packet.source_port()),
+            seq_no: self.seq_no.clone(),
+            src_port: self.port.clone(),
+            dest_ip: ip_header.source_addr().clone(),
+            dest_port: Port(syn_packet.source_port().clone()),
             router: self.router.clone(),
         })
     }
@@ -373,6 +356,7 @@ pub struct Socket {
     state: Option<TcpState>,
     established_tx: Option<oneshot::Sender<TcpConn>>,
     established_rx: Option<oneshot::Receiver<TcpConn>>,
+    listener_tx: Option<oneshot::Sender<TcpConn>>,
 }
 
 impl Socket {
@@ -383,6 +367,18 @@ impl Socket {
             state: Some(TcpState::new(router)),
             established_tx: Some(established_tx),
             established_rx: Some(established_rx),
+            listener_tx: None,
+        }
+    }
+
+    pub fn new_listener(id: SocketId, router: Arc<Router>, sender: oneshot::Sender<TcpConn>) -> Self {
+        let (established_tx, established_rx) = oneshot::channel();
+        Self {
+            id,
+            state: Some(TcpState::new(router)),
+            established_tx: Some(established_tx),
+            established_rx: Some(established_rx),
+            listener_tx: Some(sender),
         }
     }
 
@@ -422,23 +418,6 @@ impl Socket {
                     .established_rx
                     .take()
                     .expect("Cannot initiate connection multiple times"))
-            }
-            _ => {
-                self.state = Some(state);
-                Err(TcpConnectError::AlreadyConnected)
-            }
-        }
-    }
-
-    pub async fn listen(&mut self) -> Result<oneshot::Receiver<TcpConn>, TcpConnectError> {
-        let state = self.state.take().unwrap();
-        match state {
-            TcpState::Closed(s) => {
-                self.state = Some(s.listen(self.local_port()).await.into());
-                Ok(self
-                    .established_rx
-                    .take()
-                    .expect("Cannot listen multiple times"))
             }
             _ => {
                 self.state = Some(state);
@@ -491,7 +470,8 @@ impl Socket {
                         .unwrap()
                         .into()
                 } else {
-                    panic!("Should ignore receive non-syn packet under listen state");
+                    eprintln!("Should ignore receive non-syn packet under listen state");
+                    TcpState::Listen(s)
                 }
             }
             TcpState::SynSent(s) => s.establish(tcp_header).await.unwrap().into(),
