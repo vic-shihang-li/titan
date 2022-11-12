@@ -1,4 +1,4 @@
-use crate::protocol::tcp::{Remote, TcpAcceptError, TcpReadError, TcpSendError};
+use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
@@ -231,7 +231,7 @@ impl Listen {
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         syn_packet: &TcpHeaderSlice<'a>,
-    ) -> Result<(), TransportError> {
+    ) -> Result<SynReceived, TransportError> {
         assert!(syn_packet.syn());
 
         let reply_ip = ip_header.source_addr();
@@ -252,16 +252,7 @@ impl Listen {
             new_conn_tx: self.new_conn_tx.clone(),
         };
 
-        let mut socket_table = self.socket_table.write().await;
-        socket_table
-            .add_new_syn_recvd_socket(
-                Remote::new(syn_recvd.dest_ip, syn_recvd.dest_port),
-                self.port,
-                syn_recvd,
-            )
-            .expect("Failed to create new socket for new connection");
-
-        Ok(())
+        Ok(syn_recvd)
     }
 
     fn make_syn_ack_packet<'a>(&self, syn_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -407,16 +398,20 @@ pub enum TcpConnectError {
     AlreadyConnected,
 }
 
-pub struct Socket {
-    id: SocketId,
-    state: Option<TcpState>,
-}
-
 #[derive(Debug)]
 pub enum ListenTransitionError {
     // Errs when attempting to transition into Listen state from a state that's
     // not Closed.
     NotFromClosed,
+}
+
+pub enum UpdateAction {
+    NewSynReceivedSocket(SynReceived),
+}
+
+pub struct Socket {
+    id: SocketId,
+    state: Option<TcpState>,
 }
 
 impl Socket {
@@ -499,40 +494,36 @@ impl Socket {
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) {
-        self.update_state(ip_header, tcp_header, payload).await;
-    }
-
-    async fn update_state<'a>(
-        &mut self,
-        ip_header: &Ipv4HeaderSlice<'a>,
-        tcp_header: &TcpHeaderSlice<'a>,
-        payload: &[u8],
-    ) {
+    ) -> Option<UpdateAction> {
         let state = self
             .state
             .take()
             .expect("A socket should not handle packets concurrently");
 
-        self.state = Some(match state {
+        let (next_state, action) = match state {
             TcpState::Closed(s) => {
                 panic!("Should not receive packet under closed state");
             }
             TcpState::Listen(s) => {
                 if tcp_header.syn() {
-                    s.syn_received(ip_header, tcp_header).await.unwrap();
-                    // Listen socket remains in Listen state
-                    s.into()
+                    let syn_recvd_state = s.syn_received(ip_header, tcp_header).await.unwrap();
+                    (
+                        s.into(),
+                        Some(UpdateAction::NewSynReceivedSocket(syn_recvd_state)),
+                    )
                 } else {
                     eprintln!("Should ignore receive non-syn packet under listen state");
-                    TcpState::Listen(s)
+                    (TcpState::Listen(s), None)
                 }
             }
-            TcpState::SynSent(s) => s.establish(tcp_header).await.unwrap().into(),
-            TcpState::SynReceived(s) => s.establish(tcp_header).await.into(),
+            TcpState::SynSent(s) => (s.establish(tcp_header).await.unwrap().into(), None),
+            TcpState::SynReceived(s) => (s.establish(tcp_header).await.into(), None),
             TcpState::Established(_) => {
                 todo!()
             }
-        });
+        };
+        self.state = Some(next_state);
+
+        action
     }
 }
