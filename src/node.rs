@@ -46,6 +46,12 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
+    /// Set how often routing entries are pruned.
+    pub fn with_prune_interval(&mut self, prune_interval: Duration) -> &mut Self {
+        self.prune_interval = prune_interval;
+        self
+    }
+
     /// Provide a handler for a protocol.
     ///
     /// Replaces any handler that is associated with the protocol.

@@ -439,11 +439,21 @@ mod tests {
     }
 
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {
-        let node = Arc::new(NodeBuilder::new(&cfg).build().await);
+        let node = Arc::new(
+            NodeBuilder::new(&cfg)
+                .with_rip_interval(Duration::from_millis(5))
+                .with_entry_max_age(Duration::from_millis(12))
+                .with_prune_interval(Duration::from_millis(1))
+                .with_protocol_handler(Protocol::Rip, RipHandler::default())
+                .build()
+                .await,
+        );
         let node_runner = node.clone();
         tokio::spawn(async move {
             node_runner.run().await;
         });
+        // Give nodes time to converge on routes
+        tokio::time::sleep(Duration::from_millis(100)).await;
         node
     }
 }
