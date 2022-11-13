@@ -7,3 +7,98 @@ pub async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f:
         tokio::time::sleep(interval).await;
     }
 }
+
+pub mod sync {
+    use std::sync::Arc;
+
+    use tokio::sync::broadcast;
+
+    /// A condition-variable like notification utility.
+    ///
+    /// ```ignore
+    /// use tokio::sync::Mutex;
+    /// use std::sync::Arc;
+    /// use crate::utils::sync::Notifier;
+    ///
+    /// struct State;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let notifier = Notifier::new();
+    ///     let notifier2 = notifier.clone();
+    ///
+    ///     let state = Arc::new(Mutex::new(State {}));
+    ///     let state2 = state.clone();
+    ///
+    ///     tokio::spawn(async move {
+    ///         let state_guard = state2.lock().await;
+    ///         // want to wait for some condition to become true...
+    ///
+    ///         // 1. Register interest
+    ///         let handle = notifier2.notified();
+    ///
+    ///         // 2. Release mutex (to let others in, so the waited condition
+    ///         // can become true)
+    ///         drop(state_guard);
+    ///
+    ///         // 3. Block until notified.
+    ///         handle.wait().await;
+    ///
+    ///
+    ///         // 4. Validate the waited condition has become true.
+    ///         // ...
+    ///     });
+    ///
+    ///     // perform some update on state
+    ///     notifier.notify_all();
+    /// }
+    ///
+    /// ```
+    #[derive(Clone, Debug)]
+    pub struct Notifier {
+        tx: broadcast::Sender<()>,
+        // Keep at least one Receiver alive to keep the broadcast channel alive.
+        _rx: Arc<broadcast::Receiver<()>>,
+    }
+
+    impl Default for Notifier {
+        fn default() -> Self {
+            let (tx, rx) = broadcast::channel(1024);
+            Self {
+                tx,
+                _rx: Arc::new(rx),
+            }
+        }
+    }
+
+    impl Notifier {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn notify_all(&self) {
+            self.tx.send(()).unwrap();
+        }
+
+        pub fn notified(&self) -> NotificationHandle {
+            let notifier = self.tx.subscribe();
+            NotificationHandle(notifier)
+        }
+    }
+
+    pub struct NotificationHandle(broadcast::Receiver<()>);
+
+    impl NotificationHandle {
+        pub async fn wait(mut self) {
+            loop {
+                match self.0.recv().await {
+                    Ok(_) => break,
+                    Err(e) => match e {
+                        broadcast::error::RecvError::Lagged(_) => break,
+                        _ => unreachable!(),
+                    },
+                }
+            }
+        }
+    }
+}
