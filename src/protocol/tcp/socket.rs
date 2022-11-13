@@ -334,7 +334,7 @@ impl Closed {
             dest_ip,
             established_tx,
             router: self.router,
-            seq_no: self.seq_no,
+            seq_no: self.seq_no + 1,
         };
         Ok((established_rx, syn_sent))
     }
@@ -395,7 +395,7 @@ impl Listen {
             .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
 
         let syn_recvd = SynReceived {
-            seq_no: self.seq_no,
+            seq_no: self.seq_no + 1,
             local_port: self.port,
             remote_ip: ip_header.source_addr(),
             remote_port: Port(syn_packet.source_port()),
@@ -420,7 +420,7 @@ impl Listen {
         );
         header.syn = true;
         header.ack = true;
-        header.acknowledgment_number = syn_packet.acknowledgment_number() + 1;
+        header.acknowledgment_number = syn_packet.sequence_number() + 1;
 
         header.write(&mut bytes).unwrap();
 
@@ -451,13 +451,14 @@ impl SynSent {
             .await
             .map_err(|_| TransportError::DestUnreachable(self.dest_ip))?;
 
-        let last_ack_no = syn_ack_packet.acknowledgment_number();
+        let send_buf_start = (self.seq_no + 1).try_into().unwrap();
+        let recv_buf_start = (syn_ack_packet.sequence_number() + 1).try_into().unwrap();
 
         let conn = TcpConn::new(
             Remote::new(self.dest_ip, self.dest_port),
             self.src_port,
-            self.seq_no.try_into().unwrap(),
-            last_ack_no.try_into().unwrap(),
+            send_buf_start,
+            recv_buf_start,
             self.router,
         );
 
@@ -470,7 +471,6 @@ impl SynSent {
             src_port: self.src_port,
             dest_ip: self.dest_ip,
             dest_port: self.dest_port,
-            last_ack_no,
             conn,
         })
     }
@@ -478,20 +478,15 @@ impl SynSent {
     fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        let seq_no = {
-            self.seq_no += 1;
-            self.seq_no
-        };
-
         let mut header = TcpHeader::new(
             self.src_port.0,
             self.dest_port.0,
-            seq_no,
+            self.seq_no,
             (TCP_DEFAULT_WINDOW_SZ - 1).try_into().unwrap(),
         );
         header.syn = true;
         header.ack = true;
-        header.acknowledgment_number = syn_ack_packet.acknowledgment_number() + 1;
+        header.acknowledgment_number = syn_ack_packet.sequence_number() + 1;
 
         header.write(&mut bytes).unwrap();
 
@@ -512,12 +507,14 @@ impl SynReceived {
     pub async fn establish<'a>(self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
         assert!(ack_packet.ack());
 
-        let last_ack_no = ack_packet.acknowledgment_number();
+        let send_buf_start = self.seq_no.try_into().unwrap();
+        let recv_buf_start = (ack_packet.sequence_number() + 1).try_into().unwrap();
+
         let conn = TcpConn::new(
             Remote::new(self.remote_ip, self.remote_port),
             self.local_port,
-            self.seq_no.try_into().unwrap(),
-            last_ack_no.try_into().unwrap(),
+            send_buf_start,
+            recv_buf_start,
             self.router,
         );
 
@@ -531,7 +528,6 @@ impl SynReceived {
             src_port: self.local_port,
             dest_ip: self.remote_ip,
             dest_port: self.remote_port,
-            last_ack_no,
             conn,
         }
     }
@@ -542,7 +538,6 @@ pub struct Established {
     src_port: Port,
     dest_ip: Ipv4Addr,
     dest_port: Port,
-    last_ack_no: u32,
     conn: TcpConn,
 }
 
