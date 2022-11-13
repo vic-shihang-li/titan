@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 
 use self::socket::{SynReceived, TcpState};
 
-pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
+pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
 // The maximum number of TCP connections that are waiting to be accepted on a
 // listener port.
