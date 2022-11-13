@@ -371,7 +371,7 @@ impl Closed {
             src_port.0,
             dest_port.0,
             self.seq_no,
-            (TCP_DEFAULT_WINDOW_SZ - 1).try_into().unwrap(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.syn = true;
         header.write(&mut bytes).unwrap();
@@ -432,7 +432,7 @@ impl Listen {
             src_port,
             dst_port,
             self.seq_no,
-            (TCP_DEFAULT_WINDOW_SZ - 1).try_into().unwrap(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.syn = true;
         header.ack = true;
@@ -498,7 +498,7 @@ impl SynSent {
             self.src_port.0,
             self.dest_port.0,
             self.seq_no,
-            (TCP_DEFAULT_WINDOW_SZ - 1).try_into().unwrap(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.syn = true;
         header.ack = true;
