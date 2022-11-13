@@ -26,13 +26,20 @@ pub struct TcpConn {
 }
 
 impl TcpConn {
-    fn new(remote: Remote, local_port: Port, start_seq_no: usize, start_ack_no: usize) -> Self {
+    fn new(
+        remote: Remote,
+        local_port: Port,
+        start_seq_no: usize,
+        start_ack_no: usize,
+        router: Arc<Router>,
+    ) -> Self {
         Self {
             inner: Arc::new(InnerTcpConn::new(
                 remote,
                 local_port,
                 start_seq_no,
                 start_ack_no,
+                router,
             )),
         }
     }
@@ -51,7 +58,13 @@ impl TcpConn {
 }
 
 impl<const N: usize> InnerTcpConn<N> {
-    fn new(remote: Remote, local_port: Port, start_seq_no: usize, start_ack_no: usize) -> Self {
+    fn new(
+        remote: Remote,
+        local_port: Port,
+        start_seq_no: usize,
+        start_ack_no: usize,
+        router: Arc<Router>,
+    ) -> Self {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
 
@@ -340,6 +353,7 @@ impl SynSent {
             self.src_port,
             self.seq_no.try_into().unwrap(),
             last_ack_no.try_into().unwrap(),
+            self.router,
         );
 
         self.established_tx
@@ -351,7 +365,6 @@ impl SynSent {
             src_port: self.src_port,
             dest_ip: self.dest_ip,
             dest_port: self.dest_port,
-            router: self.router,
             last_ack_no,
             conn,
         })
@@ -400,6 +413,7 @@ impl SynReceived {
             self.local_port,
             self.seq_no.try_into().unwrap(),
             last_ack_no.try_into().unwrap(),
+            self.router,
         );
 
         self.new_conn_tx
@@ -412,7 +426,6 @@ impl SynReceived {
             src_port: self.local_port,
             dest_ip: self.remote_ip,
             dest_port: self.remote_port,
-            router: self.router,
             last_ack_no,
             conn,
         }
@@ -424,7 +437,6 @@ pub struct Established {
     src_port: Port,
     dest_ip: Ipv4Addr,
     dest_port: Port,
-    router: Arc<Router>,
     last_ack_no: u32,
     conn: TcpConn,
 }
