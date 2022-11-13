@@ -127,6 +127,20 @@ impl<const N: usize> SendBuf<N> {
             send_buf.head - start_seq_no - buf.len() // remaining size
         })
     }
+
+    pub async fn wait_for_new_data(&self, seq_no: usize) {
+        loop {
+            let send_buf = self.inner.lock().await;
+            if send_buf.head > seq_no {
+                // data has already arrived
+                return;
+            }
+            let notifier = self.written.notified();
+            drop(send_buf);
+
+            notifier.wait().await;
+        }
+    }
 }
 
 /// A fixed-sized buffer for buffering data to be sent over TCP.
