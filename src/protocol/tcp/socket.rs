@@ -42,11 +42,6 @@ impl TcpConn {
     }
 }
 
-pub struct TcpMessage {
-    header: TcpHeader,
-    payload: Vec<u8>,
-}
-
 impl<const N: usize> InnerTcpConn<N> {
     fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
         Self {

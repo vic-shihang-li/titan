@@ -1,9 +1,84 @@
 use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
+    sync::Arc,
 };
 
+use tokio::sync::{Mutex, Notify};
+
 use super::TCP_DEFAULT_WINDOW_SZ;
+
+#[derive(Debug, Clone)]
+pub struct SendBuf<const N: usize> {
+    inner: Arc<Mutex<InnerSendBuf<N>>>,
+    not_full: Arc<Notify>,
+    written: Arc<Notify>,
+}
+
+impl<const N: usize> SendBuf<N> {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InnerSendBuf::new())),
+            not_full: Arc::new(Notify::new()),
+            written: Arc::new(Notify::new()),
+        }
+    }
+
+    pub async fn write(&self, bytes: &[u8]) -> usize {
+        let mut send_buf = self.inner.lock().await;
+        let written = send_buf.write(bytes);
+        if written > 0 {
+            self.written.notify_waiters();
+        }
+        written
+    }
+
+    pub async fn write_all(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        let mut curr = 0;
+        loop {
+            let mut send_buf = self.inner.lock().await;
+            curr += send_buf.write(bytes);
+            if curr < bytes.len() {
+                drop(send_buf);
+                self.not_full.notified().await;
+            } else {
+                self.written.notify_waiters();
+                break;
+            }
+        }
+    }
+
+    pub async fn advance(&self, n_bytes: usize) -> Result<(), AdvanceError> {
+        let mut buf = self.inner.lock().await;
+        let was_full = buf.is_full();
+        buf.advance(n_bytes).map(|_| {
+            if was_full {
+                self.not_full.notify_waiters();
+            }
+        })
+    }
+
+    pub async fn fill(&self, buf: &mut [u8]) {
+        loop {
+            let send_buf = self.inner.lock().await;
+            let unconsumed = send_buf.unconsumed();
+            match unconsumed.slice_front(buf.len()) {
+                Ok(slice) => {
+                    slice.copy_into_buf(buf).unwrap();
+                    break;
+                }
+                Err(_) => {
+                    self.written.notified().await;
+                    // wait for new data to be written in
+                }
+            }
+        }
+    }
+}
 
 /// A fixed-sized buffer for buffering data to be sent over TCP.
 ///
@@ -15,7 +90,7 @@ use super::TCP_DEFAULT_WINDOW_SZ;
 /// up to the caller to maintain usable window size, and advance the consumed portion upon
 /// acknowledgement.
 #[derive(Debug)]
-pub struct SendBuf<const N: usize> {
+struct InnerSendBuf<const N: usize> {
     // Index of the last unacked byte in the byte stream.
     // This is the "tail" of a producer-consumer buffer.
     // This is SDR.UNA in the protocol.
@@ -45,6 +120,11 @@ pub enum AdvanceError {
 pub struct SliceError {
     requested: usize,
     got: usize,
+}
+
+#[derive(Debug)]
+pub enum SliceCopyError {
+    TooSmall,
 }
 
 /// Slice into a ring buffer.
@@ -96,6 +176,22 @@ impl<'a> ByteSlice<'a> {
             })
         }
     }
+
+    pub fn copy_into_buf(&self, buf: &mut [u8]) -> Result<(), SliceCopyError> {
+        if self.len() > buf.len() {
+            return Err(SliceCopyError::TooSmall);
+        }
+
+        buf[..self.first.len()].copy_from_slice(self.first);
+
+        if let Some(second) = self.second {
+            let begin = self.first.len();
+            let end = begin + second.len();
+            buf[begin..end].copy_from_slice(second);
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> PartialEq<[u8]> for ByteSlice<'a> {
@@ -117,7 +213,7 @@ impl<'a> PartialEq<[u8]> for ByteSlice<'a> {
     }
 }
 
-impl<const N: usize> SendBuf<N> {
+impl<const N: usize> InnerSendBuf<N> {
     pub fn new() -> Self {
         Self {
             buf: [0; N],
@@ -234,13 +330,26 @@ impl Ord for SegmentMeta {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RecvBuf<const N: usize> {
+    inner: Arc<Mutex<InnerRecvBuf<N>>>,
+}
+
+impl<const N: usize> RecvBuf<N> {
+    pub fn new(starting_seq_no: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
+        }
+    }
+}
+
 /// A fixed-sized buffer for constructing a contiguous byte stream over TCP.
 ///
 /// Upon receiving a packet, the payload can be written into this buffer via
 /// `RecvBuf::write()`. Additionally, window size can be probed by inspecting
 /// `RecvBuf::write_remaining_size()`.
 #[derive(Debug)]
-pub struct RecvBuf<const N: usize> {
+struct InnerRecvBuf<const N: usize> {
     buf: [u8; N],
     tail: usize,
     head: usize,
@@ -260,7 +369,7 @@ pub enum WriteRangeError {
     ExceedBuffer,
 }
 
-impl<const N: usize> RecvBuf<N> {
+impl<const N: usize> InnerRecvBuf<N> {
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
             buf: [0; N],
@@ -339,7 +448,7 @@ impl<const N: usize> RecvBuf<N> {
     }
 }
 
-impl<const N: usize> RecvBuf<N> {
+impl<const N: usize> InnerRecvBuf<N> {
     fn size(&self) -> usize {
         self.buf.len()
     }
@@ -537,7 +646,7 @@ mod tests {
             consumer.join().unwrap();
         }
 
-        fn fill_buf<const N: usize>(buf: &mut SendBuf<N>, data: &[u8]) {
+        fn fill_buf<const N: usize>(buf: &mut InnerSendBuf<N>, data: &[u8]) {
             loop {
                 let written = buf.write(data);
                 if written == 0 {
@@ -910,7 +1019,7 @@ mod tests {
             consumer.join().unwrap();
         }
 
-        fn fill_buf<const N: usize>(buf: &mut RecvBuf<N>, start_seq_no: usize, data: &[u8]) {
+        fn fill_buf<const N: usize>(buf: &mut InnerRecvBuf<N>, start_seq_no: usize, data: &[u8]) {
             let mut curr = start_seq_no;
             loop {
                 match buf.write(curr, data) {
