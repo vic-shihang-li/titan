@@ -85,7 +85,8 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
-        todo!()
+        self.send_buf.write_all(bytes).await;
+        Ok(())
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
