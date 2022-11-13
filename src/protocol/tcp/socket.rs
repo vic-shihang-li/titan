@@ -1,3 +1,4 @@
+use crate::protocol::tcp::buf::{SetTailError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
@@ -9,7 +10,7 @@ use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, SocketId, TCP_DEFAULT_WINDOW_SZ};
+use super::{Port, Remote, SocketId, TCP_DEFAULT_WINDOW_SZ};
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
@@ -44,10 +45,10 @@ impl TcpConn {
 
 impl<const N: usize> InnerTcpConn<N> {
     fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
-        Self {
-            send_buf: SendBuf::new( /* TODO: start_seq_no */ ),
-            recv_buf: RecvBuf::new(start_ack_no),
-        }
+        let send_buf = SendBuf::new(start_seq_no);
+        let recv_buf = RecvBuf::new(start_ack_no);
+
+        Self { send_buf, recv_buf }
     }
 
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
@@ -55,6 +56,40 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
+        todo!()
+    }
+
+    async fn handle_packet<'a>(
+        &self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) {
+        assert!(tcp_header.ack());
+        if let Err(e) = self
+            .send_buf
+            .set_tail(tcp_header.acknowledgment_number().try_into().unwrap())
+            .await
+        {
+            match e {
+                SetTailError::LowerThanCurrent => log::error!("Remote responded with a lower ack"),
+                SetTailError::TooBig => log::error!(
+                    "Remote responded with an ack that's higher than the greatest sent seq no."
+                ),
+            }
+        }
+
+        if let Err(e) = self
+            .recv_buf
+            .write(tcp_header.sequence_number().try_into().unwrap(), payload)
+            .await
+        {
+            match e {
+                WriteRangeError::SeqNoTooSmall => log::info!("Received delayed packet"),
+                WriteRangeError::ExceedBuffer => log::error!("Remote did not honor window size"),
+            }
+        }
+
         todo!()
     }
 }
