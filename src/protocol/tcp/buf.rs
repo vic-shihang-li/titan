@@ -336,6 +336,7 @@ impl Ord for SegmentMeta {
 pub struct RecvBuf<const N: usize> {
     inner: Arc<Mutex<InnerRecvBuf<N>>>,
     written: Arc<Notify>,
+    read: Arc<Notify>,
 }
 
 impl<const N: usize> RecvBuf<N> {
@@ -343,19 +344,31 @@ impl<const N: usize> RecvBuf<N> {
         Self {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
             written: Arc::new(Notify::new()),
+            read: Arc::new(Notify::new()),
         }
     }
 
     pub async fn try_fill<'a>(&self, dest: &'a mut [u8]) -> &'a [u8] {
-        self.inner.lock().await.try_fill(dest)
+        let consumed = self.inner.lock().await.try_fill(dest);
+        if !consumed.is_empty() {
+            self.read.notify_waiters();
+        }
+        consumed
     }
 
     pub async fn fill<'a>(&self, dest: &'a mut [u8]) {
+        if dest.is_empty() {
+            return;
+        }
+
         let mut curr = 0;
         loop {
             let mut recv_buf = self.inner.lock().await;
             let consumed = recv_buf.try_fill(&mut dest[curr..]);
             curr += consumed.len();
+            if !consumed.is_empty() {
+                self.read.notify_waiters();
+            }
             if curr < dest.len() {
                 let written = self.written.notified();
                 drop(recv_buf);
@@ -372,6 +385,24 @@ impl<const N: usize> RecvBuf<N> {
             .await
             .write(seq_no, bytes)
             .map(|_| self.written.notify_waiters())
+    }
+
+    pub async fn write(&self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
+        loop {
+            let mut recv_buf = self.inner.lock().await;
+            match recv_buf.write(seq_no, bytes) {
+                Ok(_) => return Ok(()),
+                Err(e) => match e {
+                    WriteRangeError::SeqNoTooSmall => return Err(e),
+                    WriteRangeError::ExceedBuffer => {
+                        // wait for room to free up
+                        let has_room = self.read.notified();
+                        drop(recv_buf);
+                        has_room.await;
+                    }
+                },
+            }
+        }
     }
 }
 
