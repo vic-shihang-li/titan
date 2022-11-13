@@ -444,6 +444,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore]
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
 
