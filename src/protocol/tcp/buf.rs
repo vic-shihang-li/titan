@@ -756,7 +756,7 @@ mod tests {
 
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
-                for i in 0..num_repeats {
+                for _ in 0..num_repeats {
                     producer_buf.write_all(&data).await;
                 }
             });
@@ -764,7 +764,7 @@ mod tests {
             let consumer = tokio::spawn(async move {
                 let mut out_buf = vec![0; data2.len()];
                 let mut seq_no = initial_seq_no;
-                for i in 0..num_repeats {
+                for _ in 0..num_repeats {
                     match buf.try_slice(seq_no, &mut out_buf).await {
                         Ok(_) => {
                             assert_eq!(out_buf, data2);
