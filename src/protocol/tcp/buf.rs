@@ -357,11 +357,6 @@ struct InnerRecvBuf<const N: usize> {
 }
 
 #[derive(Debug)]
-pub enum ConsumeError {
-    DestTooSmall,
-}
-
-#[derive(Debug)]
 pub enum WriteRangeError {
     /// Starting at a sequence number below the minimal bound.
     SeqNoTooSmall,
@@ -379,30 +374,23 @@ impl<const N: usize> InnerRecvBuf<N> {
         }
     }
 
-    /// Attempts to obtain N bytes from the internal buffer.
+    /// Attempts to fill the provided buffer.
     ///
-    /// The function will write up to N bytes into the destination buffer,
-    /// returning a slice of written bytes to the caller.
+    /// The function returns a slice of written bytes to the caller. The
+    /// returned slice is a subslice of the provided buffer.
     ///
     /// Bytes can only be consumed once; the internal buffer is free to discard
     /// consumed bytes.
-    pub fn consume<'a>(
-        &mut self,
-        n_bytes: usize,
-        dest: &'a mut [u8],
-    ) -> Result<&'a [u8], ConsumeError> {
-        if dest.len() < n_bytes {
-            return Err(ConsumeError::DestTooSmall);
-        }
-
+    pub fn try_fill<'a>(&mut self, dest: &'a mut [u8]) -> &'a [u8] {
+        let n_bytes = dest.len();
         let remaining = self.read_remaining_size();
 
         match remaining {
-            0 => Ok(&dest[0..0]),
+            0 => &dest[0..0],
             _ => {
                 let to_consume = min(remaining, n_bytes);
                 self.consume_unchecked(to_consume, dest);
-                Ok(&dest[0..to_consume])
+                &dest[0..to_consume]
             }
         }
     }
@@ -740,7 +728,7 @@ mod tests {
             let mut total_consumed = 0;
             let mut bytes = vec![0; 16];
             loop {
-                let consumed = buf.consume(data.len(), &mut bytes).unwrap();
+                let consumed = buf.try_fill(&mut bytes[..data.len()]);
                 if consumed.is_empty() {
                     break;
                 }
@@ -802,9 +790,7 @@ mod tests {
                     let mut curr = 0;
                     loop {
                         let mut b = buf.lock().unwrap();
-                        let consumed = b
-                            .consume(data.len() - curr, &mut consume_buf[curr..])
-                            .unwrap();
+                        let consumed = b.try_fill(&mut consume_buf[curr..data.len()]);
                         curr += consumed.len();
                         if consumed.is_empty() {
                             yield_now();
@@ -1008,9 +994,7 @@ mod tests {
                     let mut curr = 0;
                     loop {
                         let mut b = buf.lock().unwrap();
-                        let consumed = b
-                            .consume(data.len() - curr, &mut consume_buf[curr..])
-                            .unwrap();
+                        let consumed = b.try_fill(&mut consume_buf[curr..data.len()]);
                         curr += consumed.len();
                         if consumed.is_empty() {
                             yield_now();
