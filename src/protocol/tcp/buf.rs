@@ -18,9 +18,9 @@ pub struct SendBuf<const N: usize> {
 }
 
 impl<const N: usize> SendBuf<N> {
-    pub fn new() -> Self {
+    pub fn new(initial_seq_no: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(InnerSendBuf::new())),
+            inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
             not_full: Notifier::new(),
             written: Notifier::new(),
         }
@@ -107,8 +107,8 @@ struct InnerSendBuf<const N: usize> {
     buf: [u8; N],
 }
 
-pub fn make_default_sendbuf() -> SendBuf<TCP_DEFAULT_WINDOW_SZ> {
-    SendBuf::<TCP_DEFAULT_WINDOW_SZ>::new()
+pub fn make_default_sendbuf(starting_seq_no: usize) -> SendBuf<TCP_DEFAULT_WINDOW_SZ> {
+    SendBuf::<TCP_DEFAULT_WINDOW_SZ>::new(starting_seq_no)
 }
 
 pub fn make_default_recvbuf(starting_seq_no: usize) -> RecvBuf<TCP_DEFAULT_WINDOW_SZ> {
@@ -134,6 +134,7 @@ pub enum SliceCopyError {
 /// Slice into a ring buffer.
 ///
 /// Abstract over how a slice could be split into two in a ring buffer.
+#[derive(Debug)]
 pub struct ByteSlice<'a> {
     first: &'a [u8],
     second: Option<&'a [u8]>,
@@ -218,11 +219,11 @@ impl<'a> PartialEq<[u8]> for ByteSlice<'a> {
 }
 
 impl<const N: usize> InnerSendBuf<N> {
-    pub fn new() -> Self {
+    pub fn new(initial_seq_no: usize) -> Self {
         Self {
             buf: [0; N],
-            tail: 0,
-            head: 0,
+            tail: initial_seq_no,
+            head: initial_seq_no,
         }
     }
 
@@ -277,7 +278,7 @@ impl<const N: usize> InnerSendBuf<N> {
                     ByteSlice::new(&self.buf[start..end], None)
                 } else {
                     assert!(self.head == self.tail + self.size());
-                    ByteSlice::new(&self.buf, None)
+                    ByteSlice::new(&self.buf[start..], Some(&self.buf[..end]))
                 }
             }
             std::cmp::Ordering::Greater => {
@@ -602,8 +603,8 @@ mod tests {
 
     use super::*;
 
-    fn make_default_inner_sendbuf() -> InnerSendBuf<TCP_DEFAULT_WINDOW_SZ> {
-        InnerSendBuf::<TCP_DEFAULT_WINDOW_SZ>::new()
+    fn make_default_inner_sendbuf(start_seq_no: usize) -> InnerSendBuf<TCP_DEFAULT_WINDOW_SZ> {
+        InnerSendBuf::<TCP_DEFAULT_WINDOW_SZ>::new(start_seq_no)
     }
 
     fn make_default_inner_recvbuf(start_seq_no: usize) -> InnerRecvBuf<TCP_DEFAULT_WINDOW_SZ> {
@@ -622,7 +623,7 @@ mod tests {
             let data2 = data.clone();
 
             let num_repeats = 100_000;
-            let buf = make_default_sendbuf();
+            let buf = make_default_sendbuf(33);
 
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
@@ -656,7 +657,7 @@ mod tests {
             let data2 = data.clone();
 
             let num_repeats = 100_000;
-            let initial_seq_no = 0;
+            let initial_seq_no = 87;
             let buf = make_default_recvbuf(initial_seq_no);
 
             let producer_buf = buf.clone();
@@ -689,7 +690,7 @@ mod tests {
         fn write_until_full() {
             let data = [1; 15];
 
-            let mut buf = make_default_inner_sendbuf();
+            let mut buf = make_default_inner_sendbuf(98989);
             assert!(buf.is_empty());
 
             let mut total_written = 0;
@@ -709,7 +710,7 @@ mod tests {
         fn read_until_empty() {
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-            let mut buf = make_default_inner_sendbuf();
+            let mut buf = make_default_inner_sendbuf(56);
             fill_buf(&mut buf, &data);
 
             while !buf.is_empty() {
@@ -742,7 +743,7 @@ mod tests {
 
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
             let num_repeats = 1_000_000;
-            let buf = Arc::new(Mutex::new(make_default_inner_sendbuf()));
+            let buf = Arc::new(Mutex::new(make_default_inner_sendbuf(1)));
 
             let producer_buf = buf.clone();
             let producer = std::thread::spawn(move || {
@@ -770,7 +771,7 @@ mod tests {
                             continue;
                         }
                         let got = b.unconsumed().slice_front(data.len()).unwrap();
-                        assert!(got == data[..]);
+                        assert_eq!(got, data[..]);
                         b.advance(data.len()).unwrap();
                         break;
                     }
