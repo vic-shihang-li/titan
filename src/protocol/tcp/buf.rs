@@ -2,6 +2,7 @@ use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
     sync::Arc,
+    usize,
 };
 
 use tokio::sync::Mutex;
@@ -57,15 +58,24 @@ impl<const N: usize> SendBuf<N> {
 
     pub async fn set_tail(&self, seq_no: usize) -> Result<(), SetTailError> {
         let mut buf = self.inner.lock().await;
-        let was_full = buf.is_full();
         buf.set_tail(seq_no).map(|_| {
-            if was_full {
-                self.not_full.notify_all();
-            }
+            self.not_full.notify_all();
         })
     }
 
-    pub async fn fill(&self, buf: &mut [u8]) {
+    /// Fills the passed-in buffer with unconsumed content from the head of the
+    /// internal buffer. Blocks until the entire passed-in buffer is filled.
+    ///
+    /// This API is useful for waiting for data to show up in the buffer.
+    ///
+    /// Deadlock:
+    ///
+    /// This API can deadlock with concurrent writers if the passed-in
+    /// buffer is too big. Slicing unconsumed content does not consume them
+    /// (set_tail() does). Deadlock could occur if this caller is waiting for
+    /// more data to arrive, while a concurrent writer is waiting for room in
+    /// the buffer to free up.
+    pub async fn slice_front(&self, buf: &mut [u8]) {
         loop {
             let send_buf = self.inner.lock().await;
             let unconsumed = send_buf.unconsumed();
@@ -81,6 +91,22 @@ impl<const N: usize> SendBuf<N> {
                 }
             }
         }
+    }
+
+    /// Try to fill the passed-in buffer with data starting at a sequence number.
+    ///
+    /// The function succeeds when the head sequence number is less than or equal
+    /// to `start_seq_no + buf.len()`, and `start_seq_no` is greater or equal to
+    /// the tail sequence number.
+    ///
+    /// Either the entire buffer is filled or no data is written into the buffer.
+    pub async fn try_slice(&self, start_seq_no: usize, buf: &mut [u8]) -> Result<(), SliceError> {
+        let send_buf = self.inner.lock().await;
+        let unconsumed = send_buf.unconsumed();
+        let offset = start_seq_no - send_buf.tail;
+        unconsumed.slice(offset, buf.len()).map(|slice| {
+            slice.copy_into_buf(buf).unwrap();
+        })
     }
 }
 
@@ -122,9 +148,8 @@ pub enum SetTailError {
 }
 
 #[derive(Debug)]
-pub struct SliceError {
-    requested: usize,
-    got: usize,
+pub enum SliceError {
+    OutOfRange,
 }
 
 #[derive(Debug)]
@@ -161,25 +186,41 @@ impl<'a> ByteSlice<'a> {
 
     /// Construct a new slice that is a sub-slice of the current slice.
     pub fn slice_front(&self, n_bytes: usize) -> Result<ByteSlice<'a>, SliceError> {
-        if n_bytes <= self.len() {
-            match self.second {
-                Some(second) => {
-                    if n_bytes <= self.first.len() {
-                        Ok(ByteSlice::new(&self.first[..n_bytes], None))
-                    } else {
-                        Ok(ByteSlice::new(
-                            self.first,
-                            Some(&second[..(n_bytes - self.first.len())]),
-                        ))
-                    }
+        self.slice(0, n_bytes)
+    }
+
+    /// Construct a slice of [offset, offset + n_bytes).
+    pub fn slice(&self, offset: usize, n_bytes: usize) -> Result<ByteSlice<'a>, SliceError> {
+        let len = self.len();
+        if offset > len {
+            return Err(SliceError::OutOfRange);
+        }
+        if offset + n_bytes > len {
+            return Err(SliceError::OutOfRange);
+        }
+
+        let start = offset;
+        let end = offset + n_bytes;
+        match self.second {
+            Some(second) => {
+                if end <= self.first.len() {
+                    // sliced content is all in the first slice
+                    Ok(ByteSlice::new(&self.first[start..end], None))
+                } else if start < self.first.len() {
+                    // sliced content is in both slices
+                    Ok(ByteSlice::new(
+                        &self.first[start..],
+                        Some(&second[..(end - self.first.len())]),
+                    ))
+                } else {
+                    // sliced content is all in the second slice
+                    Ok(ByteSlice::new(
+                        &second[(start - self.first.len())..(end - self.first.len())],
+                        None,
+                    ))
                 }
-                None => Ok(ByteSlice::new(&self.first[..n_bytes], None)),
             }
-        } else {
-            Err(SliceError {
-                requested: n_bytes,
-                got: self.len(),
-            })
+            None => Ok(ByteSlice::new(&self.first[start..end], None)),
         }
     }
 
@@ -641,10 +682,53 @@ mod tests {
                 let mut out_buf = vec![0; data2.len()];
                 let mut seq_no = initial_seq_no;
                 for _ in 0..num_repeats {
-                    buf.fill(&mut out_buf).await;
+                    buf.slice_front(&mut out_buf).await;
                     assert_eq!(out_buf, data2);
                     seq_no += out_buf.len();
                     buf.set_tail(seq_no).await.unwrap();
+                }
+            });
+
+            producer.await.unwrap();
+            consumer.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn read_write_with_try_slice() {
+            let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            let data: Vec<_> = base_data.into_iter().cycle().take(1024).collect();
+            let data2 = data.clone();
+
+            let num_repeats = 1_000_000;
+            let initial_seq_no = 33;
+            let buf = make_default_sendbuf(initial_seq_no);
+
+            let producer_buf = buf.clone();
+            let producer = tokio::spawn(async move {
+                for i in 0..num_repeats {
+                    producer_buf.write_all(&data).await;
+                }
+            });
+
+            let consumer = tokio::spawn(async move {
+                let mut out_buf = vec![0; data2.len()];
+                let mut seq_no = initial_seq_no;
+                for i in 0..num_repeats {
+                    match buf.try_slice(seq_no, &mut out_buf).await {
+                        Ok(_) => {
+                            assert_eq!(out_buf, data2);
+                            seq_no += out_buf.len();
+                        }
+                        Err(_) => {
+                            // Ran out of data to slice, discard all consumed content.
+                            buf.set_tail(seq_no).await.unwrap();
+
+                            // Blocks until data has been written in.
+                            buf.slice_front(&mut out_buf).await;
+                            assert_eq!(out_buf, data2);
+                            seq_no += out_buf.len();
+                        }
+                    }
                 }
             });
 
