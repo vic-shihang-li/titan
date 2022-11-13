@@ -26,7 +26,7 @@ pub const TCP_DEFAULT_WINDOW_SZ: usize = 1 << 16;
 pub const MAX_PENDING_TCP_CONNECTIONS: usize = 1024;
 
 /// A tuple that uniquely identifies a remote location.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Remote((Ipv4Addr, Port));
 
 impl Remote {

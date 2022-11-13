@@ -8,6 +8,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
 use super::{Port, Remote, SocketId, TCP_DEFAULT_WINDOW_SZ};
@@ -18,6 +19,7 @@ struct InnerTcpConn<const N: usize> {
     recv_buf: RecvBuf<N>,
     remote: Remote,
     local_port: Port,
+    send_worker: JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -68,11 +70,17 @@ impl<const N: usize> InnerTcpConn<N> {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
 
+        let sb = send_buf.clone();
+        let send_worker = tokio::spawn(async move {
+            send_buf_transporter(sb, remote, local_port, router).await;
+        });
+
         Self {
             send_buf,
             recv_buf,
             remote,
             local_port,
+            send_worker,
         }
     }
 
@@ -115,6 +123,26 @@ impl<const N: usize> InnerTcpConn<N> {
             }
         }
 
+        todo!()
+    }
+}
+
+impl<const N: usize> Drop for InnerTcpConn<N> {
+    fn drop(&mut self) {
+        self.send_worker.abort();
+    }
+}
+
+async fn send_buf_transporter<const N: usize>(
+    send_buf: SendBuf<N>,
+    remote: Remote,
+    local_port: Port,
+    router: Arc<Router>,
+) {
+    loop {
+        // TODO:
+        // 1. eagerly send out buffered data (no congestion ctrl)
+        // 2. retransmit when ack hasn't been received
         todo!()
     }
 }
