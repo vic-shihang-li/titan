@@ -4,23 +4,25 @@ use std::{
     sync::Arc,
 };
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
+
+use crate::utils::sync::Notifier;
 
 use super::TCP_DEFAULT_WINDOW_SZ;
 
 #[derive(Debug, Clone)]
 pub struct SendBuf<const N: usize> {
     inner: Arc<Mutex<InnerSendBuf<N>>>,
-    not_full: Arc<Notify>,
-    written: Arc<Notify>,
+    not_full: Notifier,
+    written: Notifier,
 }
 
 impl<const N: usize> SendBuf<N> {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new())),
-            not_full: Arc::new(Notify::new()),
-            written: Arc::new(Notify::new()),
+            not_full: Notifier::new(),
+            written: Notifier::new(),
         }
     }
 
@@ -28,7 +30,7 @@ impl<const N: usize> SendBuf<N> {
         let mut send_buf = self.inner.lock().await;
         let written = send_buf.write(bytes);
         if written > 0 {
-            self.written.notify_waiters();
+            self.written.notify_all();
         }
         written
     }
@@ -45,9 +47,9 @@ impl<const N: usize> SendBuf<N> {
             if curr < bytes.len() {
                 let not_full = self.not_full.notified();
                 drop(send_buf);
-                not_full.await;
+                not_full.wait().await;
             } else {
-                self.written.notify_waiters();
+                self.written.notify_all();
                 break;
             }
         }
@@ -58,7 +60,7 @@ impl<const N: usize> SendBuf<N> {
         let was_full = buf.is_full();
         buf.advance(n_bytes).map(|_| {
             if was_full {
-                self.not_full.notify_waiters();
+                self.not_full.notify_all();
             }
         })
     }
@@ -75,7 +77,7 @@ impl<const N: usize> SendBuf<N> {
                 Err(_) => {
                     let written = self.written.notified();
                     drop(send_buf);
-                    written.await;
+                    written.wait().await;
                 }
             }
         }
@@ -335,23 +337,23 @@ impl Ord for SegmentMeta {
 #[derive(Debug, Clone)]
 pub struct RecvBuf<const N: usize> {
     inner: Arc<Mutex<InnerRecvBuf<N>>>,
-    written: Arc<Notify>,
-    read: Arc<Notify>,
+    written: Notifier,
+    read: Notifier,
 }
 
 impl<const N: usize> RecvBuf<N> {
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
-            written: Arc::new(Notify::new()),
-            read: Arc::new(Notify::new()),
+            written: Notifier::new(),
+            read: Notifier::new(),
         }
     }
 
     pub async fn try_fill<'a>(&self, dest: &'a mut [u8]) -> &'a [u8] {
         let consumed = self.inner.lock().await.try_fill(dest);
         if !consumed.is_empty() {
-            self.read.notify_waiters();
+            self.read.notify_all();
         }
         consumed
     }
@@ -367,12 +369,12 @@ impl<const N: usize> RecvBuf<N> {
             let consumed = recv_buf.try_fill(&mut dest[curr..]);
             curr += consumed.len();
             if !consumed.is_empty() {
-                self.read.notify_waiters();
+                self.read.notify_all();
             }
             if curr < dest.len() {
                 let written = self.written.notified();
                 drop(recv_buf);
-                written.await;
+                written.wait().await;
             } else {
                 break;
             }
@@ -384,21 +386,24 @@ impl<const N: usize> RecvBuf<N> {
             .lock()
             .await
             .write(seq_no, bytes)
-            .map(|_| self.written.notify_waiters())
+            .map(|_| self.written.notify_all())
     }
 
     pub async fn write(&self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
         loop {
             let mut recv_buf = self.inner.lock().await;
             match recv_buf.write(seq_no, bytes) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    self.written.notify_all();
+                    return Ok(());
+                }
                 Err(e) => match e {
                     WriteRangeError::SeqNoTooSmall => return Err(e),
                     WriteRangeError::ExceedBuffer => {
                         // wait for room to free up
                         let has_room = self.read.notified();
                         drop(recv_buf);
-                        has_room.await;
+                        has_room.wait().await;
                     }
                 },
             }
@@ -607,6 +612,77 @@ mod tests {
 
     #[cfg(test)]
     mod send {
+
+        use super::*;
+
+        #[tokio::test]
+        async fn read_write() {
+            let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            let data: Vec<_> = base_data.into_iter().cycle().take(1024).collect();
+            let data2 = data.clone();
+
+            let num_repeats = 100_000;
+            let buf = make_default_sendbuf();
+
+            let producer_buf = buf.clone();
+            let producer = tokio::spawn(async move {
+                for _ in 0..num_repeats {
+                    producer_buf.write_all(&data).await;
+                }
+            });
+
+            let consumer = tokio::spawn(async move {
+                let mut out_buf = vec![0; data2.len()];
+                for _ in 0..num_repeats {
+                    buf.fill(&mut out_buf).await;
+                    assert_eq!(out_buf, data2);
+                    buf.advance(out_buf.len()).await.unwrap();
+                }
+            });
+
+            producer.await.unwrap();
+            consumer.await.unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    mod recv {
+        use super::*;
+
+        #[tokio::test]
+        async fn read_write() {
+            let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            let data: Vec<_> = base_data.into_iter().cycle().take(1024).collect();
+            let data2 = data.clone();
+
+            let num_repeats = 100_000;
+            let initial_seq_no = 0;
+            let buf = make_default_recvbuf(initial_seq_no);
+
+            let producer_buf = buf.clone();
+            let producer = tokio::spawn(async move {
+                let mut seq_no = initial_seq_no;
+                for _ in 0..num_repeats {
+                    producer_buf.write(seq_no, &data).await.unwrap();
+                    seq_no += data.len();
+                }
+            });
+
+            let consumer = tokio::spawn(async move {
+                let mut out_buf = vec![0; data2.len()];
+                for _ in 0..num_repeats {
+                    buf.fill(&mut out_buf).await;
+                    assert_eq!(out_buf, data2);
+                }
+            });
+
+            producer.await.unwrap();
+            consumer.await.unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    mod inner_send {
         use super::*;
 
         #[test]
@@ -717,7 +793,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    mod recv {
+    mod inner_recv {
 
         use rand::{thread_rng, Rng};
 
