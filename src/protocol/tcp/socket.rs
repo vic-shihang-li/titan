@@ -179,10 +179,10 @@ impl<const N: usize> TcpTransport<N> {
                 .await
             {
                 Ok(bytes_to_read) => {
-                    self.seq_no += segment_sz;
-                    segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
                     // TODO: handle send failure
                     self.send(&segment[..segment_sz]).await.unwrap();
+                    self.seq_no += segment_sz;
+                    segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
                 }
                 Err(e) => match e {
                     SliceError::OutOfRange(remaining_sz) => {
