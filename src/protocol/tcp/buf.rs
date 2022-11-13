@@ -43,8 +43,9 @@ impl<const N: usize> SendBuf<N> {
             let mut send_buf = self.inner.lock().await;
             curr += send_buf.write(bytes);
             if curr < bytes.len() {
+                let not_full = self.not_full.notified();
                 drop(send_buf);
-                self.not_full.notified().await;
+                not_full.await;
             } else {
                 self.written.notify_waiters();
                 break;
@@ -72,8 +73,9 @@ impl<const N: usize> SendBuf<N> {
                     break;
                 }
                 Err(_) => {
-                    self.written.notified().await;
-                    // wait for new data to be written in
+                    let written = self.written.notified();
+                    drop(send_buf);
+                    written.await;
                 }
             }
         }
