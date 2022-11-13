@@ -482,13 +482,7 @@ impl SynSent {
             .send(conn.clone())
             .expect("Failed to notify new connection established");
 
-        Ok(Established {
-            seq_no: self.seq_no,
-            src_port: self.src_port,
-            dest_ip: self.dest_ip,
-            dest_port: self.dest_port,
-            conn,
-        })
+        Ok(Established { conn })
     }
 
     fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -539,21 +533,11 @@ impl SynReceived {
             .await
             .expect("TcpListener not notified");
 
-        Established {
-            seq_no: self.seq_no,
-            src_port: self.local_port,
-            dest_ip: self.remote_ip,
-            dest_port: self.remote_port,
-            conn,
-        }
+        Established { conn }
     }
 }
 
 pub struct Established {
-    seq_no: u32,
-    src_port: Port,
-    dest_ip: Ipv4Addr,
-    dest_port: Port,
     conn: TcpConn,
 }
 
