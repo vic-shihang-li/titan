@@ -20,7 +20,7 @@ struct InnerTcpConn<const N: usize> {
     recv_buf: RecvBuf<N>,
     remote: Remote,
     local_port: Port,
-    send_worker: JoinHandle<()>,
+    transport_worker: JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,7 +84,7 @@ impl<const N: usize> InnerTcpConn<N> {
 
         let sb = send_buf.clone();
         let rb = recv_buf.clone();
-        let send_worker = tokio::spawn(async move {
+        let transport_worker = tokio::spawn(async move {
             TcpTransport::init(sb, rb, remote, local_port, router)
                 .await
                 .run()
@@ -96,7 +96,7 @@ impl<const N: usize> InnerTcpConn<N> {
             recv_buf,
             remote,
             local_port,
-            send_worker,
+            transport_worker,
         }
     }
 
@@ -149,7 +149,7 @@ impl<const N: usize> InnerTcpConn<N> {
 
 impl<const N: usize> Drop for InnerTcpConn<N> {
     fn drop(&mut self) {
-        self.send_worker.abort();
+        self.transport_worker.abort();
     }
 }
 
