@@ -333,13 +333,43 @@ impl Ord for SegmentMeta {
 #[derive(Debug, Clone)]
 pub struct RecvBuf<const N: usize> {
     inner: Arc<Mutex<InnerRecvBuf<N>>>,
+    written: Arc<Notify>,
 }
 
 impl<const N: usize> RecvBuf<N> {
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
+            written: Arc::new(Notify::new()),
         }
+    }
+
+    pub async fn try_fill<'a>(&self, dest: &'a mut [u8]) -> &'a [u8] {
+        self.inner.lock().await.try_fill(dest)
+    }
+
+    pub async fn fill<'a>(&self, dest: &'a mut [u8]) {
+        let mut curr = 0;
+        loop {
+            let mut recv_buf = self.inner.lock().await;
+            let consumed = recv_buf.try_fill(&mut dest[curr..]);
+            curr += consumed.len();
+            if curr < dest.len() {
+                let written = self.written.notified();
+                drop(recv_buf);
+                written.await;
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub async fn try_write(&self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
+        self.inner
+            .lock()
+            .await
+            .write(seq_no, bytes)
+            .map(|_| self.written.notify_waiters())
     }
 }
 
