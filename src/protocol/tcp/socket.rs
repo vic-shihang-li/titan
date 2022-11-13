@@ -16,6 +16,8 @@ use super::{Port, Remote, SocketId, TCP_DEFAULT_WINDOW_SZ};
 struct InnerTcpConn<const N: usize> {
     send_buf: SendBuf<N>,
     recv_buf: RecvBuf<N>,
+    remote: Remote,
+    local_port: Port,
 }
 
 #[derive(Clone, Debug)]
@@ -24,9 +26,14 @@ pub struct TcpConn {
 }
 
 impl TcpConn {
-    fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
+    fn new(remote: Remote, local_port: Port, start_seq_no: usize, start_ack_no: usize) -> Self {
         Self {
-            inner: Arc::new(InnerTcpConn::new(start_seq_no, start_ack_no)),
+            inner: Arc::new(InnerTcpConn::new(
+                remote,
+                local_port,
+                start_seq_no,
+                start_ack_no,
+            )),
         }
     }
 
@@ -44,11 +51,16 @@ impl TcpConn {
 }
 
 impl<const N: usize> InnerTcpConn<N> {
-    fn new(start_seq_no: usize, start_ack_no: usize) -> Self {
+    fn new(remote: Remote, local_port: Port, start_seq_no: usize, start_ack_no: usize) -> Self {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
 
-        Self { send_buf, recv_buf }
+        Self {
+            send_buf,
+            recv_buf,
+            remote,
+            local_port,
+        }
     }
 
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
@@ -266,9 +278,9 @@ impl Listen {
 
         let syn_recvd = SynReceived {
             seq_no: self.seq_no,
-            src_port: self.port,
-            dest_ip: ip_header.source_addr(),
-            dest_port: Port(syn_packet.source_port()),
+            local_port: self.port,
+            remote_ip: ip_header.source_addr(),
+            remote_port: Port(syn_packet.source_port()),
             router: self.router.clone(),
             new_conn_tx: self.new_conn_tx.clone(),
         };
@@ -324,6 +336,8 @@ impl SynSent {
         let last_ack_no = syn_ack_packet.acknowledgment_number();
 
         let conn = TcpConn::new(
+            Remote::new(self.dest_ip, self.dest_port),
+            self.src_port,
             self.seq_no.try_into().unwrap(),
             last_ack_no.try_into().unwrap(),
         );
@@ -369,9 +383,9 @@ impl SynSent {
 
 pub struct SynReceived {
     seq_no: u32,
-    src_port: Port,
-    dest_ip: Ipv4Addr,
-    dest_port: Port,
+    local_port: Port,
+    remote_ip: Ipv4Addr,
+    remote_port: Port,
     router: Arc<Router>,
     new_conn_tx: mpsc::Sender<TcpConn>,
 }
@@ -382,6 +396,8 @@ impl SynReceived {
 
         let last_ack_no = ack_packet.acknowledgment_number();
         let conn = TcpConn::new(
+            Remote::new(self.remote_ip, self.remote_port),
+            self.local_port,
             self.seq_no.try_into().unwrap(),
             last_ack_no.try_into().unwrap(),
         );
@@ -393,9 +409,9 @@ impl SynReceived {
 
         Established {
             seq_no: self.seq_no,
-            src_port: self.src_port,
-            dest_ip: self.dest_ip,
-            dest_port: self.dest_port,
+            src_port: self.local_port,
+            dest_ip: self.remote_ip,
+            dest_port: self.remote_port,
             router: self.router,
             last_ack_no,
             conn,
