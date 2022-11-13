@@ -490,15 +490,17 @@ impl<const N: usize> RecvBuf<N> {
                     self.written.notify_all();
                     return Ok(());
                 }
-                Err(e) => match e {
-                    WriteRangeError::SeqNoTooSmall => return Err(e),
-                    WriteRangeError::ExceedBuffer => {
-                        // wait for room to free up
-                        let has_room = self.read.notified();
-                        drop(recv_buf);
-                        has_room.wait().await;
+                Err(e) => {
+                    match e {
+                        WriteRangeError::SeqNoTooSmall(_) => return Err(e),
+                        WriteRangeError::ExceedBuffer(_) => {
+                            // wait for room to free up
+                            let has_room = self.read.notified();
+                            drop(recv_buf);
+                            has_room.wait().await;
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -519,10 +521,12 @@ struct InnerRecvBuf<const N: usize> {
 
 #[derive(Debug)]
 pub enum WriteRangeError {
-    /// Starting at a sequence number below the minimal bound.
-    SeqNoTooSmall,
-    /// Writing too much into the buffer.
-    ExceedBuffer,
+    /// Starting at a sequence number below the minimal bound. Contains the
+    /// smallest sequence number that can be written to.
+    SeqNoTooSmall(usize),
+    /// Writing too much into the buffer. Contains the sequence number
+    /// corresponding to the tail of the buffer.
+    ExceedBuffer(usize),
 }
 
 impl<const N: usize> InnerRecvBuf<N> {
@@ -615,10 +619,10 @@ impl<const N: usize> InnerRecvBuf<N> {
         // start_seq_no >= min && end_seq_no <= max
 
         if start_seq_no < min {
-            return Err(WriteRangeError::SeqNoTooSmall);
+            return Err(WriteRangeError::SeqNoTooSmall(min));
         }
         if end_seq_no > max {
-            return Err(WriteRangeError::ExceedBuffer);
+            return Err(WriteRangeError::ExceedBuffer(max));
         }
 
         Ok(())
@@ -1240,7 +1244,7 @@ mod tests {
                         match b.write(curr + offset, &producer_data[offset..]) {
                             Ok(_) => {}
                             Err(e) => {
-                                if matches!(e, WriteRangeError::ExceedBuffer) {
+                                if matches!(e, WriteRangeError::ExceedBuffer(_)) {
                                     yield_now();
                                 }
                             }
@@ -1261,7 +1265,7 @@ mod tests {
                             match b.write(curr, &producer_data) {
                                 Ok(_) => break,
                                 Err(e) => {
-                                    if matches!(e, WriteRangeError::ExceedBuffer) {
+                                    if matches!(e, WriteRangeError::ExceedBuffer(_)) {
                                         yield_now();
                                     }
                                 }
