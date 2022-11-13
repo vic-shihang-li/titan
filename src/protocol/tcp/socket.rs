@@ -89,7 +89,8 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
-        todo!()
+        self.recv_buf.fill(out_buffer).await;
+        Ok(())
     }
 
     async fn handle_packet<'a>(
