@@ -546,6 +546,14 @@ mod tests {
 
     use super::*;
 
+    fn make_default_inner_sendbuf() -> InnerSendBuf<TCP_DEFAULT_WINDOW_SZ> {
+        InnerSendBuf::<TCP_DEFAULT_WINDOW_SZ>::new()
+    }
+
+    fn make_default_inner_recvbuf(start_seq_no: usize) -> InnerRecvBuf<TCP_DEFAULT_WINDOW_SZ> {
+        InnerRecvBuf::<TCP_DEFAULT_WINDOW_SZ>::new(start_seq_no)
+    }
+
     #[cfg(test)]
     mod send {
         use super::*;
@@ -554,7 +562,7 @@ mod tests {
         fn write_until_full() {
             let data = [1; 15];
 
-            let mut buf = make_default_sendbuf();
+            let mut buf = make_default_inner_sendbuf();
             assert!(buf.is_empty());
 
             let mut total_written = 0;
@@ -574,7 +582,7 @@ mod tests {
         fn read_until_empty() {
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-            let mut buf = make_default_sendbuf();
+            let mut buf = make_default_inner_sendbuf();
             fill_buf(&mut buf, &data);
 
             while !buf.is_empty() {
@@ -607,7 +615,7 @@ mod tests {
 
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
             let num_repeats = 1_000_000;
-            let buf = Arc::new(Mutex::new(make_default_sendbuf()));
+            let buf = Arc::new(Mutex::new(make_default_inner_sendbuf()));
 
             let producer_buf = buf.clone();
             let producer = std::thread::spawn(move || {
@@ -669,7 +677,7 @@ mod tests {
             let start_seq_no = 231251;
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-            let mut buf = make_default_recvbuf(start_seq_no);
+            let mut buf = make_default_inner_recvbuf(start_seq_no);
             assert!(buf.write_remaining_size() == TCP_DEFAULT_WINDOW_SZ);
             assert_eq!(
                 buf.write_range(),
@@ -716,7 +724,7 @@ mod tests {
             let start_seq_no = 1291241;
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-            let mut buf = make_default_recvbuf(start_seq_no);
+            let mut buf = make_default_inner_recvbuf(start_seq_no);
             fill_buf(&mut buf, start_seq_no, &data);
 
             assert_eq!(buf.write_remaining_size(), 0);
@@ -767,7 +775,7 @@ mod tests {
             let start_seq_no = 91215;
             let num_repeats = 1_000_000;
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
-            let buf = Arc::new(Mutex::new(make_default_recvbuf(start_seq_no)));
+            let buf = Arc::new(Mutex::new(make_default_inner_recvbuf(start_seq_no)));
 
             let producer_buf = buf.clone();
             let producer = std::thread::spawn(move || {
@@ -817,7 +825,7 @@ mod tests {
         fn non_consecutive_rw() {
             let start_seq_no = 0;
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
-            let mut buf = make_default_recvbuf(start_seq_no);
+            let mut buf = make_default_inner_recvbuf(start_seq_no);
 
             //      |-------------WRITEABLE------------|
             // |xxxx-----------------------------------|
@@ -940,7 +948,7 @@ mod tests {
 
             let start_seq_no = 91215;
             let num_repeats = 100_000;
-            let buf = Arc::new(Mutex::new(make_default_recvbuf(start_seq_no)));
+            let buf = Arc::new(Mutex::new(make_default_inner_recvbuf(start_seq_no)));
 
             let producer_buf = buf.clone();
             let producer_data = data.clone();
