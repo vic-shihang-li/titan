@@ -111,13 +111,20 @@ impl<const N: usize> SendBuf<N> {
     /// to `start_seq_no + buf.len()`, and `start_seq_no` is greater or equal to
     /// the tail sequence number.
     ///
-    /// Either the entire buffer is filled or no data is written into the buffer.
-    pub async fn try_slice(&self, start_seq_no: usize, buf: &mut [u8]) -> Result<(), SliceError> {
+    /// On success, `buf` is filled and the function returns how many bytes can
+    /// be sliced after the slice contained in `buf`. On error, `buf` is not
+    /// modified, and the error contains the total number of unconsumed bytes.
+    pub async fn try_slice(
+        &self,
+        start_seq_no: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, SliceError> {
         let send_buf = self.inner.lock().await;
         let unconsumed = send_buf.unconsumed();
         let offset = start_seq_no - send_buf.tail;
         unconsumed.slice(offset, buf.len()).map(|slice| {
             slice.copy_into_buf(buf).unwrap();
+            send_buf.head - start_seq_no - buf.len() // remaining size
         })
     }
 }
@@ -161,7 +168,9 @@ pub enum SetTailError {
 
 #[derive(Debug)]
 pub enum SliceError {
-    OutOfRange,
+    /// Errs when the requested slice goes beyond the actual slice.
+    /// Returns the size of the actual slice.
+    OutOfRange(usize),
 }
 
 #[derive(Debug)]
@@ -205,10 +214,10 @@ impl<'a> ByteSlice<'a> {
     pub fn slice(&self, offset: usize, n_bytes: usize) -> Result<ByteSlice<'a>, SliceError> {
         let len = self.len();
         if offset > len {
-            return Err(SliceError::OutOfRange);
+            return Err(SliceError::OutOfRange(len));
         }
         if offset + n_bytes > len {
-            return Err(SliceError::OutOfRange);
+            return Err(SliceError::OutOfRange(len));
         }
 
         let start = offset;

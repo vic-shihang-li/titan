@@ -1,9 +1,10 @@
-use crate::protocol::tcp::buf::{SetTailError, WriteRangeError};
+use crate::protocol::tcp::buf::{SetTailError, SliceError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::{Router, SendError};
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
+use std::cmp::min;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
@@ -168,18 +169,30 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn run(mut self) {
-        const PAYLOAD_SZ: usize = 1024;
-        let mut payload = [0; PAYLOAD_SZ];
+        const MAX_SEGMENT_SZ: usize = 1024;
+        let mut segment = [0; MAX_SEGMENT_SZ];
+        let mut segment_sz = MAX_SEGMENT_SZ;
         loop {
-            if self
+            match self
                 .send_buf
-                .try_slice(self.seq_no, &mut payload)
+                .try_slice(self.seq_no, &mut segment[..segment_sz])
                 .await
-                .is_ok()
             {
-                self.seq_no += PAYLOAD_SZ;
-                // TODO: handle send failure
-                self.send(&payload).await.unwrap();
+                Ok(bytes_to_read) => {
+                    self.seq_no += segment_sz;
+                    segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
+                    // TODO: handle send failure
+                    self.send(&segment[..segment_sz]).await.unwrap();
+                }
+                Err(e) => match e {
+                    SliceError::OutOfRange(remaining_sz) => {
+                        segment_sz = remaining_sz;
+                    }
+                },
+            }
+            if segment_sz == 0 {
+                // wait for data to be written in
+                // TODO: use a waiting mechanism to accommodate retransmission
             }
         }
     }
