@@ -55,10 +55,10 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
-    pub async fn advance(&self, n_bytes: usize) -> Result<(), AdvanceError> {
+    pub async fn set_tail(&self, seq_no: usize) -> Result<(), SetTailError> {
         let mut buf = self.inner.lock().await;
         let was_full = buf.is_full();
-        buf.advance(n_bytes).map(|_| {
+        buf.set_tail(seq_no).map(|_| {
             if was_full {
                 self.not_full.notify_all();
             }
@@ -116,8 +116,9 @@ pub fn make_default_recvbuf(starting_seq_no: usize) -> RecvBuf<TCP_DEFAULT_WINDO
 }
 
 #[derive(Debug)]
-pub enum AdvanceError {
+pub enum SetTailError {
     TooBig,
+    LowerThanCurrent,
 }
 
 #[derive(Debug)]
@@ -289,15 +290,18 @@ impl<const N: usize> InnerSendBuf<N> {
         }
     }
 
-    /// Attempts to advance the unconsumed portion by N bytes.
+    /// Attempts to advance the unconsumed portion to the provided sequence number.
     ///
-    /// Errs when N is greater than the number of unconsumed bytes.
-    pub fn advance(&mut self, n_bytes: usize) -> Result<(), AdvanceError> {
-        if n_bytes <= self.read_remaining_size() {
-            self.tail += n_bytes;
-            Ok(())
+    /// Errs when the provided sequence number is greater than the sequence
+    /// number of the head of the buffer.
+    pub fn set_tail(&mut self, seq_no: usize) -> Result<(), SetTailError> {
+        if seq_no > self.head {
+            Err(SetTailError::TooBig)
+        } else if seq_no < self.tail {
+            Err(SetTailError::LowerThanCurrent)
         } else {
-            Err(AdvanceError::TooBig)
+            self.tail = seq_no;
+            Ok(())
         }
     }
 
@@ -623,7 +627,8 @@ mod tests {
             let data2 = data.clone();
 
             let num_repeats = 100_000;
-            let buf = make_default_sendbuf(33);
+            let initial_seq_no = 33;
+            let buf = make_default_sendbuf(initial_seq_no);
 
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
@@ -634,10 +639,12 @@ mod tests {
 
             let consumer = tokio::spawn(async move {
                 let mut out_buf = vec![0; data2.len()];
+                let mut seq_no = initial_seq_no;
                 for _ in 0..num_repeats {
                     buf.fill(&mut out_buf).await;
                     assert_eq!(out_buf, data2);
-                    buf.advance(out_buf.len()).await.unwrap();
+                    seq_no += out_buf.len();
+                    buf.set_tail(seq_no).await.unwrap();
                 }
             });
 
@@ -710,18 +717,22 @@ mod tests {
         fn read_until_empty() {
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
 
-            let mut buf = make_default_inner_sendbuf(56);
+            let initial_seq_no = 56;
+            let mut buf = make_default_inner_sendbuf(initial_seq_no);
             fill_buf(&mut buf, &data);
 
+            let mut seq_no = initial_seq_no;
             while !buf.is_empty() {
-                match buf.advance(data.len()) {
+                match buf.set_tail(seq_no + data.len()) {
                     Ok(_) => {
+                        seq_no += data.len();
                         let expect_len = min(data.len(), buf.read_remaining_size());
                         let pending_buf = buf.unconsumed().slice_front(expect_len).unwrap();
                         assert!(pending_buf == data[..expect_len]);
                     }
                     Err(_) => {
-                        buf.advance(buf.write_remaining_size()).unwrap();
+                        buf.set_tail(seq_no + buf.read_remaining_size()).unwrap();
+                        seq_no += buf.read_remaining_size();
                     }
                 }
             }
@@ -743,7 +754,8 @@ mod tests {
 
             let data = [1, 2, 3, 4, 5, 6, 7, 8];
             let num_repeats = 1_000_000;
-            let buf = Arc::new(Mutex::new(make_default_inner_sendbuf(1)));
+            let initial_seq_no = 77;
+            let buf = Arc::new(Mutex::new(make_default_inner_sendbuf(initial_seq_no)));
 
             let producer_buf = buf.clone();
             let producer = std::thread::spawn(move || {
@@ -761,6 +773,7 @@ mod tests {
             });
 
             let consumer = std::thread::spawn(move || {
+                let mut seq_no = initial_seq_no;
                 for _ in 0..num_repeats {
                     loop {
                         let mut b = buf.lock().unwrap();
@@ -772,7 +785,8 @@ mod tests {
                         }
                         let got = b.unconsumed().slice_front(data.len()).unwrap();
                         assert_eq!(got, data[..]);
-                        b.advance(data.len()).unwrap();
+                        seq_no += data.len();
+                        b.set_tail(seq_no).unwrap();
                         break;
                     }
                 }
