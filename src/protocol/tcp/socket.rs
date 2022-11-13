@@ -58,6 +58,17 @@ impl TcpConn {
     pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
         self.inner.read_all(out_buffer).await
     }
+
+    async fn handle_packet<'a>(
+        &self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) {
+        self.inner
+            .handle_packet(ip_header, tcp_header, payload)
+            .await
+    }
 }
 
 impl<const N: usize> InnerTcpConn<N> {
@@ -119,18 +130,20 @@ impl<const N: usize> InnerTcpConn<N> {
             }
         }
 
-        if let Err(e) = self
-            .recv_buf
-            .write(tcp_header.sequence_number().try_into().unwrap(), payload)
-            .await
-        {
-            match e {
-                WriteRangeError::SeqNoTooSmall => log::info!("Received delayed packet"),
-                WriteRangeError::ExceedBuffer => log::error!("Remote did not honor window size"),
+        if !payload.is_empty() {
+            if let Err(e) = self
+                .recv_buf
+                .write(tcp_header.sequence_number().try_into().unwrap(), payload)
+                .await
+            {
+                match e {
+                    WriteRangeError::SeqNoTooSmall(_) => log::info!("Received delayed packet"),
+                    WriteRangeError::ExceedBuffer(_) => {
+                        log::error!("Remote did not honor window size")
+                    }
+                }
             }
         }
-
-        todo!()
     }
 }
 
@@ -193,6 +206,9 @@ impl<const N: usize> TcpTransport<N> {
             if segment_sz == 0 {
                 // wait for data to be written in
                 // TODO: use a waiting mechanism to accommodate retransmission
+
+                self.send_buf.wait_for_new_data(self.seq_no).await;
+                segment_sz = MAX_SEGMENT_SZ;
             }
         }
     }
@@ -541,6 +557,19 @@ pub struct Established {
     conn: TcpConn,
 }
 
+impl Established {
+    async fn handle_packet<'a>(
+        &self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) {
+        self.conn
+            .handle_packet(ip_header, tcp_header, payload)
+            .await
+    }
+}
+
 #[derive(Debug)]
 pub enum TcpConnectError {
     Transport(TransportError),
@@ -663,8 +692,9 @@ impl Socket {
             }
             TcpState::SynSent(s) => (s.establish(tcp_header).await.unwrap().into(), None),
             TcpState::SynReceived(s) => (s.establish(tcp_header).await.into(), None),
-            TcpState::Established(_) => {
-                todo!()
+            TcpState::Established(s) => {
+                s.handle_packet(ip_header, tcp_header, payload).await;
+                (s.into(), None)
             }
         };
         self.state = Some(next_state);
