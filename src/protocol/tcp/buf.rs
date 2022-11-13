@@ -27,6 +27,18 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
+    pub async fn head(&self) -> usize {
+        self.inner.lock().await.head
+    }
+
+    pub async fn tail(&self) -> usize {
+        self.inner.lock().await.tail
+    }
+
+    pub async fn window_size(&self) -> usize {
+        self.inner.lock().await.write_remaining_size()
+    }
+
     pub async fn write(&self, bytes: &[u8]) -> usize {
         let mut send_buf = self.inner.lock().await;
         let written = send_buf.write(bytes);
@@ -394,6 +406,18 @@ impl<const N: usize> RecvBuf<N> {
             written: Notifier::new(),
             read: Notifier::new(),
         }
+    }
+
+    pub async fn head(&self) -> usize {
+        self.inner.lock().await.head
+    }
+
+    pub async fn tail(&self) -> usize {
+        self.inner.lock().await.tail
+    }
+
+    pub async fn window_size(&self) -> usize {
+        self.inner.lock().await.write_remaining_size()
     }
 
     pub async fn try_fill<'a>(&self, dest: &'a mut [u8]) -> &'a [u8] {

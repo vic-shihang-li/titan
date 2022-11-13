@@ -1,7 +1,7 @@
 use crate::protocol::tcp::buf::{SetTailError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
-use crate::route::Router;
+use crate::route::{Router, SendError};
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::net::Ipv4Addr;
@@ -71,8 +71,12 @@ impl<const N: usize> InnerTcpConn<N> {
         let recv_buf = RecvBuf::new(start_ack_no);
 
         let sb = send_buf.clone();
+        let rb = recv_buf.clone();
         let send_worker = tokio::spawn(async move {
-            send_buf_transporter(sb, remote, local_port, router).await;
+            TcpTransport::init(sb, rb, remote, local_port, router)
+                .await
+                .run()
+                .await;
         });
 
         Self {
@@ -135,17 +139,75 @@ impl<const N: usize> Drop for InnerTcpConn<N> {
     }
 }
 
-async fn send_buf_transporter<const N: usize>(
+struct TcpTransport<const N: usize> {
     send_buf: SendBuf<N>,
+    recv_buf: RecvBuf<N>,
     remote: Remote,
     local_port: Port,
     router: Arc<Router>,
-) {
-    loop {
-        // TODO:
-        // 1. eagerly send out buffered data (no congestion ctrl)
-        // 2. retransmit when ack hasn't been received
-        todo!()
+    seq_no: usize,
+}
+
+impl<const N: usize> TcpTransport<N> {
+    async fn init(
+        send_buf: SendBuf<N>,
+        recv_buf: RecvBuf<N>,
+        remote: Remote,
+        local_port: Port,
+        router: Arc<Router>,
+    ) -> Self {
+        let seq_no = send_buf.tail().await;
+        Self {
+            send_buf,
+            recv_buf,
+            remote,
+            local_port,
+            router,
+            seq_no,
+        }
+    }
+
+    async fn run(mut self) {
+        const PAYLOAD_SZ: usize = 1024;
+        let mut payload = [0; PAYLOAD_SZ];
+        loop {
+            if self
+                .send_buf
+                .try_slice(self.seq_no, &mut payload)
+                .await
+                .is_ok()
+            {
+                self.seq_no += PAYLOAD_SZ;
+                // TODO: handle send failure
+                self.send(&payload).await.unwrap();
+            }
+        }
+    }
+
+    async fn send(&self, payload: &[u8]) -> Result<(), SendError> {
+        let tcp_packet_bytes = self.prepare_tcp_packet(payload).await;
+        self.router
+            .send(&tcp_packet_bytes, Protocol::Tcp, self.remote.ip())
+            .await
+    }
+
+    async fn prepare_tcp_packet(&self, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let src_port = self.local_port.0;
+        let dst_port = self.remote.port().0;
+        let seq_no = self.seq_no.try_into().expect("seq no overflow");
+        let window_sz = self.send_buf.window_size().await.try_into().unwrap();
+
+        let mut header = TcpHeader::new(src_port, dst_port, seq_no, window_sz);
+        header.syn = true;
+        header.ack = true;
+        header.acknowledgment_number = self.recv_buf.head().await.try_into().unwrap();
+
+        header.write(&mut bytes).unwrap();
+        bytes.extend_from_slice(payload);
+
+        bytes
     }
 }
 
