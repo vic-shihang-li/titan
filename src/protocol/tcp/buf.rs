@@ -254,7 +254,7 @@ impl<const N: usize> InnerSendBuf<N> {
         if written < will_write {
             // looped over to vector beginning, continue write.
             let end = will_write - written;
-            self.buf[0..end].copy_from_slice(&bytes[..end]);
+            self.buf[0..end].copy_from_slice(&bytes[written..written + end]);
         }
 
         self.head += will_write;
