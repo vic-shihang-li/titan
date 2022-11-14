@@ -7,6 +7,7 @@ use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -170,6 +171,8 @@ struct TcpTransport<const N: usize> {
     local_port: Port,
     router: Arc<Router>,
     seq_no: usize,
+    last_transmitted: Instant,
+    ack_batch_timeout: Duration,
 }
 
 impl<const N: usize> TcpTransport<N> {
@@ -188,12 +191,17 @@ impl<const N: usize> TcpTransport<N> {
             local_port,
             router,
             seq_no,
+            last_transmitted: Instant::now(),
+            ack_batch_timeout: Duration::from_millis(1),
         }
     }
 
     async fn run(mut self) {
         let mut segment = [0; MAX_SEGMENT_SZ];
         let mut segment_sz = MAX_SEGMENT_SZ;
+
+        // Set upper bound on how long before acks are sent back to sender.
+        let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
 
         loop {
             tokio::select! {
@@ -202,6 +210,9 @@ impl<const N: usize> TcpTransport<N> {
                         segment_sz = MAX_SEGMENT_SZ;
                     }
                     segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                }
+                _ = transmit_ack_interval.tick() => {
+                    self.check_and_retransmit_ack().await;
                 }
             }
         }
@@ -227,12 +238,23 @@ impl<const N: usize> TcpTransport<N> {
         next_segment_sz
     }
 
+    async fn check_and_retransmit_ack(&mut self) {
+        if self.last_transmitted.elapsed() > self.ack_batch_timeout {
+            // The empty-payload packet's main purpose is to update the remote
+            // about our latest ACK sequence number.
+            self.send(&[]).await.unwrap();
+        }
+    }
+
     async fn send(&mut self, payload: &[u8]) -> Result<(), SendError> {
         let tcp_packet_bytes = self.prepare_tcp_packet(payload).await;
         self.router
             .send(&tcp_packet_bytes, Protocol::Tcp, self.remote.ip())
             .await
-            .map(|_| self.seq_no += payload.len())
+            .map(|_| {
+                self.seq_no += payload.len();
+                self.last_transmitted = Instant::now();
+            })
     }
 
     async fn prepare_tcp_packet(&self, payload: &[u8]) -> Vec<u8> {

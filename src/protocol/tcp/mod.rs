@@ -452,8 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_file() {
-        // TODO: send bigger files
-        let payload_sz = 65000;
+        let payload_sz = 50_000_000;
         let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let data: Vec<_> = base_data.into_iter().cycle().take(payload_sz).collect();
 
