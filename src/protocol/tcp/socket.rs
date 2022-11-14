@@ -202,7 +202,6 @@ impl<const N: usize> TcpTransport<N> {
                 Ok(bytes_to_read) => {
                     // TODO: handle send failure
                     self.send(&segment[..segment_sz]).await.unwrap();
-                    self.seq_no += segment_sz;
                     segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
                 }
                 Err(e) => match e {
@@ -221,11 +220,12 @@ impl<const N: usize> TcpTransport<N> {
         }
     }
 
-    async fn send(&self, payload: &[u8]) -> Result<(), SendError> {
+    async fn send(&mut self, payload: &[u8]) -> Result<(), SendError> {
         let tcp_packet_bytes = self.prepare_tcp_packet(payload).await;
         self.router
             .send(&tcp_packet_bytes, Protocol::Tcp, self.remote.ip())
             .await
+            .map(|_| self.seq_no += payload.len())
     }
 
     async fn prepare_tcp_packet(&self, payload: &[u8]) -> Vec<u8> {
