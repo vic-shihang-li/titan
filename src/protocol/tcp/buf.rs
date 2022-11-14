@@ -1,7 +1,7 @@
 use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
-    sync::Arc,
+    sync::{atomic::AtomicU16, atomic::Ordering::SeqCst, Arc},
     usize,
 };
 
@@ -14,6 +14,7 @@ use super::TCP_DEFAULT_WINDOW_SZ;
 #[derive(Debug, Clone)]
 pub struct SendBuf<const N: usize> {
     inner: Arc<Mutex<InnerSendBuf<N>>>,
+    window_size: Arc<AtomicU16>,
     not_full: Notifier,
     written: Notifier,
 }
@@ -22,6 +23,7 @@ impl<const N: usize> SendBuf<N> {
     pub fn new(initial_seq_no: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
+            window_size: Arc::new(AtomicU16::new(N.try_into().unwrap())),
             not_full: Notifier::new(),
             written: Notifier::new(),
         }
@@ -35,8 +37,24 @@ impl<const N: usize> SendBuf<N> {
         self.inner.lock().await.tail
     }
 
-    pub async fn window_size(&self) -> usize {
-        self.inner.lock().await.write_remaining_size()
+    /// Set the window size that was sent to us by our remote.
+    pub fn set_window_size(&self, window_size: u16) {
+        self.window_size.store(window_size, SeqCst);
+    }
+
+    /// Get the window size that was sent to us by our remote.
+    pub fn window_size(&self) -> u16 {
+        self.window_size.load(SeqCst)
+    }
+
+    /// Get the window size that we transmit to our remote counterpart.
+    pub async fn advertised_window_size(&self) -> u16 {
+        self.inner
+            .lock()
+            .await
+            .write_remaining_size()
+            .try_into()
+            .unwrap()
     }
 
     pub async fn write(&self, bytes: &[u8]) -> usize {

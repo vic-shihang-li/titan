@@ -128,6 +128,7 @@ impl<const N: usize> InnerTcpConn<N> {
         payload: &[u8],
     ) {
         assert!(tcp_header.ack());
+
         if let Err(e) = self
             .send_buf
             .set_tail(tcp_header.acknowledgment_number().try_into().unwrap())
@@ -140,6 +141,8 @@ impl<const N: usize> InnerTcpConn<N> {
                 ),
             }
         }
+
+        self.send_buf.set_window_size(tcp_header.window_size());
 
         if !payload.is_empty() {
             if let Err(e) = self
@@ -222,15 +225,16 @@ impl<const N: usize> TcpTransport<N> {
         #[allow(unused_assignments)]
         let mut next_segment_sz = MAX_SEGMENT_SZ;
 
+        let window_sz = self.send_buf.window_size().into();
         match self.send_buf.try_slice(self.seq_no, buf).await {
-            Ok(bytes_to_read) => {
+            Ok(bytes_readable) => {
                 // TODO: handle send failure
                 self.send(buf).await.unwrap();
-                next_segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
+                next_segment_sz = min(MAX_SEGMENT_SZ, min(window_sz, bytes_readable));
             }
             Err(e) => match e {
                 SliceError::OutOfRange(remaining_sz) => {
-                    next_segment_sz = remaining_sz;
+                    next_segment_sz = min(remaining_sz, window_sz);
                 }
             },
         }
@@ -263,7 +267,7 @@ impl<const N: usize> TcpTransport<N> {
         let src_port = self.local_port.0;
         let dst_port = self.remote.port().0;
         let seq_no = self.seq_no.try_into().expect("seq no overflow");
-        let window_sz = self.send_buf.window_size().await.try_into().unwrap();
+        let window_sz = self.send_buf.advertised_window_size().await;
 
         let mut header = TcpHeader::new(src_port, dst_port, seq_no, window_sz);
         header.syn = true;
