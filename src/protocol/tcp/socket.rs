@@ -14,6 +14,8 @@ use tokio::task::JoinHandle;
 use super::buf::{RecvBuf, SendBuf};
 use super::{Port, Remote, SocketId, TCP_DEFAULT_WINDOW_SZ};
 
+const MAX_SEGMENT_SZ: usize = 1024;
+
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
     send_buf: SendBuf<N>,
@@ -190,34 +192,39 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn run(mut self) {
-        const MAX_SEGMENT_SZ: usize = 1024;
         let mut segment = [0; MAX_SEGMENT_SZ];
         let mut segment_sz = MAX_SEGMENT_SZ;
-        loop {
-            match self
-                .send_buf
-                .try_slice(self.seq_no, &mut segment[..segment_sz])
-                .await
-            {
-                Ok(bytes_to_read) => {
-                    // TODO: handle send failure
-                    self.send(&segment[..segment_sz]).await.unwrap();
-                    segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
-                }
-                Err(e) => match e {
-                    SliceError::OutOfRange(remaining_sz) => {
-                        segment_sz = remaining_sz;
-                    }
-                },
-            }
-            if segment_sz == 0 {
-                // wait for data to be written in
-                // TODO: use a waiting mechanism to accommodate retransmission
 
-                self.send_buf.wait_for_new_data(self.seq_no).await;
-                segment_sz = MAX_SEGMENT_SZ;
+        loop {
+            tokio::select! {
+                _ = self.send_buf.wait_for_new_data(self.seq_no) => {
+                    if segment_sz == 0 {
+                        segment_sz = MAX_SEGMENT_SZ;
+                    }
+                    segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                }
             }
         }
+    }
+
+    async fn try_consume_and_send(&mut self, buf: &mut [u8]) -> usize {
+        #[allow(unused_assignments)]
+        let mut next_segment_sz = MAX_SEGMENT_SZ;
+
+        match self.send_buf.try_slice(self.seq_no, buf).await {
+            Ok(bytes_to_read) => {
+                // TODO: handle send failure
+                self.send(buf).await.unwrap();
+                next_segment_sz = min(MAX_SEGMENT_SZ, bytes_to_read);
+            }
+            Err(e) => match e {
+                SliceError::OutOfRange(remaining_sz) => {
+                    next_segment_sz = remaining_sz;
+                }
+            },
+        }
+
+        next_segment_sz
     }
 
     async fn send(&mut self, payload: &[u8]) -> Result<(), SendError> {
