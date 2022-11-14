@@ -178,7 +178,7 @@ impl Net {
         let sender = tx.clone();
 
         tokio::spawn(async move {
-            let mut buf = [0; 1024];
+            let mut buf = [0; 65536];
             while let Ok(sz) = sock.recv(&mut buf).await {
                 // Note: there seems to be a bug here. We should be able to
                 // unwrap send() b/c there should always be a listener, and we
