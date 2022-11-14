@@ -106,7 +106,15 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
-        self.recv_buf.fill(out_buffer).await;
+        const MAX_READ_SZ: usize = 1024;
+
+        let mut curr = 0;
+        while curr < out_buffer.len() {
+            let end = min(out_buffer.len(), curr + MAX_READ_SZ);
+            self.recv_buf.fill(&mut out_buffer[curr..end]).await;
+            curr = end;
+        }
+
         Ok(())
     }
 
