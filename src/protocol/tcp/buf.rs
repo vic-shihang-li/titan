@@ -169,7 +169,8 @@ impl<const N: usize> SendBuf<N> {
     ///
     /// On success, `buf` is filled and the function returns how many bytes can
     /// be sliced after the slice contained in `buf`. On error, `buf` is not
-    /// modified, and the error contains the total number of unconsumed bytes.
+    /// modified, and the error contains the number of unconsumed bytes starting
+    /// at `start_seq_no`.
     pub async fn try_slice(
         &self,
         start_seq_no: usize,
@@ -246,7 +247,7 @@ pub enum SetTailError {
 #[derive(Debug)]
 pub enum SliceError {
     /// Errs when the requested slice goes beyond the actual slice.
-    /// Returns the size of the actual slice.
+    /// Returns the maximum number of bytes sliceable.
     OutOfRange(usize),
 }
 
@@ -291,10 +292,10 @@ impl<'a> ByteSlice<'a> {
     pub fn slice(&self, offset: usize, n_bytes: usize) -> Result<ByteSlice<'a>, SliceError> {
         let len = self.len();
         if offset > len {
-            return Err(SliceError::OutOfRange(len));
+            return Err(SliceError::OutOfRange(0));
         }
         if offset + n_bytes > len {
-            return Err(SliceError::OutOfRange(len));
+            return Err(SliceError::OutOfRange(len - offset));
         }
 
         let start = offset;
