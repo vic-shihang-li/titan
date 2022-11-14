@@ -455,11 +455,19 @@ mod tests {
 
     #[tokio::test]
     async fn send_file() {
-        let payload_sz = 50_000_000;
-        let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let data: Vec<_> = base_data.into_iter().cycle().take(payload_sz).collect();
+        let test_file_size = 50_000_000;
+        test_send_recv(make_in_mem_test_file(test_file_size), vec![]).await;
+    }
 
-        test_send_recv(data, vec![]).await;
+    #[tokio::test]
+    async fn bidirectional_send_file() {
+        let test_file_size = 10_000_000;
+
+        test_send_recv(
+            make_in_mem_test_file(test_file_size),
+            make_in_mem_test_file(test_file_size),
+        )
+        .await;
     }
 
     // General-purposed TCP test that sends two payloads to one another.
@@ -472,8 +480,10 @@ mod tests {
         let payload1_clone = payload1.clone();
         let payload2_clone = payload2.clone();
         let barr = Arc::new(Barrier::new(2));
+        let finished = Arc::new(Barrier::new(2));
 
         let listen_barr = barr.clone();
+        let finished_barr = finished.clone();
         let n1_cfg = send_cfg.clone();
         let n2_cfg = recv_cfg.clone();
 
@@ -500,6 +510,7 @@ mod tests {
 
             snd.await.unwrap();
             rcv.await.unwrap();
+            finished_barr.wait().await;
         });
 
         let n2 = tokio::spawn(async move {
@@ -522,16 +533,22 @@ mod tests {
 
             snd.await.unwrap();
             rcv.await.unwrap();
+            finished.wait().await;
         });
 
         n1.await.unwrap();
         n2.await.unwrap();
     }
 
+    fn make_in_mem_test_file(size: usize) -> Vec<u8> {
+        let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        base_data.into_iter().cycle().take(size).collect()
+    }
+
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {
         let node = Arc::new(
             NodeBuilder::new(&cfg)
-                .with_rip_interval(Duration::from_millis(5))
+                .with_rip_interval(Duration::from_millis(1))
                 .with_entry_max_age(Duration::from_millis(12))
                 .with_prune_interval(Duration::from_millis(1))
                 .with_protocol_handler(Protocol::Rip, RipHandler::default())
@@ -543,7 +560,7 @@ mod tests {
             node_runner.run().await;
         });
         // Give nodes time to converge on routes
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
         node
     }
 }
