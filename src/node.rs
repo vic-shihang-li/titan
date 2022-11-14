@@ -18,6 +18,7 @@ pub struct NodeBuilder<'a> {
     built: bool,
     prune_interval: Duration,
     rip_update_interval: Duration,
+    drop_factor: usize,
     entry_max_age: Duration,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
@@ -30,6 +31,7 @@ impl<'a> NodeBuilder<'a> {
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
             entry_max_age: Duration::from_secs(12),
+            drop_factor: 0,
             protocol_handlers: HashMap::new(),
         }
     }
@@ -78,6 +80,7 @@ impl<'a> NodeBuilder<'a> {
                 prune_interval: self.prune_interval,
                 rip_update_interval: self.rip_update_interval,
                 entry_max_age: self.entry_max_age,
+                drop_factor: self.drop_factor,
             },
         ));
         let tcp = Arc::new(Tcp::new(router.clone()));

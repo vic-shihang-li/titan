@@ -1,6 +1,7 @@
 #![feature(map_try_insert)]
 
 pub mod cli;
+mod drop_policy;
 #[cfg(test)]
 mod fixture;
 pub mod net;

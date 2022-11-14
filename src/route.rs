@@ -1,3 +1,4 @@
+use crate::drop_policy::{DropFactor, DropPolicy};
 use crate::net::{Ipv4PacketBuilder, Net};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
@@ -215,6 +216,7 @@ pub struct RouterConfig {
     pub prune_interval: Duration,
     pub rip_update_interval: Duration,
     pub entry_max_age: Duration,
+    pub drop_factor: usize,
 }
 
 impl Default for RouterConfig {
@@ -223,6 +225,7 @@ impl Default for RouterConfig {
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
             entry_max_age: Duration::from_secs(12),
+            drop_factor: 0,
         }
     }
 }
@@ -233,6 +236,7 @@ pub struct Router {
     routes: Arc<RwLock<ForwardingTable>>,
     pruner: JoinHandle<()>,
     rip_updater: JoinHandle<()>,
+    drop_policy: DropFactor,
 }
 
 impl Router {
@@ -267,6 +271,7 @@ impl Router {
             routes,
             pruner,
             rip_updater,
+            drop_policy: DropFactor::new(config.drop_factor),
         }
     }
 
@@ -302,6 +307,10 @@ impl Router {
                 log::debug!("Could not obtain the link where a packet is sent; is this in a test?");
             }
         };
+
+        if self.drop_policy.should_drop(header) {
+            return PacketDecision::Drop;
+        }
 
         if self.is_my_addr(header.destination_addr()) {
             return PacketDecision::Consume;
