@@ -1018,10 +1018,12 @@ mod tests {
             let mut bytes = vec![0; 16];
             loop {
                 let consumed = buf.try_fill(&mut bytes[..data.len()]);
-                if consumed.is_empty() {
+                if consumed.len() < data.len() {
+                    assert_eq!(consumed, &data[..consumed.len()]);
+                    total_consumed += consumed.len();
                     break;
                 }
-                assert_eq!(&consumed, &data);
+                assert_eq!(consumed, &data);
                 total_consumed += consumed.len();
 
                 assert_eq!(
