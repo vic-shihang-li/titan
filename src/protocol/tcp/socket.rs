@@ -195,7 +195,7 @@ impl<const N: usize> TcpTransport<N> {
             seq_no,
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
-            retrans_interval: Duration::from_millis(50),
+            retrans_interval: Duration::from_millis(5),
         }
     }
 
@@ -234,7 +234,8 @@ impl<const N: usize> TcpTransport<N> {
         match self.send_buf.try_slice(self.seq_no, buf).await {
             Ok(bytes_readable) => {
                 // TODO: handle send failure
-                self.send(buf).await.unwrap();
+                self.send(self.seq_no, buf).await.unwrap();
+                self.seq_no += buf.len();
                 next_segment_sz = min(MAX_SEGMENT_SZ, min(window_sz, bytes_readable));
             }
             Err(e) => match e {
@@ -251,7 +252,7 @@ impl<const N: usize> TcpTransport<N> {
         if self.last_transmitted.elapsed() > self.ack_batch_timeout {
             // The empty-payload packet's main purpose is to update the remote
             // about our latest ACK sequence number.
-            self.send(&[]).await.unwrap();
+            self.send(self.seq_no, &[]).await.unwrap();
         }
     }
 
@@ -261,28 +262,27 @@ impl<const N: usize> TcpTransport<N> {
         #[allow(clippy::collapsible_if)]
         if last_ack_update_time > self.retrans_interval {
             if self.send_buf.try_slice(tail, segment_buf).await.is_ok() {
-                self.send(segment_buf).await.unwrap();
+                self.send(tail, segment_buf).await.unwrap();
             }
         }
     }
 
-    async fn send(&mut self, payload: &[u8]) -> Result<(), SendError> {
-        let tcp_packet_bytes = self.prepare_tcp_packet(payload).await;
+    async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
+        let tcp_packet_bytes = self.prepare_tcp_packet(seq_no, payload).await;
         self.router
             .send(&tcp_packet_bytes, Protocol::Tcp, self.remote.ip())
             .await
             .map(|_| {
-                self.seq_no += payload.len();
                 self.last_transmitted = Instant::now();
             })
     }
 
-    async fn prepare_tcp_packet(&self, payload: &[u8]) -> Vec<u8> {
+    async fn prepare_tcp_packet(&self, seq_no: usize, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let src_port = self.local_port.0;
         let dst_port = self.remote.port().0;
-        let seq_no = self.seq_no.try_into().expect("seq no overflow");
+        let seq_no = seq_no.try_into().expect("seq no overflow");
         let window_sz = self.send_buf.advertised_window_size().await;
 
         let mut header = TcpHeader::new(src_port, dst_port, seq_no, window_sz);

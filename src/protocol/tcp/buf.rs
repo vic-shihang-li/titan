@@ -151,6 +151,7 @@ impl<const N: usize> SendBuf<N> {
     ) -> Result<usize, SliceError> {
         let send_buf = self.inner.lock().await;
         let unconsumed = send_buf.unconsumed();
+        assert!(start_seq_no >= send_buf.tail);
         let offset = start_seq_no - send_buf.tail;
         unconsumed.slice(offset, buf.len()).map(|slice| {
             slice.copy_into_buf(buf).unwrap();

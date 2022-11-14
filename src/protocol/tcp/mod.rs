@@ -503,7 +503,7 @@ mod tests {
             let rcv = tokio::spawn(async move {
                 let mut buf = vec![0; payload2_clone.len()];
                 conn.read_all(&mut buf).await.unwrap();
-                assert_eq!(buf, payload2_clone);
+                assert!(buf == payload2_clone);
             });
 
             snd.await.unwrap();
@@ -522,7 +522,7 @@ mod tests {
             let rcv = tokio::spawn(async move {
                 let mut buf = vec![0; payload1_clone.len()];
                 conn2.read_all(&mut buf).await.unwrap();
-                assert_eq!(buf, payload1_clone);
+                assert!(buf == payload1_clone);
             });
             let snd = tokio::spawn(async move {
                 conn.send_all(&payload2).await.unwrap();
