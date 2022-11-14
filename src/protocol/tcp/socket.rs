@@ -174,6 +174,7 @@ struct TcpTransport<const N: usize> {
     seq_no: usize,
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
+    retrans_interval: Duration,
 }
 
 impl<const N: usize> TcpTransport<N> {
@@ -194,6 +195,7 @@ impl<const N: usize> TcpTransport<N> {
             seq_no,
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
+            retrans_interval: Duration::from_millis(50),
         }
     }
 
@@ -203,6 +205,8 @@ impl<const N: usize> TcpTransport<N> {
 
         // Set upper bound on how long before acks are sent back to sender.
         let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
+
+        let mut retrans_interval = tokio::time::interval(self.retrans_interval);
 
         loop {
             tokio::select! {
@@ -214,6 +218,9 @@ impl<const N: usize> TcpTransport<N> {
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
+                }
+                _ = retrans_interval.tick() => {
+                    self.check_retransmission(&mut segment).await;
                 }
             }
         }
@@ -245,6 +252,17 @@ impl<const N: usize> TcpTransport<N> {
             // The empty-payload packet's main purpose is to update the remote
             // about our latest ACK sequence number.
             self.send(&[]).await.unwrap();
+        }
+    }
+
+    async fn check_retransmission(&mut self, segment_buf: &mut [u8]) {
+        let (tail, last_ack_update_time) = self.send_buf.get_tail_and_age().await;
+
+        #[allow(clippy::collapsible_if)]
+        if last_ack_update_time > self.retrans_interval {
+            if self.send_buf.try_slice(tail, segment_buf).await.is_ok() {
+                self.send(segment_buf).await.unwrap();
+            }
         }
     }
 

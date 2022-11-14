@@ -2,6 +2,7 @@ use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
     sync::{atomic::AtomicU16, atomic::Ordering::SeqCst, Arc},
+    time::{Duration, Instant},
     usize,
 };
 
@@ -35,6 +36,11 @@ impl<const N: usize> SendBuf<N> {
 
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
+    }
+
+    pub async fn get_tail_and_age(&self) -> (usize, Duration) {
+        let buf = self.inner.lock().await;
+        (buf.tail, buf.last_tail_mutated.elapsed())
     }
 
     /// Set the window size that was sent to us by our remote.
@@ -92,8 +98,10 @@ impl<const N: usize> SendBuf<N> {
 
     pub async fn set_tail(&self, seq_no: usize) -> Result<(), SetTailError> {
         let mut buf = self.inner.lock().await;
-        buf.set_tail(seq_no).map(|_| {
-            self.not_full.notify_all();
+        buf.set_tail(seq_no).map(|updated| {
+            if updated {
+                self.not_full.notify_all();
+            }
         })
     }
 
@@ -180,6 +188,7 @@ struct InnerSendBuf<const N: usize> {
     // This is the "tail" of a producer-consumer buffer.
     // This is SDR.UNA in the protocol.
     tail: usize,
+    last_tail_mutated: Instant,
     // Index of the next byte to be written by the user.
     // This is LBW + 1, where LBW is last byte written in protocol terminology.
     // LBW must not overtake UNA in terms of ring buffer indices.
@@ -323,6 +332,7 @@ impl<const N: usize> InnerSendBuf<N> {
             buf: [0; N],
             tail: initial_seq_no,
             head: initial_seq_no,
+            last_tail_mutated: Instant::now(),
         }
     }
 
@@ -392,14 +402,22 @@ impl<const N: usize> InnerSendBuf<N> {
     ///
     /// Errs when the provided sequence number is greater than the sequence
     /// number of the head of the buffer.
-    pub fn set_tail(&mut self, seq_no: usize) -> Result<(), SetTailError> {
+    ///
+    /// On success, returns a boolean indicating whether the tail was mutated:
+    /// i.e. return false when tail was already set to `seq_no`.
+    pub fn set_tail(&mut self, seq_no: usize) -> Result<bool, SetTailError> {
+        if seq_no == self.tail {
+            return Ok(false);
+        }
+
         if seq_no > self.head {
             Err(SetTailError::TooBig)
         } else if seq_no < self.tail {
             Err(SetTailError::LowerThanCurrent)
         } else {
             self.tail = seq_no;
-            Ok(())
+            self.last_tail_mutated = Instant::now();
+            Ok(true)
         }
     }
 
