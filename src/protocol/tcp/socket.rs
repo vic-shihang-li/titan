@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, Remote, SocketId, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ};
+use super::{Port, Remote, SocketId, TcpConnError, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ};
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
@@ -392,7 +392,7 @@ impl Closed {
         self,
         src_port: Port,
         dest: (Ipv4Addr, Port),
-    ) -> Result<(oneshot::Receiver<TcpConn>, SynSent), TransportError> {
+    ) -> Result<(oneshot::Receiver<Result<TcpConn, TcpConnError>>, SynSent), TransportError> {
         let (established_tx, established_rx) = oneshot::channel();
         let (dest_ip, dest_port) = dest;
 
@@ -508,7 +508,7 @@ pub struct SynSent {
     dest_ip: Ipv4Addr,
     dest_port: Port,
     router: Arc<Router>,
-    established_tx: oneshot::Sender<TcpConn>,
+    established_tx: oneshot::Sender<Result<TcpConn, TcpConnError>>,
 }
 
 impl SynSent {
@@ -537,7 +537,7 @@ impl SynSent {
         );
 
         self.established_tx
-            .send(conn.clone())
+            .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");
 
         Ok(Established { conn })
@@ -613,12 +613,6 @@ impl Established {
 }
 
 #[derive(Debug)]
-pub enum TcpConnectError {
-    Transport(TransportError),
-    AlreadyConnected,
-}
-
-#[derive(Debug)]
 pub enum ListenTransitionError {
     // Errs when attempting to transition into Listen state from a state that's
     // not Closed.
@@ -687,20 +681,20 @@ impl Socket {
 
     pub async fn initiate_connection(
         &mut self,
-    ) -> Result<oneshot::Receiver<TcpConn>, TcpConnectError> {
+    ) -> Result<oneshot::Receiver<Result<TcpConn, TcpConnError>>, TcpConnError> {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Closed(s) => {
                 let (established_rx, syn_sent) = s
                     .connect(self.local_port(), self.remote_ip_port())
                     .await
-                    .map_err(TcpConnectError::Transport)?;
+                    .map_err(TcpConnError::Transport)?;
                 self.state = Some(syn_sent.into());
                 Ok(established_rx)
             }
             _ => {
                 self.state = Some(state);
-                Err(TcpConnectError::AlreadyConnected)
+                Err(TcpConnError::ConnectionExists(self.id.remote()))
             }
         }
     }

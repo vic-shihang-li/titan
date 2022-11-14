@@ -6,6 +6,7 @@ mod socket;
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::time::Duration;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
 
@@ -17,7 +18,7 @@ use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
 use tokio::sync::RwLock;
 
-use self::socket::{SynReceived, TcpState};
+use self::socket::{SynReceived, TcpState, TransportError};
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
@@ -27,6 +28,8 @@ pub const MAX_SEGMENT_SZ: usize = 1024;
 // The maximum number of TCP connections that are waiting to be accepted on a
 // listener port.
 pub const MAX_PENDING_TCP_CONNECTIONS: usize = 1024;
+
+pub const TCP_DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A tuple that uniquely identifies a remote location.
 #[derive(Debug, Copy, Clone)]
@@ -49,6 +52,8 @@ impl Remote {
 #[derive(Debug)]
 pub enum TcpConnError {
     ConnectionExists(Remote),
+    Transport(TransportError),
+    Timeout,
 }
 
 #[derive(Debug)]
@@ -91,9 +96,9 @@ impl Tcp {
             .expect("Failed to send SYN packet");
         drop(sockets);
 
-        let tcp_conn = on_connected.await.unwrap();
-
-        Ok(tcp_conn)
+        on_connected
+            .await
+            .expect("Failed to receive connection status")
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
