@@ -480,10 +480,8 @@ mod tests {
         let payload1_clone = payload1.clone();
         let payload2_clone = payload2.clone();
         let barr = Arc::new(Barrier::new(2));
-        let finished = Arc::new(Barrier::new(2));
 
         let listen_barr = barr.clone();
-        let finished_barr = finished.clone();
         let n1_cfg = send_cfg.clone();
         let n2_cfg = recv_cfg.clone();
 
@@ -510,7 +508,6 @@ mod tests {
 
             snd.await.unwrap();
             rcv.await.unwrap();
-            finished_barr.wait().await;
         });
 
         let n2 = tokio::spawn(async move {
@@ -533,7 +530,6 @@ mod tests {
 
             snd.await.unwrap();
             rcv.await.unwrap();
-            finished.wait().await;
         });
 
         n1.await.unwrap();
