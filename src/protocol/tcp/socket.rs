@@ -13,9 +13,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, Remote, SocketId, TCP_DEFAULT_WINDOW_SZ};
-
-const MAX_SEGMENT_SZ: usize = 1024;
+use super::{Port, Remote, SocketId, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ};
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {

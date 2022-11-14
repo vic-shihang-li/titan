@@ -21,6 +21,9 @@ use self::socket::{SynReceived, TcpState};
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
+/// The maximum payload size for each TCP packet.
+pub const MAX_SEGMENT_SZ: usize = 1024;
+
 // The maximum number of TCP connections that are waiting to be accepted on a
 // listener port.
 pub const MAX_PENDING_TCP_CONNECTIONS: usize = 1024;
