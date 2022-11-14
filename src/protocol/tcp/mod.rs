@@ -449,8 +449,8 @@ mod tests {
     #[tokio::test]
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
-
-        test_send_payload(String::from("hello world!").as_bytes().into()).await;
+        let payload = String::from("hello world!").as_bytes().into();
+        test_send_recv(payload, vec![]).await;
     }
 
     #[tokio::test]
@@ -459,34 +459,50 @@ mod tests {
         let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let data: Vec<_> = base_data.into_iter().cycle().take(payload_sz).collect();
 
-        test_send_payload(data).await;
+        test_send_recv(data, vec![]).await;
     }
 
-    async fn test_send_payload(payload: Vec<u8>) {
+    // General-purposed TCP test that sends two payloads to one another.
+    async fn test_send_recv(payload1: Vec<u8>, payload2: Vec<u8>) {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         let send_cfg = abc_net.a.clone();
         let recv_cfg = abc_net.b.clone();
 
         let recv_listen_port = 5656;
-        let payload2 = payload.clone();
+        let payload1_clone = payload1.clone();
+        let payload2_clone = payload2.clone();
         let barr = Arc::new(Barrier::new(2));
 
         let listen_barr = barr.clone();
-        let sender_cfg = send_cfg.clone();
-        let receiver_cfg = recv_cfg.clone();
-        let sender = tokio::spawn(async move {
-            let node = create_and_start_node(sender_cfg).await;
+        let n1_cfg = send_cfg.clone();
+        let n2_cfg = recv_cfg.clone();
+
+        let n1 = tokio::spawn(async move {
+            let node = create_and_start_node(n1_cfg).await;
             listen_barr.wait().await;
 
             let dest_ip = {
-                let recv_ips = receiver_cfg.get_my_interface_ips();
+                let recv_ips = n2_cfg.get_my_interface_ips();
                 recv_ips[0]
             };
             let conn = node.connect(dest_ip, Port(recv_listen_port)).await.unwrap();
-            conn.send_all(&payload).await.unwrap();
+
+            let conn2 = conn.clone();
+            let snd = tokio::spawn(async move {
+                conn2.send_all(&payload1).await.unwrap();
+            });
+
+            let rcv = tokio::spawn(async move {
+                let mut buf = vec![0; payload2_clone.len()];
+                conn.read_all(&mut buf).await.unwrap();
+                assert_eq!(buf, payload2_clone);
+            });
+
+            snd.await.unwrap();
+            rcv.await.unwrap();
         });
 
-        let receiver = tokio::spawn(async move {
+        let n2 = tokio::spawn(async move {
             let node = create_and_start_node(recv_cfg).await;
 
             let mut listener = node.listen(recv_listen_port).await.unwrap();
@@ -494,13 +510,22 @@ mod tests {
 
             let conn = listener.accept().await.unwrap();
 
-            let mut buf = vec![0; payload2.len()];
-            conn.read_all(&mut buf).await.unwrap();
-            assert_eq!(buf, payload2);
+            let conn2 = conn.clone();
+            let rcv = tokio::spawn(async move {
+                let mut buf = vec![0; payload1_clone.len()];
+                conn2.read_all(&mut buf).await.unwrap();
+                assert_eq!(buf, payload1_clone);
+            });
+            let snd = tokio::spawn(async move {
+                conn.send_all(&payload2).await.unwrap();
+            });
+
+            snd.await.unwrap();
+            rcv.await.unwrap();
         });
 
-        sender.await.unwrap();
-        receiver.await.unwrap();
+        n1.await.unwrap();
+        n2.await.unwrap();
     }
 
     async fn create_and_start_node(cfg: Args) -> Arc<Node> {

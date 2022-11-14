@@ -465,7 +465,7 @@ impl<const N: usize> RecvBuf<N> {
         self.inner.lock().await.write_remaining_size()
     }
 
-    pub async fn try_fill<'a>(&self, dest: &'a mut [u8]) -> &'a [u8] {
+    pub async fn try_fill<'a>(&'a self, dest: &'a mut [u8]) -> &'a [u8] {
         let consumed = self.inner.lock().await.try_fill(dest);
         if !consumed.is_empty() {
             self.read.notify_all();
