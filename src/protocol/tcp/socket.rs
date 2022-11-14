@@ -215,14 +215,12 @@ impl<const N: usize> TcpTransport<N> {
                         segment_sz = MAX_SEGMENT_SZ;
                     }
                     segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
-                    println!("consume and sent");
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
-                    println!("retransmit ");
                 }
             }
         }
