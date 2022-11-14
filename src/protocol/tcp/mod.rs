@@ -389,7 +389,7 @@ impl ProtocolHandler for TcpHandler {
             .unwrap();
         let checksum = tcp_header.checksum();
         if checksum != tcp_header.calc_checksum_ipv4(ip_header, payload).unwrap() {
-            eprintln!("TCP checksum failed");
+            log::error!("TCP checksum failed");
             // TODO: do not proceed if checksum fails
         }
         let tcp_payload = &payload[tcp_header.slice().len()..];
@@ -447,12 +447,26 @@ mod tests {
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
 
+        test_send_payload(String::from("hello world!").as_bytes().into()).await;
+    }
+
+    #[tokio::test]
+    async fn send_file() {
+        // TODO: send bigger files
+        let payload_sz = 65000;
+        let base_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let data: Vec<_> = base_data.into_iter().cycle().take(payload_sz).collect();
+
+        test_send_payload(data).await;
+    }
+
+    async fn test_send_payload(payload: Vec<u8>) {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         let send_cfg = abc_net.a.clone();
         let recv_cfg = abc_net.b.clone();
 
-        let payload = "hello world!";
         let recv_listen_port = 5656;
+        let payload2 = payload.clone();
         let barr = Arc::new(Barrier::new(2));
 
         let listen_barr = barr.clone();
@@ -467,7 +481,7 @@ mod tests {
                 recv_ips[0]
             };
             let conn = node.connect(dest_ip, Port(recv_listen_port)).await.unwrap();
-            conn.send_all(payload.to_string().as_bytes()).await.unwrap();
+            conn.send_all(&payload).await.unwrap();
         });
 
         let receiver = tokio::spawn(async move {
@@ -478,9 +492,9 @@ mod tests {
 
             let conn = listener.accept().await.unwrap();
 
-            let mut buf = [0; 12];
+            let mut buf = vec![0; payload2.len()];
             conn.read_all(&mut buf).await.unwrap();
-            assert_eq!(String::from_utf8(buf.into()).unwrap(), payload.to_string());
+            assert_eq!(buf, payload2);
         });
 
         sender.await.unwrap();
