@@ -12,6 +12,7 @@ use crate::utils::sync::Notifier;
 
 use super::TCP_DEFAULT_WINDOW_SZ;
 
+/// The send-side TCP transmission buffer.
 #[derive(Debug, Clone)]
 pub struct SendBuf<const N: usize> {
     inner: Arc<Mutex<InnerSendBuf<N>>>,
@@ -21,6 +22,7 @@ pub struct SendBuf<const N: usize> {
 }
 
 impl<const N: usize> SendBuf<N> {
+    /// Constructs a new SendBuf.
     pub fn new(initial_seq_no: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
@@ -30,14 +32,23 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
+    /// Get the sequence number of the next, to-be-written, byte.
     pub async fn head(&self) -> usize {
         self.inner.lock().await.head
     }
 
+    /// Get the last ACK, i.e., the next byte expected by the remote side.
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
     }
 
+    /// Like tail(), but also returns the elapsed duration since the ACK was
+    /// last updated.
+    ///
+    /// Note that the elapsed duration counts from the last time ACK was
+    /// _mutated_ -- repeatedly setting ACK to the current ACK won't affect
+    /// this timer. This conveniently ignores duplicated ACKs that may happen
+    /// during transmission.
     pub async fn get_tail_and_age(&self) -> (usize, Duration) {
         let buf = self.inner.lock().await;
         (buf.tail, buf.last_tail_mutated.elapsed())
@@ -63,6 +74,7 @@ impl<const N: usize> SendBuf<N> {
             .unwrap()
     }
 
+    /// Try to write bytes into the buffer, returning the number of bytes written.
     pub async fn write(&self, bytes: &[u8]) -> usize {
         let mut send_buf = self.inner.lock().await;
         let written = send_buf.write(bytes);
@@ -72,6 +84,15 @@ impl<const N: usize> SendBuf<N> {
         written
     }
 
+    /// Writes all bytes into the buffer.
+    ///
+    /// This function could block for a _long_ time, if it tries to write a
+    /// large amount of bytes. This is because the SendBuf's space frees up only
+    /// when the remote decides to consume data, and we do not know when the
+    /// remote-side application code chooses to do so.
+    ///
+    /// To bound the amount of wait time, either use this API with
+    /// `tokio::time::timeout` or use `SendBuf::write()`.
     pub async fn write_all(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -96,6 +117,11 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
+    /// Advances the tail pointer to the provided sequence number.
+    ///
+    /// Data up to but not including `seq_no` are discarded.
+    ///
+    /// Called when handling a new TCP header, which provides the latest ACK.
     pub async fn set_tail(&self, seq_no: usize) -> Result<(), SetTailError> {
         let mut buf = self.inner.lock().await;
         buf.set_tail(seq_no).map(|updated| {
@@ -159,6 +185,7 @@ impl<const N: usize> SendBuf<N> {
         })
     }
 
+    /// Blocks until data there is data available at `seq_no`.
     pub async fn wait_for_new_data(&self, seq_no: usize) {
         loop {
             let send_buf = self.inner.lock().await;
@@ -176,13 +203,17 @@ impl<const N: usize> SendBuf<N> {
 
 /// A fixed-sized buffer for buffering data to be sent over TCP.
 ///
-/// This is akin to a producer-consumer buffer. Here, the producer is application code putting more
-/// data into the send buffer. The consumer is TCP transmitting data to the receiver, advancing the
-/// consumed portion as transmitted data are acked.
+/// This is where the low-level mechanics of the TCP send buffer is. For a
+/// higher-level API that is directly used by `TcpConn`, see `SendBuf`.
 ///
-/// This struct does not know about usable window size, i.e. how much data can be transmitted. It is
-/// up to the caller to maintain usable window size, and advance the consumed portion upon
-/// acknowledgement.
+/// This struct is akin to a producer-consumer buffer. Here, the producer is
+/// application code putting more data into the send buffer. The consumer is
+/// TCP transmitting data to the receiver, advancing the consumed portion as
+/// transmitted data are acked.
+///
+/// This struct does not know about usable window size, i.e. how much data can
+/// be transmitted. It is up to the caller to maintain usable window size, and
+/// advance the consumed portion upon acknowledgement.
 #[derive(Debug)]
 struct InnerSendBuf<const N: usize> {
     // Index of the last unacked byte in the byte stream.
@@ -456,6 +487,7 @@ impl Ord for SegmentMeta {
     }
 }
 
+/// The receiving-side of TCP transmission buffer.
 #[derive(Debug, Clone)]
 pub struct RecvBuf<const N: usize> {
     inner: Arc<Mutex<InnerRecvBuf<N>>>,
@@ -464,6 +496,7 @@ pub struct RecvBuf<const N: usize> {
 }
 
 impl<const N: usize> RecvBuf<N> {
+    /// Constructs a new RecvBuf.
     pub fn new(starting_seq_no: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
@@ -472,18 +505,35 @@ impl<const N: usize> RecvBuf<N> {
         }
     }
 
+    /// Get the next sequence number expected to be sent by the sender.
+    ///
+    /// Note that `head` intentionally ignores early arrivals. Packets with later
+    /// sequence numbers may or may not have arrived, but the packets are only
+    /// consecutive up to the sequence number returned by this method.
     pub async fn head(&self) -> usize {
         self.inner.lock().await.head
     }
 
+    /// Get the sequence number of the next byte to be consumed by the
+    /// application layer.
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
     }
 
+    /// Get the window size to be advertized to remote.
+    ///
+    /// This is the allocated buffer size minus unconsumed, consecutive bytes.
     pub async fn window_size(&self) -> usize {
         self.inner.lock().await.write_remaining_size()
     }
 
+    /// Try to fill the provided buffer.
+    ///
+    /// The method returns a slice of the written bytes, which will be a subslice
+    /// of the provided buffer.
+    ///
+    /// Filling the buffer simultaneously advances the buffer tail: bytes, once
+    /// consumed, are discarded from RecvBuf.
     pub async fn try_fill<'a>(&'a self, dest: &'a mut [u8]) -> &'a [u8] {
         let consumed = self.inner.lock().await.try_fill(dest);
         if !consumed.is_empty() {
@@ -492,6 +542,10 @@ impl<const N: usize> RecvBuf<N> {
         consumed
     }
 
+    /// Fill the entire provided buffer.
+    ///
+    /// Filling the buffer simultaneously advances the buffer tail: bytes, once
+    /// consumed, are discarded from RecvBuf.
     pub async fn fill<'a>(&self, dest: &'a mut [u8]) {
         if dest.is_empty() {
             return;
@@ -515,6 +569,18 @@ impl<const N: usize> RecvBuf<N> {
         }
     }
 
+    /// Try to write the provided bytes into RecvBuf, starting at the provided
+    /// sequence number.
+    ///
+    /// To account for early arrivals, the sequence number to start writing at
+    /// need not be the head of the buffer.
+    ///
+    /// If `seq_no != head`, then the buffer head is not updated.
+    ///
+    /// If `seq_no == head`, then the buffer head is updated by at least the
+    /// size of `bytes` (if this write does not fail for other reasons). This
+    /// write will consume the early arrival segments that are contiguous with
+    /// this write, advancing the head pointer to the furthest extent.
     pub async fn try_write(&self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
         self.inner
             .lock()
@@ -523,6 +589,13 @@ impl<const N: usize> RecvBuf<N> {
             .map(|_| self.written.notify_all())
     }
 
+    /// Like `RecvBuf::try_write()`, but blocks until all of `bytes` are written.
+    ///
+    /// Calling this method could block for a _long_ time. This is because the
+    /// method can wait for room to write in, and there's only new room available
+    /// if the application layer chooses to consume content. Since we do not
+    /// know when the application layer will consume, this method can block for
+    /// an arbitrary amount of time.
     pub async fn write(&self, seq_no: usize, bytes: &[u8]) -> Result<(), WriteRangeError> {
         loop {
             let mut recv_buf = self.inner.lock().await;
