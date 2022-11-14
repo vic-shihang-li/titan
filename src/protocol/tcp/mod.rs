@@ -450,13 +450,20 @@ mod tests {
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
         let payload = String::from("hello world!").as_bytes().into();
-        test_send_recv(payload, vec![]).await;
+        test_send_recv(payload, vec![], 0, 0).await;
     }
 
     #[tokio::test]
     async fn send_file() {
         let test_file_size = 50_000_000;
-        test_send_recv(make_in_mem_test_file(test_file_size), vec![]).await;
+        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn lossy_send_file() {
+        let test_file_size = 1_000_000;
+        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5).await;
     }
 
     #[tokio::test]
@@ -466,12 +473,19 @@ mod tests {
         test_send_recv(
             make_in_mem_test_file(test_file_size),
             make_in_mem_test_file(test_file_size),
+            0,
+            0,
         )
         .await;
     }
 
     // General-purposed TCP test that sends two payloads to one another.
-    async fn test_send_recv(payload1: Vec<u8>, payload2: Vec<u8>) {
+    async fn test_send_recv(
+        payload1: Vec<u8>,
+        payload2: Vec<u8>,
+        n1_drop_factor: usize,
+        n2_drop_factor: usize,
+    ) {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         let send_cfg = abc_net.a.clone();
         let recv_cfg = abc_net.b.clone();
@@ -486,7 +500,7 @@ mod tests {
         let n2_cfg = recv_cfg.clone();
 
         let n1 = tokio::spawn(async move {
-            let node = create_and_start_node(n1_cfg).await;
+            let node = create_and_start_node(n1_cfg, n1_drop_factor).await;
             listen_barr.wait().await;
 
             let dest_ip = {
@@ -511,7 +525,7 @@ mod tests {
         });
 
         let n2 = tokio::spawn(async move {
-            let node = create_and_start_node(recv_cfg).await;
+            let node = create_and_start_node(recv_cfg, n2_drop_factor).await;
 
             let mut listener = node.listen(recv_listen_port).await.unwrap();
             barr.wait().await;
@@ -541,13 +555,14 @@ mod tests {
         base_data.into_iter().cycle().take(size).collect()
     }
 
-    async fn create_and_start_node(cfg: Args) -> Arc<Node> {
+    async fn create_and_start_node(cfg: Args, drop_factor: usize) -> Arc<Node> {
         let node = Arc::new(
             NodeBuilder::new(&cfg)
                 .with_rip_interval(Duration::from_millis(1))
                 .with_entry_max_age(Duration::from_millis(12))
                 .with_prune_interval(Duration::from_millis(1))
                 .with_protocol_handler(Protocol::Rip, RipHandler::default())
+                .with_drop_factor(drop_factor)
                 .build()
                 .await,
         );

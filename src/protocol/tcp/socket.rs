@@ -215,12 +215,14 @@ impl<const N: usize> TcpTransport<N> {
                         segment_sz = MAX_SEGMENT_SZ;
                     }
                     segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                    println!("consume and sent");
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
+                    println!("retransmit ");
                 }
             }
         }
@@ -234,13 +236,14 @@ impl<const N: usize> TcpTransport<N> {
         match self.send_buf.try_slice(self.seq_no, buf).await {
             Ok(bytes_readable) => {
                 // TODO: handle send failure
-                self.send(self.seq_no, buf).await.unwrap();
-                self.seq_no += buf.len();
-                next_segment_sz = min(MAX_SEGMENT_SZ, min(window_sz, bytes_readable));
+                if self.send(self.seq_no, buf).await.is_ok() {
+                    self.seq_no += buf.len();
+                    next_segment_sz = min(MAX_SEGMENT_SZ, min(window_sz, bytes_readable));
+                }
             }
             Err(e) => match e {
-                SliceError::OutOfRange(remaining_sz) => {
-                    next_segment_sz = min(remaining_sz, window_sz);
+                SliceError::OutOfRange(unconsumed_sz) => {
+                    next_segment_sz = min(unconsumed_sz, window_sz);
                 }
             },
         }
@@ -252,7 +255,7 @@ impl<const N: usize> TcpTransport<N> {
         if self.last_transmitted.elapsed() > self.ack_batch_timeout {
             // The empty-payload packet's main purpose is to update the remote
             // about our latest ACK sequence number.
-            self.send(self.seq_no, &[]).await.unwrap();
+            self.send(self.seq_no, &[]).await.ok();
         }
     }
 
@@ -262,7 +265,7 @@ impl<const N: usize> TcpTransport<N> {
         #[allow(clippy::collapsible_if)]
         if last_ack_update_time > self.retrans_interval {
             if self.send_buf.try_slice(tail, segment_buf).await.is_ok() {
-                self.send(tail, segment_buf).await.unwrap();
+                self.send(tail, segment_buf).await.ok();
             }
         }
     }

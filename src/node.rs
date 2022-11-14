@@ -54,6 +54,16 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
+    /// Set how often packets are dropped.
+    ///
+    /// With a drop factor of N, 1 packet is dropped every N packets.
+    ///
+    /// A drop factor of 0 drops no packets.
+    pub fn with_drop_factor(&mut self, drop_factor: usize) -> &mut Self {
+        self.drop_factor = drop_factor;
+        self
+    }
+
     /// Provide a handler for a protocol.
     ///
     /// Replaces any handler that is associated with the protocol.
