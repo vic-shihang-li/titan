@@ -56,7 +56,11 @@ impl<const N: usize> SendBuf<N> {
         let mut curr = 0;
         loop {
             let mut send_buf = self.inner.lock().await;
-            curr += send_buf.write(&bytes[curr..]);
+            let written = send_buf.write(&bytes[curr..]);
+            curr += written;
+            if written > 0 {
+                self.written.notify_all();
+            }
             if curr < bytes.len() {
                 let not_full = self.not_full.notified();
                 drop(send_buf);
