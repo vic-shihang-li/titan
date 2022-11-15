@@ -496,6 +496,21 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    #[ignore]
+    async fn lossy_bidirectional_send_file() {
+        // TODO: increase file size
+        let test_file_size = 1_000_000;
+
+        test_send_recv(
+            make_in_mem_test_file(test_file_size),
+            make_in_mem_test_file(test_file_size),
+            5,
+            5,
+        )
+        .await;
+    }
+
     // General-purposed TCP test that sends two payloads to one another.
     async fn test_send_recv(
         payload1: Vec<u8>,
