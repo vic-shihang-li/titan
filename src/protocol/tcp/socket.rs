@@ -859,7 +859,7 @@ impl Established {
         }
     }
 
-    async fn begin_active_close(&mut self, id: SocketId, local_port: Port) {
+    async fn begin_active_close(&mut self, id: SocketId, local_port: Port) -> FinWait1 {
         // 1. Stop sending new data.
         self.accepting_sends = false;
         // 2. make FIN packet
@@ -868,6 +868,11 @@ impl Established {
         // 3. append FIN to send buffer queue.
         self.conn.send_all(fin_packet.as_slice());
         // 4. Transition to FinWait1
+        FinWait1 {
+            conn: self.conn.clone(),
+            last_seq: self.last_seq.clone(),
+            last_ack: self.last_ack.clone(),
+        }
     }
 
     fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
@@ -882,6 +887,10 @@ impl Established {
         header.fin = true;
         header.write(&mut bytes).unwrap();
         bytes
+    }
+
+    pub fn is_accepting_sends(&self) -> bool {
+        self.accepting_sends
     }
 }
 
@@ -1043,9 +1052,8 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(mut s) => {
-                s.begin_active_close(self.id.clone(), self.local_port().clone()).await;
-                // TODO: fix compilation error
-                // self.state = Some(TcpState::FinWait1(s));
+                let state = s.begin_active_close(self.id.clone(), self.local_port().clone()).await;
+                self.state = Some(state.into());
             }
             _ => {
                 self.state = Some(state);
