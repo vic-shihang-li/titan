@@ -70,6 +70,14 @@ impl TcpConn {
             .handle_packet(ip_header, tcp_header, payload)
             .await
     }
+
+    pub fn remote(&self) -> &Remote {
+        &self.inner.remote
+    }
+
+    pub fn local_port(&self) -> Port {
+        self.inner.local_port
+    }
 }
 
 impl<const N: usize> InnerTcpConn<N> {
@@ -584,7 +592,7 @@ impl SynSent {
             .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");
 
-        Ok(Established { conn, last_ack: ack_no, last_syn: self.seq_no + 1})
+        Ok(Established { conn, last_ack: ack_no, last_seq: self.seq_no + 1})
     }
 
     fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -635,14 +643,14 @@ impl SynReceived {
             .await
             .expect("TcpListener not notified");
 
-        Established { conn, last_ack: ack_packet.acknowledgment_number(), last_syn: self.seq_no }
+        Established { conn, last_ack: ack_packet.acknowledgment_number(), last_seq: self.seq_no }
     }
 }
 
 pub struct Established {
     conn: TcpConn,
     last_ack: u32,
-    last_syn: u32,
+    last_seq: u32,
 }
 
 impl Established {
@@ -655,11 +663,12 @@ impl Established {
         self.conn
             .handle_packet(ip_header, tcp_header, payload)
             .await;
-        Self { conn: self.conn.clone(), last_ack: tcp_header.acknowledgment_number(), last_syn: tcp_header.sequence_number()}
+        Self { conn: self.conn.clone(), last_ack: tcp_header.acknowledgment_number(), last_seq: tcp_header.sequence_number()}
     }
 
     async fn begin_active_close(&self) {
         todo!();
+
         // 1. Send FIN
         // 2. Transition to FinWait1
     }
@@ -670,7 +679,7 @@ impl Established {
         let mut header = TcpHeader::new(
             src_port.0,
             dst_port.0,
-            self.last_syn + 1,
+            self.last_seq + 1,
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.fin = true;
@@ -822,4 +831,21 @@ impl Socket {
 
         action
     }
+
+    pub async fn begin_active_close(&mut self) {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Established(s) => {
+                s.begin_active_close().await;
+                self.state = Some(TcpState::FinWait1(s));
+            }
+            _ => {
+                self.state = Some(state);
+                panic!("Should not be able to close a connection that's not established");
+            }
+        }
+
+    }
+
+
 }
