@@ -804,7 +804,7 @@ pub struct Established {
 
 impl Established {
     async fn handle_packet<'a>(
-        &self,
+        self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
@@ -813,7 +813,7 @@ impl Established {
             .handle_packet(ip_header, tcp_header, payload)
             .await;
         Self {
-            conn: self.conn.clone(),
+            conn: self.conn,
             last_ack: tcp_header.acknowledgment_number(),
             last_seq: tcp_header.sequence_number(),
         }
