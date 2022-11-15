@@ -49,7 +49,7 @@ impl Remote {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum TcpConnError {
     ConnectionExists(Remote),
     Transport(TransportError),
@@ -90,15 +90,23 @@ impl Tcp {
             AddSocketError::ConnectionExists(sid) => TcpConnError::ConnectionExists(sid.remote()),
         })?;
 
+        let socket_id = socket.id();
         let on_connected = socket
             .initiate_connection()
             .await
             .expect("Failed to send SYN packet");
         drop(sockets);
 
-        on_connected
+        match on_connected
             .await
             .expect("Failed to receive connection status")
+        {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                self.sockets.write().await.remove_by_id(socket_id);
+                Err(e)
+            }
+        }
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
@@ -256,6 +264,11 @@ impl SocketTable {
             .build_with_id_state(sock_id, syn_recvd_state.into());
 
         self.insert(descriptor, socket)
+    }
+
+    pub fn remove_by_id(&mut self, id: SocketId) {
+        // TODO: lazily delete socket entries in socket_id_map
+        self.socket_map.remove(&id);
     }
 
     pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket> {

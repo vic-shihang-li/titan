@@ -2,6 +2,7 @@ use crate::protocol::tcp::buf::{SetTailError, SliceError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::{Router, SendError};
+use crate::utils::sync::RaceOneShotSender;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -306,6 +307,127 @@ impl<const N: usize> TcpTransport<N> {
     }
 }
 
+struct RetransmissionConfig {
+    max_err_retries: usize,
+    retrans_interval: Duration,
+    timeout: Duration,
+}
+
+impl Default for RetransmissionConfig {
+    fn default() -> Self {
+        Self {
+            max_err_retries: 3,
+            retrans_interval: Duration::from_millis(5),
+            timeout: Duration::from_secs(1),
+        }
+    }
+}
+
+fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'static>(
+    payload: Vec<u8>,
+    remote: Remote,
+    router: Arc<Router>,
+    cfg: RetransmissionConfig,
+    on_err: F,
+) -> AckHandle {
+    let (acked_tx, acked_rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let transporter = SingleMessageTransport {
+            payload,
+            remote,
+            router,
+            retransmission_cfg: cfg,
+            acked_rx,
+            on_err,
+        };
+        transporter.run().await;
+    });
+
+    AckHandle {
+        acked_tx: Some(acked_tx),
+    }
+}
+
+struct AckHandle {
+    acked_tx: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for AckHandle {
+    fn drop(&mut self) {
+        // if didn't manually ack
+        if self.acked_tx.is_some() {
+            // assume dropping the handle means successful ack
+            self.acked_tx.take().unwrap().send(()).unwrap();
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TransmissionError {
+    Timeout,
+    MaxRetransExceeded,
+}
+
+/// TCP Transporter that ensures delivery of only one packet.
+struct SingleMessageTransport<F: FnOnce(TransmissionError) + Send> {
+    payload: Vec<u8>,
+    remote: Remote,
+    router: Arc<Router>,
+    retransmission_cfg: RetransmissionConfig,
+    acked_rx: oneshot::Receiver<()>,
+    on_err: F,
+}
+
+impl<F: FnOnce(TransmissionError) + Send> SingleMessageTransport<F> {
+    pub async fn run(mut self) {
+        match tokio::time::timeout(self.retransmission_cfg.timeout, self.transmission_loop()).await
+        {
+            Ok(succeeded) => {
+                if !succeeded {
+                    (self.on_err)(TransmissionError::MaxRetransExceeded);
+                }
+            }
+            Err(_) => {
+                // timed out
+                (self.on_err)(TransmissionError::Timeout);
+            }
+        }
+    }
+
+    /// Transmit repeatedly, returning true if acked.
+    async fn transmission_loop(&mut self) -> bool {
+        let mut retried = 0;
+
+        let mut retransmit = tokio::time::interval(self.retransmission_cfg.retrans_interval);
+        loop {
+            tokio::select! {
+                _ = retransmit.tick() => {
+                    if self.send().await.is_err() {
+                        retried += 1;
+                        if retried >= self.retransmission_cfg.max_err_retries {
+                            return false;
+                        }
+                    }
+                },
+                _ = &mut self.acked_rx => {
+                    return true;
+                }
+            }
+        }
+    }
+
+    /// Sends the payload to transport to the remote.
+    ///
+    /// Errs when failed over the max retry limit. Otherwise, forward the send
+    /// result to the caller.
+    async fn send(&self) -> Result<(), SendError> {
+        self.router
+            .send(&self.payload, Protocol::Tcp, self.remote.ip())
+            .await
+    }
+}
+
 pub struct TcpListener {
     receiver: mpsc::Receiver<TcpConn>,
 }
@@ -334,7 +456,7 @@ impl TcpListener {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum TransportError {
     DestUnreachable(Ipv4Addr),
 }
@@ -447,15 +569,25 @@ impl Closed {
         let (dest_ip, dest_port) = dest;
 
         let syn_pkt = self.make_syn_packet(src_port, dest_port);
-        self.router
-            .send(&syn_pkt, Protocol::Tcp, dest_ip)
-            .await
-            .map_err(|_| TransportError::DestUnreachable(dest_ip))?;
+
+        let established_tx = RaceOneShotSender::from(established_tx);
+        let established = established_tx.clone();
+
+        let ack_handle = transport_single_message(
+            syn_pkt,
+            Remote::new(dest_ip, dest_port),
+            self.router.clone(),
+            RetransmissionConfig::default(),
+            move |_| {
+                established.send(Err(TcpConnError::Timeout)).ok();
+            },
+        );
 
         let syn_sent = SynSent {
             src_port,
             dest_port,
             dest_ip,
+            syn_packet_rtx_handle: ack_handle,
             established_tx,
             router: self.router,
             seq_no: self.seq_no + 1,
@@ -510,13 +642,17 @@ impl Listen {
         assert!(syn_packet.syn());
 
         let reply_ip = ip_header.source_addr();
+        let syn_ack_pkt = self.make_syn_ack_packet(syn_packet);
 
-        let ack_pkt = self.make_syn_ack_packet(syn_packet);
-
-        self.router
-            .send(&ack_pkt, Protocol::Tcp, reply_ip)
-            .await
-            .map_err(|_| TransportError::DestUnreachable(reply_ip))?;
+        let ack_handle = transport_single_message(
+            syn_ack_pkt,
+            Remote::new(ip_header.source_addr(), syn_packet.source_port().into()),
+            self.router.clone(),
+            RetransmissionConfig::default(),
+            move |_| {
+                // TODO: delete SynReceived socket
+            },
+        );
 
         let syn_recvd = SynReceived {
             seq_no: self.seq_no + 1,
@@ -557,8 +693,9 @@ pub struct SynSent {
     src_port: Port,
     dest_ip: Ipv4Addr,
     dest_port: Port,
+    syn_packet_rtx_handle: AckHandle,
     router: Arc<Router>,
-    established_tx: oneshot::Sender<Result<TcpConn, TcpConnError>>,
+    established_tx: RaceOneShotSender<Result<TcpConn, TcpConnError>>,
 }
 
 impl SynSent {
@@ -568,6 +705,7 @@ impl SynSent {
     ) -> Result<Established, TransportError> {
         assert!(syn_ack_packet.syn());
         assert!(syn_ack_packet.ack());
+
         let ack_pkt = self.make_ack_packet(syn_ack_packet);
 
         let ack_no = syn_ack_packet.acknowledgment_number() + 1;
@@ -588,6 +726,9 @@ impl SynSent {
             self.router,
         );
 
+        // Mark SYN packet as successfully retransmitted before notifying
+        // connection established.
+        drop(self.syn_packet_rtx_handle);
         self.established_tx
             .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");

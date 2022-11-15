@@ -9,7 +9,7 @@ pub async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f:
 }
 
 pub mod sync {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex as StdMutex};
 
     use tokio::sync::broadcast;
 
@@ -98,6 +98,47 @@ pub mod sync {
                         _ => unreachable!(),
                     },
                 }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum SendError {
+        AlreadySent,
+        ReceiverDropped,
+    }
+
+    /// Like `tokio::sync::oneshot::Sender`, but allows multiple threads to
+    /// race to send the oneshot message.
+    ///
+    /// Unlike `tokio::sync::oneshot::Sender`, which statically guarantees up
+    /// to one message is sent, this struct gives a runtime SendError for
+    /// threads that failed the race to send the oneshot message.
+    #[derive(Debug, Clone)]
+    pub struct RaceOneShotSender<T> {
+        // Note: we use Mutex from the std library here to avoid making send()
+        // async, just like the tokio version of oneshot::Sender.
+        inner: Arc<StdMutex<Option<tokio::sync::oneshot::Sender<T>>>>,
+    }
+
+    impl<T> From<tokio::sync::oneshot::Sender<T>> for RaceOneShotSender<T> {
+        fn from(s: tokio::sync::oneshot::Sender<T>) -> Self {
+            Self {
+                inner: Arc::new(StdMutex::new(Some(s))),
+            }
+        }
+    }
+
+    impl<T> RaceOneShotSender<T> {
+        pub fn send(&self, message: T) -> Result<(), SendError> {
+            let mut sender = self.inner.lock().unwrap();
+            if let Some(sender) = sender.take() {
+                sender
+                    .send(message)
+                    .map_err(|_| SendError::ReceiverDropped)?;
+                Ok(())
+            } else {
+                Err(SendError::AlreadySent)
             }
         }
     }
