@@ -733,7 +733,11 @@ impl SynSent {
             .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");
 
-        Ok(Established { conn, last_ack: ack_no, last_seq: self.seq_no + 1})
+        Ok(Established {
+            conn,
+            last_ack: ack_no,
+            last_seq: self.seq_no + 1,
+        })
     }
 
     fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -784,7 +788,11 @@ impl SynReceived {
             .await
             .expect("TcpListener not notified");
 
-        Established { conn, last_ack: ack_packet.acknowledgment_number(), last_seq: self.seq_no }
+        Established {
+            conn,
+            last_ack: ack_packet.acknowledgment_number(),
+            last_seq: self.seq_no,
+        }
     }
 }
 
@@ -804,7 +812,11 @@ impl Established {
         self.conn
             .handle_packet(ip_header, tcp_header, payload)
             .await;
-        Self { conn: self.conn.clone(), last_ack: tcp_header.acknowledgment_number(), last_seq: tcp_header.sequence_number()}
+        Self {
+            conn: self.conn.clone(),
+            last_ack: tcp_header.acknowledgment_number(),
+            last_seq: tcp_header.sequence_number(),
+        }
     }
 
     async fn begin_active_close(&self) {
@@ -827,7 +839,6 @@ impl Established {
         header.write(&mut bytes).unwrap();
         bytes
     }
-
 }
 
 pub struct FinWait1 {}
@@ -958,9 +969,10 @@ impl Socket {
             }
             TcpState::SynSent(s) => (s.establish(tcp_header).await.unwrap().into(), None),
             TcpState::SynReceived(s) => (s.establish(tcp_header).await.into(), None),
-            TcpState::Established(s) => {
-                (s.handle_packet(ip_header, tcp_header, payload).await.into(), None)
-            }
+            TcpState::Established(s) => (
+                s.handle_packet(ip_header, tcp_header, payload).await.into(),
+                None,
+            ),
             TcpState::FinWait1(s) => todo!(),
             TcpState::FinWait2(s) => todo!(),
             TcpState::Closing(s) => todo!(),
@@ -978,15 +990,13 @@ impl Socket {
         match state {
             TcpState::Established(s) => {
                 s.begin_active_close().await;
-                self.state = Some(TcpState::FinWait1(s));
+                // TODO: fix compilation error
+                // self.state = Some(TcpState::FinWait1(s));
             }
             _ => {
                 self.state = Some(state);
                 panic!("Should not be able to close a connection that's not established");
             }
         }
-
     }
-
-
 }
