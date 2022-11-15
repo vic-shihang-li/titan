@@ -184,6 +184,7 @@ struct TcpTransport<const N: usize> {
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
     retrans_interval: Duration,
+    last_ack_transmitted: usize,
 }
 
 impl<const N: usize> TcpTransport<N> {
@@ -205,6 +206,7 @@ impl<const N: usize> TcpTransport<N> {
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
             retrans_interval: Duration::from_millis(5),
+            last_ack_transmitted: 0,
         }
     }
 
@@ -260,36 +262,62 @@ impl<const N: usize> TcpTransport<N> {
 
     async fn check_and_retransmit_ack(&mut self) {
         if self.last_transmitted.elapsed() > self.ack_batch_timeout {
-            // The empty-payload packet's main purpose is to update the remote
-            // about our latest ACK sequence number.
-            self.send(self.seq_no, &[]).await.ok();
+            let curr_ack = self.recv_buf.head().await;
+            if curr_ack != self.last_ack_transmitted {
+                // The empty-payload packet's main purpose is to update the remote
+                // about our latest ACK sequence number.
+                self.send(self.seq_no, &[]).await.ok();
+            }
         }
     }
 
     async fn check_retransmission(&mut self, segment_buf: &mut [u8]) {
         let (tail, last_ack_update_time) = self.send_buf.get_tail_and_age().await;
 
-        #[allow(clippy::collapsible_if)]
         if last_ack_update_time > self.retrans_interval {
-            if self.send_buf.try_slice(tail, segment_buf).await.is_ok() {
-                self.send(tail, segment_buf).await.ok();
+            match self.send_buf.try_slice(tail, segment_buf).await {
+                Ok(_) => {
+                    self.send(tail, segment_buf).await.ok();
+                }
+                Err(e) => match e {
+                    SliceError::OutOfRange(remaining_sz) => {
+                        if remaining_sz == 0 {
+                            return;
+                        }
+                        // Drain all unacked bytes.
+                        // Here, if try_slice() errs, the bytes trying to be
+                        // sliced must have been acked.
+                        if self
+                            .send_buf
+                            .try_slice(tail, &mut segment_buf[..remaining_sz])
+                            .await
+                            .is_ok()
+                        {
+                            self.send(tail, &segment_buf[..remaining_sz]).await.ok();
+                        }
+                    }
+                },
             }
         }
     }
 
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
-        let tcp_packet_bytes = self.prepare_tcp_packet(seq_no, payload).await;
+        let mut bytes = Vec::new();
+        let tcp_header = self.prepare_tcp_packet(seq_no).await;
+        let ack = tcp_header.acknowledgment_number;
+        tcp_header.write(&mut bytes).unwrap();
+        bytes.extend_from_slice(payload);
+
         self.router
-            .send(&tcp_packet_bytes, Protocol::Tcp, self.remote.ip())
+            .send(&bytes, Protocol::Tcp, self.remote.ip())
             .await
             .map(|_| {
                 self.last_transmitted = Instant::now();
+                self.last_ack_transmitted = ack.try_into().unwrap();
             })
     }
 
-    async fn prepare_tcp_packet(&self, seq_no: usize, payload: &[u8]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
+    async fn prepare_tcp_packet(&self, seq_no: usize) -> TcpHeader {
         let src_port = self.local_port.0;
         let dst_port = self.remote.port().0;
         let seq_no = seq_no.try_into().expect("seq no overflow");
@@ -300,10 +328,7 @@ impl<const N: usize> TcpTransport<N> {
         header.ack = true;
         header.acknowledgment_number = self.recv_buf.head().await.try_into().unwrap();
 
-        header.write(&mut bytes).unwrap();
-        bytes.extend_from_slice(payload);
-
-        bytes
+        header
     }
 }
 
