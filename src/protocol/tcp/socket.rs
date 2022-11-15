@@ -337,6 +337,12 @@ pub enum TcpState {
     SynReceived(SynReceived),
     Established(Established),
     Listen(Listen),
+    FinWait1(FinWait1),
+    FinWait2(FinWait2),
+    Closing(Closing),
+    TimeWait(TimeWait),
+    CloseWait(CloseWait),
+    LastAck(LastAck),
 }
 
 impl TcpState {
@@ -372,6 +378,42 @@ impl From<Established> for TcpState {
 impl From<Listen> for TcpState {
     fn from(s: Listen) -> Self {
         Self::Listen(s)
+    }
+}
+
+impl From<FinWait1> for TcpState {
+    fn from(s: FinWait1) -> Self {
+        Self::FinWait1(s)
+    }
+}
+
+impl From<FinWait2> for TcpState {
+    fn from(s: FinWait2) -> Self {
+        Self::FinWait2(s)
+    }
+}
+
+impl From<Closing> for TcpState {
+    fn from(s: Closing) -> Self {
+        Self::Closing(s)
+    }
+}
+
+impl From<TimeWait> for TcpState {
+    fn from(s: TimeWait) -> Self {
+        Self::TimeWait(s)
+    }
+}
+
+impl From<CloseWait> for TcpState {
+    fn from(s: CloseWait) -> Self {
+        Self::CloseWait(s)
+    }
+}
+
+impl From<LastAck> for TcpState {
+    fn from(s: LastAck) -> Self {
+        Self::LastAck(s)
     }
 }
 
@@ -520,6 +562,8 @@ impl SynSent {
         assert!(syn_ack_packet.ack());
         let ack_pkt = self.make_ack_packet(syn_ack_packet);
 
+        let ack_no = syn_ack_packet.acknowledgment_number() + 1;
+
         self.router
             .send(&ack_pkt, Protocol::Tcp, self.dest_ip)
             .await
@@ -540,7 +584,7 @@ impl SynSent {
             .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");
 
-        Ok(Established { conn })
+        Ok(Established { conn, last_ack: ack_no, last_syn: self.seq_no + 1})
     }
 
     fn make_ack_packet<'a>(&mut self, syn_ack_packet: &TcpHeaderSlice<'a>) -> Vec<u8> {
@@ -591,12 +635,14 @@ impl SynReceived {
             .await
             .expect("TcpListener not notified");
 
-        Established { conn }
+        Established { conn, last_ack: ack_packet.acknowledgment_number(), last_syn: self.seq_no }
     }
 }
 
 pub struct Established {
     conn: TcpConn,
+    last_ack: u32,
+    last_syn: u32,
 }
 
 impl Established {
@@ -605,12 +651,46 @@ impl Established {
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) {
+    ) -> Self {
         self.conn
             .handle_packet(ip_header, tcp_header, payload)
-            .await
+            .await;
+        Self { conn: self.conn.clone(), last_ack: tcp_header.acknowledgment_number(), last_syn: tcp_header.sequence_number()}
     }
+
+    async fn begin_active_close(&self) {
+        todo!();
+        // 1. Send FIN
+        // 2. Transition to FinWait1
+    }
+
+    async fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let mut header = TcpHeader::new(
+            src_port.0,
+            dst_port.0,
+            self.last_syn + 1,
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.fin = true;
+        header.write(&mut bytes).unwrap();
+        bytes
+    }
+
 }
+
+pub struct FinWait1 {}
+
+pub struct FinWait2 {}
+
+pub struct Closing {}
+
+pub struct TimeWait {}
+
+pub struct CloseWait {}
+
+pub struct LastAck {}
 
 #[derive(Debug)]
 pub enum ListenTransitionError {
@@ -711,7 +791,7 @@ impl Socket {
             .expect("A socket should not handle packets concurrently");
 
         let (next_state, action) = match state {
-            TcpState::Closed(s) => {
+            TcpState::Closed(_) => {
                 panic!("Should not receive packet under closed state");
             }
             TcpState::Listen(s) => {
@@ -729,9 +809,14 @@ impl Socket {
             TcpState::SynSent(s) => (s.establish(tcp_header).await.unwrap().into(), None),
             TcpState::SynReceived(s) => (s.establish(tcp_header).await.into(), None),
             TcpState::Established(s) => {
-                s.handle_packet(ip_header, tcp_header, payload).await;
-                (s.into(), None)
+                (s.handle_packet(ip_header, tcp_header, payload).await.into(), None)
             }
+            TcpState::FinWait1(s) => todo!(),
+            TcpState::FinWait2(s) => todo!(),
+            TcpState::Closing(s) => todo!(),
+            TcpState::TimeWait(s) => todo!(),
+            TcpState::CloseWait(s) => todo!(),
+            TcpState::LastAck(s) => todo!(),
         };
         self.state = Some(next_state);
 
