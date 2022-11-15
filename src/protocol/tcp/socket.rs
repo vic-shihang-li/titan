@@ -2,7 +2,7 @@ use crate::protocol::tcp::buf::{SetTailError, SliceError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::{Router, SendError};
-use crate::utils::sync::RaceOneShotSender;
+use crate::utils::sync::{Notifier, RaceOneShotSender};
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -771,6 +771,7 @@ impl SynSent {
             conn,
             last_ack: ack_no,
             last_seq: self.seq_no + 1,
+            accepting_sends: true,
         })
     }
 
@@ -828,6 +829,7 @@ impl SynReceived {
             conn,
             last_ack: ack_packet.acknowledgment_number(),
             last_seq: self.seq_no,
+            accepting_sends: true,
         }
     }
 }
@@ -836,6 +838,7 @@ pub struct Established {
     conn: TcpConn,
     last_ack: u32,
     last_seq: u32,
+    accepting_sends: bool,
 }
 
 impl Established {
@@ -852,17 +855,22 @@ impl Established {
             conn: self.conn,
             last_ack: tcp_header.acknowledgment_number(),
             last_seq: tcp_header.sequence_number(),
+            accepting_sends: true,
         }
     }
 
-    async fn begin_active_close(&self) {
-        todo!();
-
-        // 1. Send FIN
-        // 2. Transition to FinWait1
+    async fn begin_active_close(&mut self, id: SocketId, local_port: Port) {
+        // 1. Stop sending new data.
+        self.accepting_sends = false;
+        // 2. make FIN packet
+        let fin_packet = self.make_fin_packet(local_port.clone(),
+                                              id.remote_port().clone());
+        // 3. append FIN to send buffer queue.
+        self.conn.send_all(fin_packet.as_slice());
+        // 4. Transition to FinWait1
     }
 
-    async fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
+    fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let mut header = TcpHeader::new(
@@ -877,7 +885,11 @@ impl Established {
     }
 }
 
-pub struct FinWait1 {}
+pub struct FinWait1 {
+    conn: TcpConn,
+    last_ack: u32,
+    last_seq: u32,
+}
 
 pub struct FinWait2 {}
 
@@ -1030,8 +1042,8 @@ impl Socket {
     pub async fn begin_active_close(&mut self) {
         let state = self.state.take().unwrap();
         match state {
-            TcpState::Established(s) => {
-                s.begin_active_close().await;
+            TcpState::Established(mut s) => {
+                s.begin_active_close(self.id.clone(), self.local_port().clone()).await;
                 // TODO: fix compilation error
                 // self.state = Some(TcpState::FinWait1(s));
             }
