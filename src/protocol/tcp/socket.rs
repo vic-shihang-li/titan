@@ -317,7 +317,7 @@ impl Default for RetransmissionConfig {
     fn default() -> Self {
         Self {
             max_err_retries: 3,
-            retrans_interval: Duration::from_millis(5),
+            retrans_interval: Duration::from_millis(50),
             timeout: Duration::from_secs(1),
         }
     }
@@ -353,12 +353,22 @@ struct AckHandle {
     acked_tx: Option<oneshot::Sender<()>>,
 }
 
+impl AckHandle {
+    fn acked(&mut self) {
+        self.acked_tx
+            .take()
+            .expect("Ack handle should only be acked once")
+            .send(())
+            .ok();
+    }
+}
+
 impl Drop for AckHandle {
     fn drop(&mut self) {
         // if didn't manually ack
         if self.acked_tx.is_some() {
             // assume dropping the handle means successful ack
-            self.acked_tx.take().unwrap().send(()).unwrap();
+            self.acked_tx.take().unwrap().send(()).ok();
         }
     }
 }
@@ -657,6 +667,7 @@ impl Listen {
         let syn_recvd = SynReceived {
             seq_no: self.seq_no + 1,
             local_port: self.port,
+            synack_ack_handle: ack_handle,
             remote_ip: ip_header.source_addr(),
             remote_port: Port(syn_packet.source_port()),
             router: self.router.clone(),
@@ -706,6 +717,8 @@ impl SynSent {
         assert!(syn_ack_packet.syn());
         assert!(syn_ack_packet.ack());
 
+        self.syn_packet_rtx_handle.acked();
+
         let ack_pkt = self.make_ack_packet(syn_ack_packet);
 
         let ack_no = syn_ack_packet.acknowledgment_number() + 1;
@@ -725,10 +738,6 @@ impl SynSent {
             recv_buf_start,
             self.router,
         );
-
-        // Mark SYN packet as successfully retransmitted before notifying
-        // connection established.
-        drop(self.syn_packet_rtx_handle);
         self.established_tx
             .send(Ok(conn.clone()))
             .expect("Failed to notify new connection established");
@@ -765,12 +774,14 @@ pub struct SynReceived {
     remote_ip: Ipv4Addr,
     remote_port: Port,
     router: Arc<Router>,
+    synack_ack_handle: AckHandle,
     new_conn_tx: mpsc::Sender<TcpConn>,
 }
 
 impl SynReceived {
-    pub async fn establish<'a>(self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
+    pub async fn establish<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
         assert!(ack_packet.ack());
+        self.synack_ack_handle.acked();
 
         let send_buf_start = self.seq_no.try_into().unwrap();
         let recv_buf_start = (ack_packet.sequence_number() + 1).try_into().unwrap();
@@ -968,7 +979,13 @@ impl Socket {
                 }
             }
             TcpState::SynSent(s) => (s.establish(tcp_header).await.unwrap().into(), None),
-            TcpState::SynReceived(s) => (s.establish(tcp_header).await.into(), None),
+            TcpState::SynReceived(s) => {
+                if tcp_header.acknowledgment_number() == s.seq_no {
+                    (s.establish(tcp_header).await.into(), None)
+                } else {
+                    (s.into(), None)
+                }
+            }
             TcpState::Established(s) => (
                 s.handle_packet(ip_header, tcp_header, payload).await.into(),
                 None,
