@@ -212,7 +212,7 @@ impl SocketIdBuilder {
 }
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
-pub struct SocketDescriptor(u16);
+pub struct SocketDescriptor(pub u16);
 
 impl From<u16> for SocketDescriptor {
     fn from(s: u16) -> Self {
@@ -221,7 +221,7 @@ impl From<u16> for SocketDescriptor {
 }
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
-pub struct Port(u16);
+pub struct Port(pub u16);
 
 impl From<u16> for Port {
     fn from(p: u16) -> Self {

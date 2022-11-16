@@ -17,7 +17,7 @@ pub enum Command {
     InterfaceDown(u16),
     InterfaceUp(u16),
     SendIPv4Packet(IPv4SendCmd),
-    SendTCPPacket(TCPSendCmd),
+    SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenSocket(u16),
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
@@ -25,9 +25,6 @@ pub enum Command {
     Close(u16),
     Quit,
 }
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct TCPSendCmd {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct TCPReadCmd {}
@@ -134,7 +131,7 @@ impl Cli {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }
-            Command::SendTCPPacket(_cmd) => {
+            Command::SendTCPPacket(_socket_descriptor, _payload) => {
                 todo!() //TODO implement
             }
             Command::OpenSocket(_port) => {
@@ -327,7 +324,13 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::ConnectSocket(ip, port.into()))
         }
         "s" => {
-            todo!() //TODO implement
+            let sid = tokens.next().ok_or(ParseTcpSendError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpSendError::InvalidSocketDescriptor)?,
+            );
+            let payload = tokens.next().ok_or(ParseTcpSendError::NoPayload)?;
+            Ok(Command::SendTCPPacket(sid, payload.as_bytes().into()))
         }
         "r" => {
             todo!() //TODO implement
@@ -385,6 +388,13 @@ pub enum ParseConnectError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpSendError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    NoPayload,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -392,6 +402,7 @@ pub enum ParseError {
     Send(ParseSendError),
     OpenSocket(ParseOpenSocketError),
     Connect(ParseConnectError),
+    TcpSend(ParseTcpSendError),
 }
 
 impl Display for ParseError {
@@ -424,6 +435,13 @@ impl Display for ParseError {
                 write!(
                     f,
                     "Invalid connect command. Usage: c <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpSend(e) => {
+                write!(
+                    f,
+                    "Invalid send command. Usage: s <socket_id> <data>. Error: {:?}",
                     e
                 )
             }
@@ -461,6 +479,12 @@ impl From<ParseConnectError> for ParseError {
     }
 }
 
+impl From<ParseTcpSendError> for ParseError {
+    fn from(v: ParseTcpSendError) -> Self {
+        ParseError::TcpSend(v)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -490,6 +514,31 @@ mod tests {
 
         let c = Cli::parse_command("c 1.2.3.4 33".into()).unwrap();
         let expected = Command::ConnectSocket(Ipv4Addr::new(1, 2, 3, 4), 33u16.into());
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn parse_tcp_send() {
+        assert_eq!(
+            Cli::parse_command("s".into()).unwrap_err(),
+            ParseTcpSendError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("s ssss".into()).unwrap_err(),
+            ParseTcpSendError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("s 33".into()).unwrap_err(),
+            ParseTcpSendError::NoPayload.into(),
+        );
+
+        let c = Cli::parse_command("s 33 heehee".into()).unwrap();
+        let expected = Command::SendTCPPacket(
+            SocketDescriptor(33),
+            String::from("heehee").as_bytes().into(),
+        );
         assert_eq!(c, expected);
     }
 }
