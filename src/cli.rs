@@ -27,7 +27,35 @@ pub enum Command {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct TCPReadCmd {}
+pub struct TCPReadCmd {
+    descriptor: SocketDescriptor,
+    num_bytes: usize,
+    would_block: bool,
+}
+
+impl TCPReadCmd {
+    fn new_blocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
+        Self {
+            descriptor,
+            num_bytes,
+            would_block: true,
+        }
+    }
+
+    fn new_nonblocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
+        Self {
+            descriptor,
+            num_bytes,
+            would_block: false,
+        }
+    }
+}
+
+impl From<TCPReadCmd> for Command {
+    fn from(r: TCPReadCmd) -> Self {
+        Command::ReadSocket(r)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct IPv4SendCmd {
@@ -333,7 +361,31 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::SendTCPPacket(sid, payload.as_bytes().into()))
         }
         "r" => {
-            todo!() //TODO implement
+            let sid = tokens.next().ok_or(ParseTcpReadError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpReadError::InvalidSocketDescriptor)?,
+            );
+            let num_bytes: usize = tokens
+                .next()
+                .ok_or(ParseTcpReadError::NoNumBytesToRead)?
+                .parse()
+                .map_err(|_| ParseTcpReadError::InvalidNumBytesToRead)?;
+
+            let maybe_blocking = tokens.next();
+            let blocking = match maybe_blocking {
+                Some(token) => match token {
+                    "y" => true,
+                    "N" => false,
+                    _ => return Err(ParseTcpReadError::InvalidBlockingIndicator.into()),
+                },
+                None => false,
+            };
+
+            match blocking {
+                true => Ok(TCPReadCmd::new_blocking(sid, num_bytes).into()),
+                false => Ok(TCPReadCmd::new_nonblocking(sid, num_bytes).into()),
+            }
         }
         "sd" => {
             todo!() //TODO implement
@@ -395,6 +447,15 @@ pub enum ParseTcpSendError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpReadError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    NoNumBytesToRead,
+    InvalidNumBytesToRead,
+    InvalidBlockingIndicator,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -403,6 +464,7 @@ pub enum ParseError {
     OpenSocket(ParseOpenSocketError),
     Connect(ParseConnectError),
     TcpSend(ParseTcpSendError),
+    TcpRead(ParseTcpReadError),
 }
 
 impl Display for ParseError {
@@ -445,6 +507,13 @@ impl Display for ParseError {
                     e
                 )
             }
+            ParseError::TcpRead(e) => {
+                write!(
+                    f,
+                    "Invalid read command. Usage: r <socket ID> <numbytes> <y|N>. Error: {:?}",
+                    e
+                )
+            }
         }
     }
 }
@@ -482,6 +551,12 @@ impl From<ParseConnectError> for ParseError {
 impl From<ParseTcpSendError> for ParseError {
     fn from(v: ParseTcpSendError) -> Self {
         ParseError::TcpSend(v)
+    }
+}
+
+impl From<ParseTcpReadError> for ParseError {
+    fn from(v: ParseTcpReadError) -> Self {
+        ParseError::TcpRead(v)
     }
 }
 
@@ -540,5 +615,49 @@ mod tests {
             String::from("heehee").as_bytes().into(),
         );
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn parse_tcp_read() {
+        assert_eq!(
+            Cli::parse_command("r".into()).unwrap_err(),
+            ParseTcpReadError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r ssss".into()).unwrap_err(),
+            ParseTcpReadError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33".into()).unwrap_err(),
+            ParseTcpReadError::NoNumBytesToRead.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33 heehee".into()).unwrap_err(),
+            ParseTcpReadError::InvalidNumBytesToRead.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33 100 n".into()).unwrap_err(),
+            ParseTcpReadError::InvalidBlockingIndicator.into()
+        );
+
+        let c = Cli::parse_command("r 33 100 y".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_blocking(SocketDescriptor(33), 100).into()
+        );
+        let c = Cli::parse_command("r 33 100 N".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+        );
+        let c = Cli::parse_command("r 33 100".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+        );
     }
 }
