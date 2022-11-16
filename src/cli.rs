@@ -1,5 +1,5 @@
 use crate::node::Node;
-use crate::protocol::tcp::SocketDescriptor;
+use crate::protocol::tcp::{Port, SocketDescriptor};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -9,6 +9,7 @@ use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     ListInterface(Option<String>),
     ListRoute(Option<String>),
@@ -18,17 +19,20 @@ pub enum Command {
     SendIPv4Packet(IPv4SendCmd),
     SendTCPPacket(TCPSendCmd),
     OpenSocket(u16),
-    ConnectSocket(Ipv4Addr, u16),
+    ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
     Shutdown(u16, u16),
     Close(u16),
     Quit,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct TCPSendCmd {}
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct TCPReadCmd {}
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct IPv4SendCmd {
     virtual_ip: Ipv4Addr,
     protocol: Protocol,
@@ -59,7 +63,7 @@ impl Cli {
                         eprintln!("Commencing Graceful Shutdown");
                         shutdown_flag = true;
                     }
-                    match self.parse_command(line) {
+                    match Self::parse_command(line) {
                         Ok(cmd) => {
                             self.execute_command(cmd).await;
                         }
@@ -87,7 +91,7 @@ impl Cli {
         }
     }
 
-    fn parse_command(&self, line: String) -> Result<Command, ParseError> {
+    fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
         eprintln!("cmd: {}", cmd);
@@ -316,7 +320,11 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::OpenSocket(port))
         }
         "c" => {
-            todo!() //TODO implement
+            let ip = tokens.next().ok_or(ParseConnectError::NoIp)?;
+            let ip = ip.parse().map_err(|_| ParseConnectError::InvalidIp)?;
+            let port = tokens.next().ok_or(ParseConnectError::NoPort)?;
+            let port: u16 = port.parse().map_err(|_| ParseConnectError::InvalidPort)?;
+            Ok(Command::ConnectSocket(ip, port.into()))
         }
         "s" => {
             todo!() //TODO implement
@@ -341,25 +349,25 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseOpenSocketError {
     NoPort,
     InvalidPort,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseDownError {
     InvalidLinkId,
     NoLinkId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseUpError {
     InvalidLinkId,
     NoLinkId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseSendError {
     NoIp,
     InvalidIp,
@@ -368,13 +376,22 @@ pub enum ParseSendError {
     NoPayload,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseConnectError {
+    NoIp,
+    InvalidIp,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
     Up(ParseUpError),
     Send(ParseSendError),
     OpenSocket(ParseOpenSocketError),
+    Connect(ParseConnectError),
 }
 
 impl Display for ParseError {
@@ -403,6 +420,13 @@ impl Display for ParseError {
                     e
                 )
             }
+            ParseError::Connect(e) => {
+                write!(
+                    f,
+                    "Invalid connect command. Usage: c <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
         }
     }
 }
@@ -428,5 +452,44 @@ impl From<ParseSendError> for ParseError {
 impl From<ParseOpenSocketError> for ParseError {
     fn from(v: ParseOpenSocketError) -> Self {
         ParseError::OpenSocket(v)
+    }
+}
+
+impl From<ParseConnectError> for ParseError {
+    fn from(v: ParseConnectError) -> Self {
+        ParseError::Connect(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn parse_connect() {
+        assert_eq!(
+            Cli::parse_command("c".into()).unwrap_err(),
+            ParseConnectError::NoIp.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1".into()).unwrap_err(),
+            ParseConnectError::InvalidIp.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1.2.3.4".into()).unwrap_err(),
+            ParseConnectError::NoPort.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1.2.3.4 ss".into()).unwrap_err(),
+            ParseConnectError::InvalidPort.into()
+        );
+
+        let c = Cli::parse_command("c 1.2.3.4 33".into()).unwrap();
+        let expected = Command::ConnectSocket(Ipv4Addr::new(1, 2, 3, 4), 33u16.into());
+        assert_eq!(c, expected);
     }
 }
