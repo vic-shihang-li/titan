@@ -900,7 +900,7 @@ pub struct FinWait1 {
 }
 
 impl FinWait1 {
-    pub fn handle_ack<'a>(self, ack_packet: &TcpHeaderSlice<'a>) -> FinWait2 {
+    pub fn handle_ack(self, ack_packet: &TcpHeaderSlice<'_>) -> FinWait2 {
         assert!(ack_packet.ack());
         FinWait2 {}
     }
