@@ -900,6 +900,16 @@ pub struct FinWait1 {
     last_seq: u32,
 }
 
+impl FinWait1 {
+    pub fn handle_ack<'a>(
+        mut self,
+        ack_packet: &TcpHeaderSlice<'a>,
+    ) -> FinWait2 {
+        assert!(ack_packet.ack());
+        FinWait2 {}
+    }
+}
+
 pub struct FinWait2 {}
 
 pub struct Closing {}
@@ -1036,7 +1046,7 @@ impl Socket {
                 s.handle_packet(ip_header, tcp_header, payload).await.into(),
                 None,
             ),
-            TcpState::FinWait1(s) => todo!(),
+            TcpState::FinWait1(s) => (s.handle_ack(tcp_header).into(), None),
             TcpState::FinWait2(s) => todo!(),
             TcpState::Closing(s) => todo!(),
             TcpState::TimeWait(s) => todo!(),
