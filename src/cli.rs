@@ -209,8 +209,8 @@ impl Cli {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }
-            Command::SendTCPPacket(_socket_descriptor, _payload) => {
-                todo!() //TODO implement
+            Command::SendTCPPacket(socket_descriptor, payload) => {
+                self.tcp_send(socket_descriptor, payload).await;
             }
             Command::OpenSocket(_port) => {
                 todo!()
@@ -294,6 +294,15 @@ impl Cli {
                 println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
                 println!("{}", sockets)
             }
+        }
+    }
+
+    async fn tcp_send(&self, socket_descriptor: SocketDescriptor, payload: Vec<u8>) {
+        if let Err(e) = self.node.tcp_send(socket_descriptor, &payload).await {
+            eprintln!(
+                "Failed to send on socket {}. Error: {:?}",
+                socket_descriptor.0, e
+            )
         }
     }
 

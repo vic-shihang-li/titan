@@ -67,7 +67,11 @@ pub enum TcpAcceptError {
 }
 
 #[derive(Debug)]
-pub struct TcpSendError {}
+pub enum TcpSendError {
+    NoSocket(SocketDescriptor),
+    ConnNotEstablished,
+    ConnWillBeClosed,
+}
 
 #[derive(Debug)]
 pub struct TcpReadError {}
@@ -75,6 +79,7 @@ pub struct TcpReadError {}
 #[derive(Debug)]
 pub enum TcpCloseError {
     NoConnection(SocketDescriptor),
+    AlreadyClosed,
 }
 
 /// A TCP stack.
@@ -122,6 +127,19 @@ impl Tcp {
             AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
         })?;
         Ok(socket.listen(port).unwrap())
+    }
+
+    pub async fn send_on_socket_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        payload: &[u8],
+    ) -> Result<(), TcpSendError> {
+        let mut sockets = self.sockets.write().await;
+        let socket = sockets
+            .get_mut_socket_by_descriptor(socket_descriptor)
+            .ok_or(TcpSendError::NoSocket(socket_descriptor))?;
+
+        socket.send_all(payload).await
     }
 
     pub async fn close(&self, socket_descriptor: SocketDescriptor) -> Result<(), TcpCloseError> {
