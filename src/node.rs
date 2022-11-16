@@ -3,7 +3,8 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    Port, Remote, Tcp, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
+    Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
+    TcpListenError, TcpListener,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -149,6 +150,13 @@ impl Node {
     #[allow(clippy::needless_lifetimes)]
     pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
         self.net.iter_links().await
+    }
+
+    pub async fn close_socket(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Result<(), TcpCloseError> {
+        self.tcp.close(socket_descriptor).await
     }
 
     /// Send bytes to a destination.

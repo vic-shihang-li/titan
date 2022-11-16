@@ -1,4 +1,5 @@
 use crate::node::Node;
+use crate::protocol::tcp::SocketDescriptor;
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -144,8 +145,8 @@ impl Cli {
             Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
             }
-            Command::Close(_socket) => {
-                todo!() //TODO implement
+            Command::Close(socket_descriptor) => {
+                self.close_socket(socket_descriptor).await;
             }
             Command::Quit => {
                 eprintln!("Quitting");
@@ -208,6 +209,20 @@ impl Cli {
                 println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
                 println!("{}", sockets)
             }
+        }
+    }
+
+    async fn close_socket(&self, socket_descriptor: u16) {
+        if self
+            .node
+            .close_socket(socket_descriptor.into())
+            .await
+            .is_err()
+        {
+            eprintln!(
+                "Failed to close socket: socket {} does not exist",
+                socket_descriptor
+            );
         }
     }
 }

@@ -72,6 +72,11 @@ pub struct TcpSendError {}
 #[derive(Debug)]
 pub struct TcpReadError {}
 
+#[derive(Debug)]
+pub enum TcpCloseError {
+    NoConnection(SocketDescriptor),
+}
+
 /// A TCP stack.
 pub struct Tcp {
     sockets: RwLock<SocketTable>,
@@ -117,6 +122,16 @@ impl Tcp {
             AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
         })?;
         Ok(socket.listen(port).unwrap())
+    }
+
+    pub async fn close(&self, socket_descriptor: SocketDescriptor) -> Result<(), TcpCloseError> {
+        let mut table = self.sockets.write().await;
+        let sock = table
+            .get_mut_socket_by_descriptor(socket_descriptor)
+            .ok_or(TcpCloseError::NoConnection(socket_descriptor))?;
+
+        sock.begin_active_close().await;
+        Ok(())
     }
 }
 
@@ -199,6 +214,12 @@ impl SocketIdBuilder {
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct SocketDescriptor(u16);
 
+impl From<u16> for SocketDescriptor {
+    fn from(s: u16) -> Self {
+        SocketDescriptor(s)
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct Port(u16);
 
@@ -278,7 +299,7 @@ impl SocketTable {
     pub fn get_socket_by_descriptor(&self, descriptor: SocketDescriptor) -> Option<&Socket> {
         self.socket_id_map
             .get(&descriptor)
-            .and_then(|port| self.socket_map.get(port))
+            .and_then(|sock_id| self.socket_map.get(sock_id))
     }
 
     pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket> {
