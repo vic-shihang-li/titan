@@ -21,9 +21,16 @@ pub enum Command {
     OpenSocket(u16),
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
-    Shutdown(u16, u16),
+    Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(u16),
     Quit,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TcpShutdownKind {
+    Read,
+    Write,
+    ReadWrite,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -388,7 +395,29 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             }
         }
         "sd" => {
-            todo!() //TODO implement
+            let sid = tokens
+                .next()
+                .ok_or(ParseTcpShutdownError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
+            );
+
+            let maybe_option = tokens.next();
+            let opt = match maybe_option {
+                Some(token) => match token {
+                    "w" | "write" => TcpShutdownKind::Write,
+                    "r" | "read" => TcpShutdownKind::Read,
+
+                    "both" => TcpShutdownKind::ReadWrite,
+                    _ => {
+                        return Err(ParseTcpShutdownError::InvalidShutdownType(token.into()).into())
+                    }
+                },
+                None => TcpShutdownKind::Write,
+            };
+
+            Ok(Command::Shutdown(sid, opt))
         }
         "cl" => {
             todo!() //TODO implement
@@ -456,6 +485,13 @@ pub enum ParseTcpReadError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpShutdownError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    InvalidShutdownType(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -465,6 +501,7 @@ pub enum ParseError {
     Connect(ParseConnectError),
     TcpSend(ParseTcpSendError),
     TcpRead(ParseTcpReadError),
+    TcpShutdown(ParseTcpShutdownError),
 }
 
 impl Display for ParseError {
@@ -514,6 +551,13 @@ impl Display for ParseError {
                     e
                 )
             }
+            ParseError::TcpShutdown(e) => {
+                write!(
+                    f,
+                    "Invalid shutdown command. Usage: sd <socket ID> <read|write|both>. Error: {:?}",
+                    e
+                )
+            }
         }
     }
 }
@@ -557,6 +601,12 @@ impl From<ParseTcpSendError> for ParseError {
 impl From<ParseTcpReadError> for ParseError {
     fn from(v: ParseTcpReadError) -> Self {
         ParseError::TcpRead(v)
+    }
+}
+
+impl From<ParseTcpShutdownError> for ParseError {
+    fn from(v: ParseTcpShutdownError) -> Self {
+        ParseError::TcpShutdown(v)
     }
 }
 
@@ -658,6 +708,60 @@ mod tests {
         assert_eq!(
             c,
             TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+        );
+    }
+
+    #[test]
+    fn parse_tcp_shutdown() {
+        assert_eq!(
+            Cli::parse_command("sd".into()).unwrap_err(),
+            ParseTcpShutdownError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sd ss".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sd 3 yes".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidShutdownType("yes".into()).into(),
+        );
+
+        let c = Cli::parse_command("sd 3".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 r".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
+        );
+
+        let c = Cli::parse_command("sd 3 read".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
+        );
+
+        let c = Cli::parse_command("sd 3 w".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 write".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 both".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::ReadWrite)
         );
     }
 }
