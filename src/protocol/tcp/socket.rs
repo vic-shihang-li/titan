@@ -8,6 +8,7 @@ use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
@@ -110,9 +111,34 @@ impl<const N: usize> InnerTcpConn<N> {
         }
     }
 
+    pub async fn close(&self, packet: &[u8]) -> Result<(), TcpSendError> {
+        let open_status = self.send_buf.get_open_status();
+        if open_status.compare_exchange(true,
+                                        false,
+                                        Ordering::Acquire,
+                                        Ordering::Relaxed).unwrap() {
+            // successfully swapped Flag
+            // append FIN packet to sendbuf
+            self.send_buf.write(packet).await;
+            self.send_buf.notify_closing();
+            Ok(())
+        } else {
+            Err(TcpSendError{})
+        }
+    }
+
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
-        self.send_buf.write_all(bytes).await;
-        Ok(())
+        let open_status = self.send_buf.get_open_status();
+        if open_status.compare_exchange(true,
+                                        true,
+                                        Ordering::Acquire,
+                                        Ordering::Relaxed)
+            .unwrap() {
+            self.send_buf.write_all(bytes).await;
+            Ok(())
+        } else {
+            Err(TcpSendError {})
+        }
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
@@ -768,6 +794,9 @@ impl SynSent {
             .expect("Failed to notify new connection established");
 
         Ok(Established {
+            local_port: self.src_port,
+            remote_ip: self.dest_ip,
+            remote_port: self.dest_port,
             conn,
             last_ack: ack_no,
             last_seq: self.seq_no + 1,
@@ -826,6 +855,9 @@ impl SynReceived {
             .expect("TcpListener not notified");
 
         Established {
+            local_port: self.local_port,
+            remote_ip: self.remote_ip,
+            remote_port: self.remote_port,
             conn,
             last_ack: ack_packet.acknowledgment_number(),
             last_seq: self.seq_no,
@@ -835,6 +867,9 @@ impl SynReceived {
 }
 
 pub struct Established {
+    local_port: Port,
+    remote_ip: Ipv4Addr,
+    remote_port: Port,
     conn: TcpConn,
     last_ack: u32,
     last_seq: u32,
@@ -852,6 +887,9 @@ impl Established {
             .handle_packet(ip_header, tcp_header, payload)
             .await;
         Self {
+            local_port: self.local_port,
+            remote_ip: self.remote_ip,
+            remote_port: self.remote_port,
             conn: self.conn,
             last_ack: tcp_header.acknowledgment_number(),
             last_seq: tcp_header.sequence_number(),
@@ -863,14 +901,15 @@ impl Established {
         // 1. Stop sending new data.
         self.accepting_sends = false;
         // 2. make FIN packet
-        let fin_packet = self.make_fin_packet(local_port.clone(), id.remote_port().clone());
+        let fin_packet = self.make_fin_packet(local_port,
+                                              id.remote_port());
         // 3. append FIN to send buffer queue.
-        self.conn.send_all(fin_packet.as_slice());
+        // self.conn.send_all(fin_packet.as_slice());
         // 4. Transition to FinWait1
         FinWait1 {
             conn: self.conn.clone(),
-            last_seq: self.last_seq.clone(),
-            last_ack: self.last_ack.clone(),
+            last_seq: self.last_seq,
+            last_ack: self.last_ack,
         }
     }
 
@@ -900,7 +939,36 @@ pub struct FinWait1 {
 }
 
 impl FinWait1 {
-    pub fn handle_ack(self, ack_packet: &TcpHeaderSlice<'_>) -> FinWait2 {
+    pub async fn handle_packet<'a>(
+        self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) -> TcpState {
+        let ack = tcp_header.ack();
+        let fin = tcp_header.fin();
+        if ack {
+            if fin {
+                let state: Closing = Closing{};
+                state.into()
+            } else {
+                self.handle_ack(tcp_header).into()
+            }
+        } else {
+            self.conn.handle_packet(ip_header, tcp_header, payload).await;
+            let state = Self {
+                conn: self.conn,
+                last_ack: tcp_header.acknowledgment_number(),
+                last_seq: tcp_header.sequence_number(),
+            };
+            state.into()
+        }
+    }
+
+    pub fn handle_ack(
+        self,
+        ack_packet: &TcpHeaderSlice,
+    ) -> FinWait2 {
         assert!(ack_packet.ack());
         FinWait2 {}
     }
@@ -1058,9 +1126,7 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(mut s) => {
-                let state = s
-                    .begin_active_close(self.id.clone(), self.local_port().clone())
-                    .await;
+                let state = s.begin_active_close(self.id, self.local_port()).await;
                 self.state = Some(state.into());
             }
             _ => {

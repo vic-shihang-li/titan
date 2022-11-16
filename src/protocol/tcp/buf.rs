@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
     usize,
 };
+use std::sync::atomic::{AtomicBool};
 
 use tokio::sync::Mutex;
 
@@ -19,6 +20,8 @@ pub struct SendBuf<const N: usize> {
     window_size: Arc<AtomicU16>,
     not_full: Notifier,
     written: Notifier,
+    open: Arc<AtomicBool>,
+    closing: Notifier,
 }
 
 impl<const N: usize> SendBuf<N> {
@@ -29,6 +32,8 @@ impl<const N: usize> SendBuf<N> {
             window_size: Arc::new(AtomicU16::new(N.try_into().unwrap())),
             not_full: Notifier::new(),
             written: Notifier::new(),
+            open: Arc::new(AtomicBool::new(true)),
+            closing: Notifier::new(),
         }
     }
 
@@ -40,6 +45,14 @@ impl<const N: usize> SendBuf<N> {
     /// Get the last ACK, i.e., the next byte expected by the remote side.
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
+    }
+
+    pub fn get_open_status(&self) -> Arc<AtomicBool> {
+        self.open.clone()
+    }
+
+    pub fn notify_closing(&self) {
+        self.closing.notify_all();
     }
 
     /// Like tail(), but also returns the elapsed duration since the ACK was
@@ -198,6 +211,13 @@ impl<const N: usize> SendBuf<N> {
             drop(send_buf);
 
             notifier.wait().await;
+        }
+    }
+
+    pub async fn wait_for_closing(&self) {
+        loop {
+            let notifier = self.closing.notified();
+            notifier.wait().await
         }
     }
 }
