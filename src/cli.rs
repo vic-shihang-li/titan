@@ -23,6 +23,7 @@ pub enum Command {
     ReadSocket(TCPReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
+    SendFile(SendFileCmd),
     Quit,
 }
 
@@ -31,6 +32,29 @@ pub enum TcpShutdownKind {
     Read,
     Write,
     ReadWrite,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SendFileCmd {
+    path: String,
+    dest_ip: Ipv4Addr,
+    port: Port,
+}
+
+impl SendFileCmd {
+    fn new(path: String, dest_ip: Ipv4Addr, port: Port) -> Self {
+        Self {
+            path,
+            dest_ip,
+            port,
+        }
+    }
+}
+
+impl From<SendFileCmd> for Command {
+    fn from(s: SendFileCmd) -> Self {
+        Command::SendFile(s)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -183,6 +207,9 @@ impl Cli {
             }
             Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
+            }
+            Command::SendFile(_cmd) => {
+                todo!()
             }
             Command::Quit => {
                 eprintln!("Quitting");
@@ -426,7 +453,20 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::Close(sid))
         }
         "sf" => {
-            todo!() //TODO implement
+            let filename = tokens.next().ok_or(ParseSendFileError::NoFile)?;
+            let ip = tokens
+                .next()
+                .ok_or(ParseSendFileError::NoIp)?
+                .parse()
+                .map_err(|_| ParseSendFileError::InvalidIp)?;
+            let port = tokens
+                .next()
+                .ok_or(ParseSendFileError::NoPort)?
+                .parse::<u16>()
+                .map_err(|_| ParseSendFileError::InvalidPort)?
+                .into();
+
+            Ok(SendFileCmd::new(filename.into(), ip, port).into())
         }
         "rf" => {
             todo!() //TODO implement
@@ -501,6 +541,15 @@ pub enum ParseCloseError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseSendFileError {
+    NoFile,
+    NoIp,
+    InvalidIp,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -512,6 +561,7 @@ pub enum ParseError {
     TcpRead(ParseTcpReadError),
     TcpShutdown(ParseTcpShutdownError),
     TcpClose(ParseCloseError),
+    SendFile(ParseSendFileError),
 }
 
 impl Display for ParseError {
@@ -575,6 +625,13 @@ impl Display for ParseError {
                     e
                 )
             }
+            ParseError::SendFile(e) => {
+                write!(
+                    f,
+                    "Invalid close command. Usage: sf <filename> <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
         }
     }
 }
@@ -624,6 +681,12 @@ impl From<ParseTcpReadError> for ParseError {
 impl From<ParseTcpShutdownError> for ParseError {
     fn from(v: ParseTcpShutdownError) -> Self {
         ParseError::TcpShutdown(v)
+    }
+}
+
+impl From<ParseSendFileError> for ParseError {
+    fn from(v: ParseSendFileError) -> Self {
+        ParseError::SendFile(v)
     }
 }
 
@@ -796,5 +859,43 @@ mod tests {
 
         let c = Cli::parse_command("cl 33".into()).unwrap();
         assert_eq!(c, Command::Close(SocketDescriptor(33)));
+    }
+
+    #[test]
+    fn parse_send_file() {
+        assert_eq!(
+            Cli::parse_command("sf".into()).unwrap_err(),
+            ParseSendFileError::NoFile.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world".into()).unwrap_err(),
+            ParseSendFileError::NoIp.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 121".into()).unwrap_err(),
+            ParseSendFileError::InvalidIp.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 1.2.3.4".into()).unwrap_err(),
+            ParseSendFileError::NoPort.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 1.2.3.4 xxx".into()).unwrap_err(),
+            ParseSendFileError::InvalidPort.into(),
+        );
+
+        let c = Cli::parse_command("sf hello 1.2.3.4 3434".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::SendFile(SendFileCmd::new(
+                "hello".into(),
+                Ipv4Addr::new(1, 2, 3, 4),
+                Port(3434)
+            ))
+        );
     }
 }
