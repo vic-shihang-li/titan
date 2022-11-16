@@ -500,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn lossy_send_file() {
-        let test_file_size = 5_000_000;
+        let test_file_size = 1_000_000;
         test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5).await;
     }
 
