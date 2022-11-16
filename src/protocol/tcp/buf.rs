@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
     usize,
 };
-use std::sync::atomic::{AtomicBool};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex;
 
@@ -217,7 +217,10 @@ impl<const N: usize> SendBuf<N> {
     pub async fn wait_for_closing(&self) {
         loop {
             let notifier = self.closing.notified();
-            notifier.wait().await
+            notifier.wait().await;
+            if self.open.load(Ordering::Relaxed) {
+                break
+            }
         }
     }
 }

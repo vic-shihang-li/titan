@@ -50,6 +50,17 @@ impl TcpConn {
         }
     }
 
+    pub async fn close(&self, fin_packet: &[u8]) {
+        match self.inner.close(fin_packet).await {
+            Ok(_) => {
+                // successfully closed
+            }
+            Err(e) => {
+                // error when closing
+            }
+        }
+    }
+
     /// Sends bytes over a connection.
     ///
     /// Blocks until all bytes have been acknowledged by the other end.
@@ -129,11 +140,7 @@ impl<const N: usize> InnerTcpConn<N> {
 
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
         let open_status = self.send_buf.get_open_status();
-        if open_status.compare_exchange(true,
-                                        true,
-                                        Ordering::Acquire,
-                                        Ordering::Relaxed)
-            .unwrap() {
+        if open_status.load(Ordering::Relaxed) {
             self.send_buf.write_all(bytes).await;
             Ok(())
         } else {
@@ -905,6 +912,7 @@ impl Established {
                                               id.remote_port());
         // 3. append FIN to send buffer queue.
         // self.conn.send_all(fin_packet.as_slice());
+        self.conn.close(fin_packet.as_slice()).await;
         // 4. Transition to FinWait1
         FinWait1 {
             conn: self.conn.clone(),
