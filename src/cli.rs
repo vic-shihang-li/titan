@@ -22,7 +22,7 @@ pub enum Command {
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
-    Close(u16),
+    Close(SocketDescriptor),
     Quit,
 }
 
@@ -248,16 +248,11 @@ impl Cli {
         }
     }
 
-    async fn close_socket(&self, socket_descriptor: u16) {
-        if self
-            .node
-            .close_socket(socket_descriptor.into())
-            .await
-            .is_err()
-        {
+    async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
+        if self.node.close_socket(socket_descriptor).await.is_err() {
             eprintln!(
                 "Failed to close socket: socket {} does not exist",
-                socket_descriptor
+                socket_descriptor.0
             );
         }
     }
@@ -420,7 +415,15 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::Shutdown(sid, opt))
         }
         "cl" => {
-            todo!() //TODO implement
+            let sid = tokens
+                .next()
+                .ok_or(ParseTcpShutdownError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
+            );
+
+            Ok(Command::Close(sid))
         }
         "sf" => {
             todo!() //TODO implement
@@ -492,6 +495,12 @@ pub enum ParseTcpShutdownError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseCloseError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -502,6 +511,7 @@ pub enum ParseError {
     TcpSend(ParseTcpSendError),
     TcpRead(ParseTcpReadError),
     TcpShutdown(ParseTcpShutdownError),
+    TcpClose(ParseCloseError),
 }
 
 impl Display for ParseError {
@@ -555,6 +565,13 @@ impl Display for ParseError {
                 write!(
                     f,
                     "Invalid shutdown command. Usage: sd <socket ID> <read|write|both>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpClose(e) => {
+                write!(
+                    f,
+                    "Invalid close command. Usage: cl <socket ID>. Error: {:?}",
                     e
                 )
             }
@@ -763,5 +780,21 @@ mod tests {
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::ReadWrite)
         );
+    }
+
+    #[test]
+    fn parse_close_socket() {
+        assert_eq!(
+            Cli::parse_command("cl".into()).unwrap_err(),
+            ParseTcpShutdownError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("cl xx".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidSocketDescriptor.into(),
+        );
+
+        let c = Cli::parse_command("cl 33".into()).unwrap();
+        assert_eq!(c, Command::Close(SocketDescriptor(33)));
     }
 }
