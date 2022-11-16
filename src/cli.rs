@@ -24,6 +24,7 @@ pub enum Command {
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
     SendFile(SendFileCmd),
+    RecvFile(RecvFileCmd),
     Quit,
 }
 
@@ -54,6 +55,24 @@ impl SendFileCmd {
 impl From<SendFileCmd> for Command {
     fn from(s: SendFileCmd) -> Self {
         Command::SendFile(s)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecvFileCmd {
+    out_path: String,
+    port: Port,
+}
+
+impl RecvFileCmd {
+    fn new(out_path: String, port: Port) -> Self {
+        Self { out_path, port }
+    }
+}
+
+impl From<RecvFileCmd> for Command {
+    fn from(s: RecvFileCmd) -> Self {
+        Command::RecvFile(s)
     }
 }
 
@@ -209,6 +228,9 @@ impl Cli {
                 self.close_socket(socket_descriptor).await;
             }
             Command::SendFile(_cmd) => {
+                todo!()
+            }
+            Command::RecvFile(_cmd) => {
                 todo!()
             }
             Command::Quit => {
@@ -469,7 +491,14 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(SendFileCmd::new(filename.into(), ip, port).into())
         }
         "rf" => {
-            todo!() //TODO implement
+            let filename = tokens.next().ok_or(ParseRecvFileError::NoFile)?;
+            let port = tokens
+                .next()
+                .ok_or(ParseRecvFileError::NoPort)?
+                .parse::<u16>()
+                .map_err(|_| ParseRecvFileError::InvalidPort)?
+                .into();
+            Ok(RecvFileCmd::new(filename.into(), port).into())
         }
         "q" => Ok(Command::Quit),
         _ => Err(ParseError::Unknown),
@@ -550,6 +579,13 @@ pub enum ParseSendFileError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ParseRecvFileError {
+    NoFile,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
@@ -562,6 +598,7 @@ pub enum ParseError {
     TcpShutdown(ParseTcpShutdownError),
     TcpClose(ParseCloseError),
     SendFile(ParseSendFileError),
+    RecvFile(ParseRecvFileError),
 }
 
 impl Display for ParseError {
@@ -628,7 +665,14 @@ impl Display for ParseError {
             ParseError::SendFile(e) => {
                 write!(
                     f,
-                    "Invalid close command. Usage: sf <filename> <ip> <port>. Error: {:?}",
+                    "Invalid send file command. Usage: sf <filename> <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::RecvFile(e) => {
+                write!(
+                    f,
+                    "Invalid receive file command. Usage: rf <filename> <port>. Error: {:?}",
                     e
                 )
             }
@@ -687,6 +731,12 @@ impl From<ParseTcpShutdownError> for ParseError {
 impl From<ParseSendFileError> for ParseError {
     fn from(v: ParseSendFileError) -> Self {
         ParseError::SendFile(v)
+    }
+}
+
+impl From<ParseRecvFileError> for ParseError {
+    fn from(v: ParseRecvFileError) -> Self {
+        ParseError::RecvFile(v)
     }
 }
 
@@ -896,6 +946,30 @@ mod tests {
                 Ipv4Addr::new(1, 2, 3, 4),
                 Port(3434)
             ))
+        );
+    }
+
+    #[test]
+    fn parse_recv_file() {
+        assert_eq!(
+            Cli::parse_command("rf".into()).unwrap_err(),
+            ParseRecvFileError::NoFile.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("rf hello".into()).unwrap_err(),
+            ParseRecvFileError::NoPort.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("rf hello xx".into()).unwrap_err(),
+            ParseRecvFileError::InvalidPort.into()
+        );
+
+        let c = Cli::parse_command("rf hello 5000".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::RecvFile(RecvFileCmd::new(String::from("hello"), Port(5000)))
         );
     }
 }
