@@ -2,7 +2,7 @@ use crate::protocol::tcp::buf::{SetTailError, SliceError, WriteRangeError};
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::{Router, SendError};
-use crate::utils::sync::{Notifier, RaceOneShotSender};
+use crate::utils::sync::RaceOneShotSender;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -863,8 +863,7 @@ impl Established {
         // 1. Stop sending new data.
         self.accepting_sends = false;
         // 2. make FIN packet
-        let fin_packet = self.make_fin_packet(local_port.clone(),
-                                              id.remote_port().clone());
+        let fin_packet = self.make_fin_packet(local_port.clone(), id.remote_port().clone());
         // 3. append FIN to send buffer queue.
         self.conn.send_all(fin_packet.as_slice());
         // 4. Transition to FinWait1
@@ -901,10 +900,7 @@ pub struct FinWait1 {
 }
 
 impl FinWait1 {
-    pub fn handle_ack<'a>(
-        mut self,
-        ack_packet: &TcpHeaderSlice<'a>,
-    ) -> FinWait2 {
+    pub fn handle_ack<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> FinWait2 {
         assert!(ack_packet.ack());
         FinWait2 {}
     }
@@ -1062,7 +1058,9 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(mut s) => {
-                let state = s.begin_active_close(self.id.clone(), self.local_port().clone()).await;
+                let state = s
+                    .begin_active_close(self.id.clone(), self.local_port().clone())
+                    .await;
                 self.state = Some(state.into());
             }
             _ => {
