@@ -13,6 +13,9 @@ use crate::utils::sync::Notifier;
 
 use super::TCP_DEFAULT_WINDOW_SZ;
 
+#[derive(Debug)]
+pub struct SendBufClosed;
+
 /// The send-side TCP transmission buffer.
 #[derive(Debug, Clone)]
 pub struct SendBuf<const N: usize> {
@@ -45,14 +48,6 @@ impl<const N: usize> SendBuf<N> {
     /// Get the last ACK, i.e., the next byte expected by the remote side.
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
-    }
-
-    pub fn get_open_status(&self) -> Arc<AtomicBool> {
-        self.open.clone()
-    }
-
-    pub fn notify_closing(&self) {
-        self.closing.notify_all();
     }
 
     /// Like tail(), but also returns the elapsed duration since the ACK was
@@ -106,13 +101,16 @@ impl<const N: usize> SendBuf<N> {
     ///
     /// To bound the amount of wait time, either use this API with
     /// `tokio::time::timeout` or use `SendBuf::write()`.
-    pub async fn write_all(&self, bytes: &[u8]) {
+    pub async fn write_all(&self, bytes: &[u8]) -> Result<(), SendBufClosed> {
         if bytes.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mut curr = 0;
         loop {
+            if !self.open.load(Ordering::Acquire) {
+                return Err(SendBufClosed);
+            }
             let mut send_buf = self.inner.lock().await;
             let written = send_buf.write(&bytes[curr..]);
             curr += written;
@@ -128,6 +126,8 @@ impl<const N: usize> SendBuf<N> {
                 break;
             }
         }
+
+        Ok(())
     }
 
     /// Advances the tail pointer to the provided sequence number.
@@ -211,6 +211,33 @@ impl<const N: usize> SendBuf<N> {
             drop(send_buf);
 
             notifier.wait().await;
+        }
+    }
+
+    pub async fn close(&self, fin_packet: &[u8]) -> Result<(), SendBufClosed> {
+        if self
+            .open
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Release)
+            .unwrap()
+        {
+            let mut curr = 0;
+            loop {
+                let mut send_buf = self.inner.lock().await;
+                let written = send_buf.write(&fin_packet[curr..]);
+                curr += written;
+                if curr < fin_packet.len() {
+                    let not_full = self.not_full.notified();
+                    drop(send_buf);
+                    not_full.wait().await;
+                } else {
+                    self.written.notify_all();
+                    break;
+                }
+            }
+
+            Ok(())
+        } else {
+            Err(SendBufClosed)
         }
     }
 
@@ -527,7 +554,7 @@ impl<const N: usize> RecvBuf<N> {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
             written: Notifier::new(),
             read: Notifier::new(),
-            open: Arc::new(AtomicBool::new(true))
+            open: Arc::new(AtomicBool::new(true)),
         }
     }
 

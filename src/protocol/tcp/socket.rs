@@ -128,7 +128,7 @@ impl<const N: usize> InnerTcpConn<N> {
         {
             // successfully swapped Flag
             // append FIN packet to sendbuf
-            self.send_buf.write(packet).await;
+            self.send_buf.write_all(packet).await;
             self.send_buf.notify_closing();
             Ok(())
         } else {
