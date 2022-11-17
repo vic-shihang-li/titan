@@ -931,7 +931,7 @@ impl Established {
             remote_ip: self.remote_ip,
             remote_port: self.remote_port,
             conn: self.conn,
-            router: self.router.clone(),
+            router: self.router,
         }
     }
 
