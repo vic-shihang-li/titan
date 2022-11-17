@@ -918,7 +918,7 @@ mod tests {
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
                 for _ in 0..num_repeats {
-                    producer_buf.write_all(&data).await;
+                    producer_buf.write_all(&data).await.unwrap();
                 }
             });
 
@@ -950,7 +950,7 @@ mod tests {
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
                 for _ in 0..num_repeats {
-                    producer_buf.write_all(&data).await;
+                    producer_buf.write_all(&data).await.unwrap();
                 }
             });
 
