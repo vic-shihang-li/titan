@@ -54,16 +54,16 @@ impl SendFileCmd {
     pub async fn send(&self, node: &Node) -> Result<(), SendFileError> {
         let file = fs::read_to_string(&self.path)
             .await
-            .map_err(|e| SendFileError::OpenFile(e))?;
+            .map_err(SendFileError::OpenFile)?;
 
         let conn = node
             .connect(self.dest_ip, self.port)
             .await
-            .map_err(|e| SendFileError::Connect(e))?;
+            .map_err(SendFileError::Connect)?;
 
         conn.send_all(file.as_bytes())
             .await
-            .map_err(|e| SendFileError::Send(e))?;
+            .map_err(SendFileError::Send)?;
 
         Ok(())
     }
