@@ -340,9 +340,12 @@ impl Cli {
     }
 
     async fn send_file(&self, cmd: SendFileCmd) {
-        if let Err(e) = cmd.send(&self.node).await {
-            eprintln!("Failed to send file. Error: {:?}", e)
-        }
+        let node = self.node.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cmd.send(&node).await {
+                eprintln!("Failed to send file. Error: {:?}", e)
+            }
+        });
     }
 
     async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
