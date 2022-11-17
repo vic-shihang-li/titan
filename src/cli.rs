@@ -1,5 +1,7 @@
 use crate::node::Node;
-use crate::protocol::tcp::{Port, SocketDescriptor, TcpConnError, TcpSendError};
+use crate::protocol::tcp::{
+    Port, SocketDescriptor, TcpAcceptError, TcpConnError, TcpListenError, TcpSendError,
+};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -64,10 +66,17 @@ impl From<SendFileCmd> for Command {
     }
 }
 
+#[derive(Debug)]
+pub enum RecvFileError {
+    OpenFile(std::io::Error),
+    Listen(TcpListenError),
+    Accept(TcpAcceptError),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecvFileCmd {
-    out_path: String,
-    port: Port,
+    pub out_path: String,
+    pub port: Port,
 }
 
 impl RecvFileCmd {

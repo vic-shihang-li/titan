@@ -2,7 +2,7 @@ use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::fs;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::cli::{SendFileCmd, SendFileError};
+use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
@@ -234,6 +234,35 @@ impl Node {
 
         // TODO: close connection
         // conn.close().await;
+
+        Ok(())
+    }
+
+    pub async fn recv_file(&self, cmd: RecvFileCmd) -> Result<(), RecvFileError> {
+        let mut listener = self
+            .tcp
+            .listen(cmd.port)
+            .await
+            .map_err(RecvFileError::Listen)?;
+
+        let socket = listener.accept().await.map_err(RecvFileError::Accept)?;
+
+        let mut read_buf = [0; 1024];
+        let mut out_buf = Vec::new();
+
+        loop {
+            match socket.read_all(&mut read_buf).await {
+                Ok(_) => {
+                    out_buf.extend_from_slice(&read_buf);
+                }
+                Err(_e) => {
+                    // TODOs:
+                    // Check if error is indeed conn closed.
+                    // Extend final, remaining bytes.
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
