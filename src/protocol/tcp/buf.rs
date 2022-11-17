@@ -517,6 +517,7 @@ pub struct RecvBuf<const N: usize> {
     inner: Arc<Mutex<InnerRecvBuf<N>>>,
     written: Notifier,
     read: Notifier,
+    open: Arc<AtomicBool>,
 }
 
 impl<const N: usize> RecvBuf<N> {
@@ -526,6 +527,7 @@ impl<const N: usize> RecvBuf<N> {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
             written: Notifier::new(),
             read: Notifier::new(),
+            open: Arc::new(AtomicBool::new(true))
         }
     }
 

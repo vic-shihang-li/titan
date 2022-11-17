@@ -822,7 +822,6 @@ impl SynSent {
             self.seq_no,
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
-        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = syn_ack_packet.sequence_number() + 1;
 
@@ -954,7 +953,6 @@ impl Established {
             tcp_header.acknowledgment_number(),
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
-        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = tcp_header.sequence_number() + 1;
         header.write(&mut bytes).unwrap();
@@ -1046,7 +1044,6 @@ impl FinWait1 {
             tcp_header.acknowledgment_number(),
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
-        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = tcp_header.sequence_number() + 1;
         header.write(&mut bytes).unwrap();
@@ -1080,7 +1077,6 @@ impl FinWait2 {
             tcp_header.acknowledgment_number(),
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
-        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = tcp_header.sequence_number() + 1;
         header.write(&mut bytes).unwrap();
@@ -1111,7 +1107,44 @@ pub struct CloseWait {
     accepting_sends: bool,
 }
 
+impl CloseWait {
+    async fn begin_active_close(&mut self, id: SocketId, local_port: Port) -> LastAck {
+        // 1. Stop sending new data.
+        self.accepting_sends = false;
+        // 2. make FIN packet
+        let fin_packet = self.make_fin_packet(local_port, id.remote_port());
+        // 3. append FIN to send buffer queue.
+        // self.conn.send_all(fin_packet.as_slice());
+        self.conn.close(fin_packet.as_slice()).await;
+        // 4. Transition to FinWait1
+        LastAck {
+            router: self.router.clone()
+        }
+    }
+
+    fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let mut header = TcpHeader::new(
+            src_port.0,
+            dst_port.0,
+            self.last_seq + 1,
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.fin = true;
+        header.write(&mut bytes).unwrap();
+        bytes
+    }
+}
+
 pub struct LastAck {
+    router: Arc<Router>
+}
+
+impl LastAck {
+    fn handle_ack(self) -> Closed {
+        Closed::new(self.router)
+    }
 }
 
 #[derive(Debug)]
@@ -1270,10 +1303,9 @@ impl Socket {
             },
             TcpState::TimeWait(s) => todo!(),
             TcpState::CloseWait(s) => todo!(),
-            TcpState::LastAck(s) => todo!(),
+            TcpState::LastAck(s) => (s.handle_ack().into(), None), //TODO return action that triggers socket table pruning
         };
         self.state = Some(next_state);
-
         action
     }
 
