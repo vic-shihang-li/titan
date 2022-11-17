@@ -1,5 +1,5 @@
 use crate::node::Node;
-use crate::protocol::tcp::{Port, SocketDescriptor};
+use crate::protocol::tcp::{Port, SocketDescriptor, TcpConnError, TcpSendError};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -8,6 +8,7 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
+use tokio::fs;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -22,7 +23,7 @@ pub enum Command {
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
-    Close(SocketDescriptor),
+    CloseListenSocket(SocketDescriptor),
     SendFile(SendFileCmd),
     RecvFile(RecvFileCmd),
     Quit,
@@ -35,8 +36,12 @@ pub enum TcpShutdownKind {
     ReadWrite,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum SendFileError {}
+#[derive(Debug)]
+pub enum SendFileError {
+    OpenFile(std::io::Error),
+    Connect(TcpConnError),
+    Send(TcpSendError),
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SendFileCmd {
@@ -46,8 +51,21 @@ pub struct SendFileCmd {
 }
 
 impl SendFileCmd {
-    pub fn send(&self, _node: &Node) -> Result<(), SendFileError> {
-        todo!()
+    pub async fn send(&self, node: &Node) -> Result<(), SendFileError> {
+        let file = fs::read_to_string(&self.path)
+            .await
+            .map_err(SendFileError::OpenFile)?;
+
+        let conn = node
+            .connect(self.dest_ip, self.port)
+            .await
+            .map_err(SendFileError::Connect)?;
+
+        conn.send_all(file.as_bytes())
+            .await
+            .map_err(SendFileError::Send)?;
+
+        Ok(())
     }
 }
 
@@ -233,7 +251,8 @@ impl Cli {
             Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
             }
-            Command::Close(socket_descriptor) => {
+            Command::CloseListenSocket(socket_descriptor) => {
+                // TODO: change this to close listening socket.
                 self.close_socket(socket_descriptor).await;
             }
             Command::SendFile(cmd) => {
@@ -322,9 +341,12 @@ impl Cli {
     }
 
     async fn send_file(&self, cmd: SendFileCmd) {
-        if let Err(e) = cmd.send(&self.node) {
-            eprintln!("Failed to send file. Error: {:?}", e)
-        }
+        let node = self.node.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cmd.send(&node).await {
+                eprintln!("Failed to send file. Error: {:?}", e)
+            }
+        });
     }
 
     async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
@@ -502,7 +524,7 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
                     .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
             );
 
-            Ok(Command::Close(sid))
+            Ok(Command::CloseListenSocket(sid))
         }
         "sf" => {
             let filename = tokens.next().ok_or(ParseSendFileError::NoFile)?;
@@ -594,7 +616,7 @@ pub enum ParseTcpShutdownError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ParseCloseError {
+pub enum ParseCloseListenSocketError {
     NoSocketDescriptor,
     InvalidSocketDescriptor,
 }
@@ -626,7 +648,7 @@ pub enum ParseError {
     TcpSend(ParseTcpSendError),
     TcpRead(ParseTcpReadError),
     TcpShutdown(ParseTcpShutdownError),
-    TcpClose(ParseCloseError),
+    CloseListenSocket(ParseCloseListenSocketError),
     SendFile(ParseSendFileError),
     RecvFile(ParseRecvFileError),
 }
@@ -685,7 +707,7 @@ impl Display for ParseError {
                     e
                 )
             }
-            ParseError::TcpClose(e) => {
+            ParseError::CloseListenSocket(e) => {
                 write!(
                     f,
                     "Invalid close command. Usage: cl <socket ID>. Error: {:?}",
@@ -938,7 +960,7 @@ mod tests {
         );
 
         let c = Cli::parse_command("cl 33".into()).unwrap();
-        assert_eq!(c, Command::Close(SocketDescriptor(33)));
+        assert_eq!(c, Command::CloseListenSocket(SocketDescriptor(33)));
     }
 
     #[test]
