@@ -120,8 +120,7 @@ impl Tcp {
     }
 
     /// Starts listening for incoming connections at a port. Opens a listener socket.
-    pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
-        let port = Port(port);
+    pub async fn listen(&self, port: Port) -> Result<TcpListener, TcpListenError> {
         let mut sockets = self.sockets.write().await;
         let socket = sockets.add_new_listen_socket(port).map_err(|e| match e {
             AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
@@ -561,7 +560,7 @@ mod tests {
         let send_cfg = abc_net.a.clone();
         let recv_cfg = abc_net.b.clone();
 
-        let recv_listen_port = 5656;
+        let recv_listen_port = Port(5656);
         let payload1_clone = payload1.clone();
         let payload2_clone = payload2.clone();
         let barr = Arc::new(Barrier::new(2));
@@ -578,7 +577,7 @@ mod tests {
                 let recv_ips = n2_cfg.get_my_interface_ips();
                 recv_ips[0]
             };
-            let conn = node.connect(dest_ip, Port(recv_listen_port)).await.unwrap();
+            let conn = node.connect(dest_ip, recv_listen_port).await.unwrap();
 
             let conn2 = conn.clone();
             let snd = tokio::spawn(async move {

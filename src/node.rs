@@ -212,7 +212,7 @@ impl Node {
         self.tcp.connect(Remote::new(dest_ip, dest_port)).await
     }
 
-    pub async fn listen(&self, port: u16) -> Result<TcpListener, TcpListenError> {
+    pub async fn listen(&self, port: Port) -> Result<TcpListener, TcpListenError> {
         self.tcp.listen(port).await
     }
 }
