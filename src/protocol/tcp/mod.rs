@@ -147,7 +147,7 @@ impl Tcp {
             .get_mut_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpCloseError::NoConnection(socket_descriptor))?;
 
-        sock.begin_active_close().await;
+        sock.close().await;
         Ok(())
     }
 }

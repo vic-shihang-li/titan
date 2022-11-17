@@ -53,14 +53,10 @@ impl TcpConn {
     }
 
     pub async fn close(&self, fin_packet: &[u8]) {
-        match self.inner.close(fin_packet).await {
-            Ok(_) => {
-                // successfully closed
-            }
-            Err(e) => {
-                // error when closing
-            }
-        }
+        self.inner
+            .close(fin_packet)
+            .await
+            .expect("TCP conn should only be closed once");
     }
 
     /// Sends bytes over a connection.
@@ -924,7 +920,7 @@ impl Established {
         }
     }
 
-    async fn begin_active_close(self, id: SocketId, local_port: Port) -> FinWait1 {
+    async fn close(self, id: SocketId, local_port: Port) -> FinWait1 {
         let fin_packet = self.make_fin_packet(local_port, id.remote_port());
         self.conn.close(fin_packet.as_slice()).await;
         FinWait1 {
@@ -1097,7 +1093,7 @@ pub struct CloseWait {
 }
 
 impl CloseWait {
-    async fn begin_active_close(&mut self, id: SocketId, local_port: Port) -> LastAck {
+    async fn close(&mut self, id: SocketId, local_port: Port) -> LastAck {
         let fin_packet = self.make_fin_packet(local_port, id.remote_port());
         self.conn.close(fin_packet.as_slice()).await;
         LastAck {
@@ -1288,11 +1284,11 @@ impl Socket {
         action
     }
 
-    pub async fn begin_active_close(&mut self) {
+    pub async fn close(&mut self) {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(s) => {
-                let state = s.begin_active_close(self.id, self.local_port()).await;
+                let state = s.close(self.id, self.local_port()).await;
                 self.state = Some(state.into());
             }
             _ => {
