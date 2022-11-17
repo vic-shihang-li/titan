@@ -51,7 +51,7 @@ impl TcpConn {
         }
     }
 
-    pub async fn close(&self, fin_packet: &[u8]) {
+    async fn close(&self, fin_packet: &[u8]) {
         self.inner
             .close(fin_packet)
             .await

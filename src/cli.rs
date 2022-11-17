@@ -8,7 +8,6 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
-use tokio::fs;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -45,28 +44,9 @@ pub enum SendFileError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SendFileCmd {
-    path: String,
-    dest_ip: Ipv4Addr,
-    port: Port,
-}
-
-impl SendFileCmd {
-    pub async fn send(&self, node: &Node) -> Result<(), SendFileError> {
-        let file = fs::read_to_string(&self.path)
-            .await
-            .map_err(SendFileError::OpenFile)?;
-
-        let conn = node
-            .connect(self.dest_ip, self.port)
-            .await
-            .map_err(SendFileError::Connect)?;
-
-        conn.send_all(file.as_bytes())
-            .await
-            .map_err(SendFileError::Send)?;
-
-        Ok(())
-    }
+    pub path: String,
+    pub dest_ip: Ipv4Addr,
+    pub port: Port,
 }
 
 impl SendFileCmd {
@@ -78,7 +58,6 @@ impl SendFileCmd {
         }
     }
 }
-
 impl From<SendFileCmd> for Command {
     fn from(s: SendFileCmd) -> Self {
         Command::SendFile(s)
@@ -342,7 +321,7 @@ impl Cli {
     async fn send_file(&self, cmd: SendFileCmd) {
         let node = self.node.clone();
         tokio::spawn(async move {
-            if let Err(e) = cmd.send(&node).await {
+            if let Err(e) = node.send_file(cmd).await {
                 eprintln!("Failed to send file. Error: {:?}", e)
             }
         });

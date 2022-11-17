@@ -1,6 +1,8 @@
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
+use tokio::fs;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
+use crate::cli::{SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
@@ -214,6 +216,26 @@ impl Node {
 
     pub async fn listen(&self, port: Port) -> Result<TcpListener, TcpListenError> {
         self.tcp.listen(port).await
+    }
+
+    pub async fn send_file(&self, cmd: SendFileCmd) -> Result<(), SendFileError> {
+        let file = fs::read_to_string(&cmd.path)
+            .await
+            .map_err(SendFileError::OpenFile)?;
+
+        let conn = self
+            .connect(cmd.dest_ip, cmd.port)
+            .await
+            .map_err(SendFileError::Connect)?;
+
+        conn.send_all(file.as_bytes())
+            .await
+            .map_err(SendFileError::Send)?;
+
+        // TODO: close connection
+        // conn.close().await;
+
+        Ok(())
     }
 }
 
