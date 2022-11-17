@@ -1,5 +1,5 @@
 use crate::node::Node;
-use crate::protocol::tcp::{Port, SocketDescriptor};
+use crate::protocol::tcp::{Port, SocketDescriptor, TcpConnError, TcpSendError};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -8,6 +8,7 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
+use tokio::fs;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -35,8 +36,12 @@ pub enum TcpShutdownKind {
     ReadWrite,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum SendFileError {}
+#[derive(Debug)]
+pub enum SendFileError {
+    OpenFile(std::io::Error),
+    Connect(TcpConnError),
+    Send(TcpSendError),
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SendFileCmd {
@@ -46,8 +51,21 @@ pub struct SendFileCmd {
 }
 
 impl SendFileCmd {
-    pub fn send(&self, _node: &Node) -> Result<(), SendFileError> {
-        todo!()
+    pub async fn send(&self, node: &Node) -> Result<(), SendFileError> {
+        let file = fs::read_to_string(&self.path)
+            .await
+            .map_err(|e| SendFileError::OpenFile(e))?;
+
+        let conn = node
+            .connect(self.dest_ip, self.port)
+            .await
+            .map_err(|e| SendFileError::Connect(e))?;
+
+        conn.send_all(file.as_bytes())
+            .await
+            .map_err(|e| SendFileError::Send(e))?;
+
+        Ok(())
     }
 }
 
@@ -322,7 +340,7 @@ impl Cli {
     }
 
     async fn send_file(&self, cmd: SendFileCmd) {
-        if let Err(e) = cmd.send(&self.node) {
+        if let Err(e) = cmd.send(&self.node).await {
             eprintln!("Failed to send file. Error: {:?}", e)
         }
     }
