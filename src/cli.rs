@@ -18,7 +18,7 @@ pub enum Command {
     InterfaceUp(u16),
     SendIPv4Packet(IPv4SendCmd),
     SendTCPPacket(SocketDescriptor, Vec<u8>),
-    OpenSocket(u16),
+    OpenListenSocket(Port),
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
@@ -36,10 +36,19 @@ pub enum TcpShutdownKind {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum SendFileError {}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct SendFileCmd {
     path: String,
     dest_ip: Ipv4Addr,
     port: Port,
+}
+
+impl SendFileCmd {
+    pub fn send(&self, _node: &Node) -> Result<(), SendFileError> {
+        todo!()
+    }
 }
 
 impl SendFileCmd {
@@ -212,8 +221,8 @@ impl Cli {
             Command::SendTCPPacket(socket_descriptor, payload) => {
                 self.tcp_send(socket_descriptor, payload).await;
             }
-            Command::OpenSocket(_port) => {
-                todo!()
+            Command::OpenListenSocket(port) => {
+                self.open_listen_socket_on(port).await;
             }
             Command::ConnectSocket(_ip, _port) => {
                 todo!() //TODO implement
@@ -227,8 +236,8 @@ impl Cli {
             Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
             }
-            Command::SendFile(_cmd) => {
-                todo!()
+            Command::SendFile(cmd) => {
+                self.send_file(cmd).await;
             }
             Command::RecvFile(_cmd) => {
                 todo!()
@@ -303,6 +312,18 @@ impl Cli {
                 "Failed to send on socket {}. Error: {:?}",
                 socket_descriptor.0, e
             )
+        }
+    }
+
+    async fn open_listen_socket_on(&self, port: Port) {
+        if let Err(e) = self.node.listen(port).await {
+            eprintln!("Failed to listen on port {}. Error: {:?}", port.0, e)
+        }
+    }
+
+    async fn send_file(&self, cmd: SendFileCmd) {
+        if let Err(e) = cmd.send(&self.node) {
+            eprintln!("Failed to send file. Error: {:?}", e)
         }
     }
 
@@ -398,11 +419,11 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             }
         }
         "a" => {
-            let arg = tokens.next().ok_or(ParseOpenSocketError::NoPort)?;
+            let arg = tokens.next().ok_or(ParseOpenListenSocketError::NoPort)?;
             let port = arg
                 .parse::<u16>()
-                .map_err(|_| ParseOpenSocketError::InvalidPort)?;
-            Ok(Command::OpenSocket(port))
+                .map_err(|_| ParseOpenListenSocketError::InvalidPort)?;
+            Ok(Command::OpenListenSocket(Port(port)))
         }
         "c" => {
             let ip = tokens.next().ok_or(ParseConnectError::NoIp)?;
@@ -515,7 +536,7 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ParseOpenSocketError {
+pub enum ParseOpenListenSocketError {
     NoPort,
     InvalidPort,
 }
@@ -600,7 +621,7 @@ pub enum ParseError {
     Down(ParseDownError),
     Up(ParseUpError),
     Send(ParseSendError),
-    OpenSocket(ParseOpenSocketError),
+    OpenListenSocket(ParseOpenListenSocketError),
     Connect(ParseConnectError),
     TcpSend(ParseTcpSendError),
     TcpRead(ParseTcpReadError),
@@ -629,7 +650,7 @@ impl Display for ParseError {
                     e
                 )
             }
-            ParseError::OpenSocket(e) => {
+            ParseError::OpenListenSocket(e) => {
                 write!(
                     f,
                     "Invalid open socket command. Usage: a <port>. Error: {:?}",
@@ -707,9 +728,9 @@ impl From<ParseSendError> for ParseError {
     }
 }
 
-impl From<ParseOpenSocketError> for ParseError {
-    fn from(v: ParseOpenSocketError) -> Self {
-        ParseError::OpenSocket(v)
+impl From<ParseOpenListenSocketError> for ParseError {
+    fn from(v: ParseOpenListenSocketError) -> Self {
+        ParseError::OpenListenSocket(v)
     }
 }
 
