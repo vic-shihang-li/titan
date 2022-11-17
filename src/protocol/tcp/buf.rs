@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
@@ -5,7 +6,6 @@ use std::{
     time::{Duration, Instant},
     usize,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex;
 
@@ -219,7 +219,7 @@ impl<const N: usize> SendBuf<N> {
             let notifier = self.closing.notified();
             notifier.wait().await;
             if self.open.load(Ordering::Relaxed) {
-                break
+                break;
             }
         }
     }
@@ -564,6 +564,26 @@ impl<const N: usize> RecvBuf<N> {
             self.read.notify_all();
         }
         consumed
+    }
+
+    /// Try to write some bytes into the `dest` buffer, returning the number of
+    /// bytes written.
+    ///
+    /// Blocks until at least one byte is written into `dest`.
+    pub async fn try_fill_some<'a>(&'a self, dest: &'a mut [u8]) -> usize {
+        assert!(!dest.is_empty());
+
+        loop {
+            let mut recv_buf = self.inner.lock().await;
+            let consumed = recv_buf.try_fill(dest);
+            if !consumed.is_empty() {
+                self.read.notify_all();
+                return consumed.len();
+            }
+            let written = self.written.notified();
+            drop(recv_buf);
+            written.wait().await;
+        }
     }
 
     /// Fill the entire provided buffer.
