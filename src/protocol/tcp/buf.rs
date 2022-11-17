@@ -83,13 +83,16 @@ impl<const N: usize> SendBuf<N> {
     }
 
     /// Try to write bytes into the buffer, returning the number of bytes written.
-    pub async fn write(&self, bytes: &[u8]) -> usize {
+    pub async fn write(&self, bytes: &[u8]) -> Result<usize, SendBufClosed> {
+        if !self.open.load(Ordering::Acquire) {
+            return Err(SendBufClosed);
+        }
         let mut send_buf = self.inner.lock().await;
         let written = send_buf.write(bytes);
         if written > 0 {
             self.written.notify_all();
         }
-        written
+        Ok(written)
     }
 
     /// Writes all bytes into the buffer.
@@ -217,10 +220,11 @@ impl<const N: usize> SendBuf<N> {
     pub async fn close(&self, fin_packet: &[u8]) -> Result<(), SendBufClosed> {
         if self
             .open
-            .compare_exchange(true, false, Ordering::Acquire, Ordering::Release)
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
             .unwrap()
         {
             let mut curr = 0;
+            // queue fin packet
             loop {
                 let mut send_buf = self.inner.lock().await;
                 let written = send_buf.write(&fin_packet[curr..]);

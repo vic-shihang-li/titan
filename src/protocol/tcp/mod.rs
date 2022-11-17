@@ -70,7 +70,7 @@ pub enum TcpAcceptError {
 pub enum TcpSendError {
     NoSocket(SocketDescriptor),
     ConnNotEstablished,
-    ConnWillBeClosed,
+    ConnClosed,
 }
 
 #[derive(Debug)]

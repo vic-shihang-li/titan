@@ -7,7 +7,6 @@ use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, channel};
@@ -120,30 +119,18 @@ impl<const N: usize> InnerTcpConn<N> {
         }
     }
 
-    pub async fn close(&self, packet: &[u8]) -> Result<(), TcpCloseError> {
-        let open_status = self.send_buf.get_open_status();
-        if open_status
-            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
-            .unwrap()
-        {
-            // successfully swapped Flag
-            // append FIN packet to sendbuf
-            self.send_buf.write_all(packet).await;
-            self.send_buf.notify_closing();
-            Ok(())
-        } else {
-            Err(TcpCloseError::AlreadyClosed)
-        }
+    pub async fn close(&self, fin_packet: &[u8]) -> Result<(), TcpCloseError> {
+        self.send_buf
+            .close(fin_packet)
+            .await
+            .map_err(|_| TcpCloseError::AlreadyClosed)
     }
 
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
-        let open_status = self.send_buf.get_open_status();
-        if open_status.load(Ordering::Relaxed) {
-            self.send_buf.write_all(bytes).await;
-            Ok(())
-        } else {
-            Err(TcpSendError::ConnWillBeClosed)
-        }
+        self.send_buf
+            .write_all(bytes)
+            .await
+            .map_err(|_| TcpSendError::ConnClosed)
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
@@ -1202,7 +1189,7 @@ impl Socket {
             TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
                 return Err(TcpSendError::ConnNotEstablished)
             }
-            _ => return Err(TcpSendError::ConnWillBeClosed),
+            _ => return Err(TcpSendError::ConnClosed),
         }
     }
 
