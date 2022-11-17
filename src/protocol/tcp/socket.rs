@@ -711,7 +711,6 @@ impl Listen {
     ) -> Result<SynReceived, TransportError> {
         assert!(syn_packet.syn());
 
-        let reply_ip = ip_header.source_addr();
         let syn_ack_pkt = self.make_syn_ack_packet(syn_packet);
 
         let ack_handle = transport_single_message(
@@ -796,7 +795,7 @@ impl SynSent {
             self.src_port,
             send_buf_start,
             recv_buf_start,
-            self.router,
+            self.router.clone(),
         );
         self.established_tx
             .send(Ok(conn.clone()))
@@ -807,6 +806,7 @@ impl SynSent {
             remote_ip: self.dest_ip,
             remote_port: self.dest_port,
             conn,
+            router: self.router,
             last_ack: ack_no,
             last_seq: self.seq_no + 1,
             accepting_sends: true,
@@ -855,7 +855,7 @@ impl SynReceived {
             self.local_port,
             send_buf_start,
             recv_buf_start,
-            self.router,
+            self.router.clone(),
         );
 
         self.new_conn_tx
@@ -868,6 +868,7 @@ impl SynReceived {
             remote_ip: self.remote_ip,
             remote_port: self.remote_port,
             conn,
+            router: self.router,
             last_ack: ack_packet.acknowledgment_number(),
             last_seq: self.seq_no,
             accepting_sends: true,
@@ -882,6 +883,7 @@ pub struct Established {
     conn: TcpConn,
     last_ack: u32,
     last_seq: u32,
+    router: Arc<Router>,
     accepting_sends: bool,
 }
 
@@ -891,18 +893,37 @@ impl Established {
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> Self {
-        self.conn
-            .handle_packet(ip_header, tcp_header, payload)
-            .await;
-        Self {
-            local_port: self.local_port,
-            remote_ip: self.remote_ip,
-            remote_port: self.remote_port,
-            conn: self.conn,
-            last_ack: tcp_header.acknowledgment_number(),
-            last_seq: tcp_header.sequence_number(),
-            accepting_sends: true,
+    ) -> TcpState {
+        if tcp_header.fin() {
+            let ack_packet = self.make_ack_packet(tcp_header);
+            self.router.send(&ack_packet, Protocol::Tcp, self.remote_ip)
+                .await
+                .map_err(|_| TransportError::DestUnreachable(self.remote_ip)).unwrap();
+            let state = CloseWait {
+                accepting_sends: self.accepting_sends,
+                conn: self.conn,
+                last_seq: self.last_seq,
+                last_ack: self.last_ack,
+                local_port: self.local_port,
+                remote_ip: self.remote_ip,
+                remote_port: self.remote_port,
+                router: self.router,
+            };
+            state.into()
+        } else {
+            self.conn
+                .handle_packet(ip_header, tcp_header, payload)
+                .await;
+            Self {
+                local_port: self.local_port,
+                remote_ip: self.remote_ip,
+                remote_port: self.remote_port,
+                conn: self.conn,
+                last_ack: tcp_header.acknowledgment_number(),
+                last_seq: tcp_header.sequence_number(),
+                accepting_sends: true,
+                router: self.router,
+            }.into()
         }
     }
 
@@ -916,10 +937,28 @@ impl Established {
         self.conn.close(fin_packet.as_slice()).await;
         // 4. Transition to FinWait1
         FinWait1 {
+            local_port: self.local_port,
+            remote_ip: self.remote_ip,
+            remote_port: self.remote_port,
             conn: self.conn.clone(),
-            last_seq: self.last_seq,
-            last_ack: self.last_ack,
+            router: self.router.clone(),
         }
+    }
+
+    fn make_ack_packet<'a>(&self, tcp_header: &TcpHeaderSlice<'a>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let mut header = TcpHeader::new(
+            self.local_port.0,
+            self.remote_port.0,
+            tcp_header.acknowledgment_number(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.syn = true;
+        header.ack = true;
+        header.acknowledgment_number = tcp_header.sequence_number() + 1;
+        header.write(&mut bytes).unwrap();
+        bytes
     }
 
     fn make_fin_packet(&self, src_port: Port, dst_port: Port) -> Vec<u8> {
@@ -936,19 +975,21 @@ impl Established {
         bytes
     }
 
-    pub fn is_accepting_sends(&self) -> bool {
+    fn is_accepting_sends(&self) -> bool {
         self.accepting_sends
     }
 }
 
 pub struct FinWait1 {
+    local_port: Port,
+    remote_ip: Ipv4Addr,
+    remote_port: Port,
     conn: TcpConn,
-    last_ack: u32,
-    last_seq: u32,
+    router: Arc<Router>
 }
 
 impl FinWait1 {
-    pub async fn handle_packet<'a>(
+    async fn handle_packet<'a>(
         self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
@@ -958,39 +999,120 @@ impl FinWait1 {
         let fin = tcp_header.fin();
         if ack {
             if fin {
-                let state: Closing = Closing {};
+                let ack_packet = self.make_ack_packet(tcp_header);
+                self.router.send(&ack_packet, Protocol::Tcp, self.remote_ip)
+                    .await
+                    .map_err(|_| TransportError::DestUnreachable(self.remote_ip)).unwrap();
+                let state = TimeWait{};
                 state.into()
             } else {
-                self.handle_ack(tcp_header).into()
+                let state = FinWait2 {
+                    conn: self.conn,
+                    local_port: self.local_port,
+                    remote_ip: self.remote_ip,
+                    remote_port: self.remote_port,
+                    router: self.router
+                };
+                state.into()
             }
+        } else if fin {
+                let ack_packet: Vec<u8> = self.make_ack_packet(tcp_header);
+                self.router
+                    .send(ack_packet.as_slice(), Protocol::Tcp, self.remote_ip)
+                    .await
+                    .map_err(|_| TransportError::DestUnreachable(self.remote_ip)).unwrap();
+                let state = Closing {
+                };
+                state.into()
         } else {
-            self.conn
-                .handle_packet(ip_header, tcp_header, payload)
-                .await;
-            let state = Self {
-                conn: self.conn,
-                last_ack: tcp_header.acknowledgment_number(),
-                last_seq: tcp_header.sequence_number(),
-            };
-            state.into()
+                self.conn.handle_packet(ip_header, tcp_header, payload).await;
+                let state = Self {
+                    local_port: self.local_port,
+                    remote_ip: self.remote_ip,
+                    remote_port: self.remote_port,
+                    conn: self.conn,
+                    router: self.router,
+                };
+                state.into()
         }
     }
 
-    pub fn handle_ack(self, ack_packet: &TcpHeaderSlice) -> FinWait2 {
-        assert!(ack_packet.ack());
-        FinWait2 {}
+    fn make_ack_packet<'a>(&self, tcp_header: &TcpHeaderSlice<'a>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let mut header = TcpHeader::new(
+            self.local_port.0,
+            self.remote_port.0,
+            tcp_header.acknowledgment_number(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.syn = true;
+        header.ack = true;
+        header.acknowledgment_number = tcp_header.sequence_number() + 1;
+        header.write(&mut bytes).unwrap();
+        bytes
     }
 }
 
-pub struct FinWait2 {}
+pub struct FinWait2 {
+    local_port: Port,
+    remote_ip: Ipv4Addr,
+    remote_port: Port,
+    conn: TcpConn,
+    router: Arc<Router>
+}
 
-pub struct Closing {}
+impl FinWait2 {
+    async fn handle_fin<'a>(
+        &self,
+        tcp_header: &TcpHeaderSlice<'a>,
+    ) -> TimeWait {
+        let ack_packet = self.make_ack_packet(tcp_header);
+        self.router.send(&ack_packet, Protocol::Tcp, self.remote_ip).await.unwrap();
+        TimeWait{}
+    }
 
-pub struct TimeWait {}
+    fn make_ack_packet<'a>(&self, tcp_header: &TcpHeaderSlice<'a>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut header = TcpHeader::new(
+            self.local_port.0,
+            self.remote_port.0,
+            tcp_header.acknowledgment_number(),
+            TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
+        );
+        header.syn = true;
+        header.ack = true;
+        header.acknowledgment_number = tcp_header.sequence_number() + 1;
+        header.write(&mut bytes).unwrap();
+        bytes
+    }
+}
 
-pub struct CloseWait {}
+pub struct Closing {
+}
 
-pub struct LastAck {}
+impl Closing {
+    fn handle_ack(self) -> TimeWait {
+        TimeWait{}
+    }
+}
+
+pub struct TimeWait {
+}
+
+pub struct CloseWait {
+    local_port: Port,
+    remote_ip: Ipv4Addr,
+    remote_port: Port,
+    conn: TcpConn,
+    last_ack: u32,
+    last_seq: u32,
+    router: Arc<Router>,
+    accepting_sends: bool,
+}
+
+pub struct LastAck {
+}
 
 #[derive(Debug)]
 pub enum ListenTransitionError {
@@ -1125,12 +1247,27 @@ impl Socket {
                 }
             }
             TcpState::Established(s) => (
-                s.handle_packet(ip_header, tcp_header, payload).await.into(),
+                s.handle_packet(ip_header, tcp_header, payload).await,
                 None,
             ),
-            TcpState::FinWait1(s) => (s.handle_ack(tcp_header).into(), None),
-            TcpState::FinWait2(s) => todo!(),
-            TcpState::Closing(s) => todo!(),
+            TcpState::FinWait1(s) => (
+                s.handle_packet(ip_header, tcp_header, payload).await,
+                None,
+            ),
+            TcpState::FinWait2(s) => {
+                if tcp_header.fin() {
+                    (s.handle_fin(tcp_header).await.into(), None)
+                } else {
+                    (s.into(), None)
+                }
+            }
+            TcpState::Closing(s) => {
+                if tcp_header.ack() {
+                    (s.handle_ack().into(), None)
+                } else {
+                    (s.into(), None)
+                }
+            },
             TcpState::TimeWait(s) => todo!(),
             TcpState::CloseWait(s) => todo!(),
             TcpState::LastAck(s) => todo!(),
@@ -1149,7 +1286,7 @@ impl Socket {
             }
             _ => {
                 self.state = Some(state);
-                panic!("Should not be able to close a connection that's not established");
+                eprintln!("Should not be able to close a connection that's not established");
             }
         }
     }
