@@ -922,7 +922,10 @@ impl Established {
 
     async fn close(self, id: SocketId, local_port: Port) -> FinWait1 {
         let fin_packet = self.make_fin_packet(local_port, id.remote_port());
-        self.conn.close(fin_packet.as_slice()).await;
+        let conn = self.conn.clone();
+        tokio::spawn(async move {
+            conn.close(fin_packet.as_slice()).await;
+        });
         FinWait1 {
             local_port: self.local_port,
             remote_ip: self.remote_ip,
