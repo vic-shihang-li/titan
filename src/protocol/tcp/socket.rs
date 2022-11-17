@@ -7,15 +7,17 @@ use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
-use super::{Port, Remote, SocketId, TcpConnError, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ};
+use super::{
+    Port, Remote, SocketId, TcpCloseError, TcpConnError, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ,
+};
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
@@ -122,19 +124,19 @@ impl<const N: usize> InnerTcpConn<N> {
         }
     }
 
-    pub async fn close(&self, packet: &[u8]) -> Result<(), TcpSendError> {
+    pub async fn close(&self, packet: &[u8]) -> Result<(), TcpCloseError> {
         let open_status = self.send_buf.get_open_status();
-        if open_status.compare_exchange(true,
-                                        false,
-                                        Ordering::Acquire,
-                                        Ordering::Relaxed).unwrap() {
+        if open_status
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .unwrap()
+        {
             // successfully swapped Flag
             // append FIN packet to sendbuf
             self.send_buf.write(packet).await;
             self.send_buf.notify_closing();
             Ok(())
         } else {
-            Err(TcpSendError{})
+            Err(TcpCloseError::AlreadyClosed)
         }
     }
 
@@ -144,7 +146,7 @@ impl<const N: usize> InnerTcpConn<N> {
             self.send_buf.write_all(bytes).await;
             Ok(())
         } else {
-            Err(TcpSendError {})
+            Err(TcpSendError::ConnWillBeClosed)
         }
     }
 
@@ -897,7 +899,16 @@ impl Established {
             self.router.send(&ack_packet, Protocol::Tcp, self.remote_ip)
                 .await
                 .map_err(|_| TransportError::DestUnreachable(self.remote_ip)).unwrap();
-            let state = CloseWait{};
+            let state = CloseWait {
+                accepting_sends: self.accepting_sends,
+                conn: self.conn,
+                last_seq: self.last_seq,
+                last_ack: self.last_ack,
+                local_port: self.local_port,
+                remote_ip: self.remote_ip,
+                remote_port: self.remote_port,
+                router: self.router,
+            };
             state.into()
         } else {
             self.conn
@@ -920,8 +931,7 @@ impl Established {
         // 1. Stop sending new data.
         self.accepting_sends = false;
         // 2. make FIN packet
-        let fin_packet = self.make_fin_packet(local_port,
-                                              id.remote_port());
+        let fin_packet = self.make_fin_packet(local_port, id.remote_port());
         // 3. append FIN to send buffer queue.
         // self.conn.send_all(fin_packet.as_slice());
         self.conn.close(fin_packet.as_slice()).await;
@@ -1101,10 +1111,6 @@ pub struct CloseWait {
     accepting_sends: bool,
 }
 
-impl CloseWait {
-    async fn
-}
-
 pub struct LastAck {
 }
 
@@ -1173,6 +1179,16 @@ impl Socket {
 
     pub fn remote_ip_port(&self) -> (Ipv4Addr, Port) {
         (self.remote_ip(), self.remote_port())
+    }
+
+    pub async fn send_all(&self, payload: &[u8]) -> Result<(), TcpSendError> {
+        match self.state.as_ref().unwrap() {
+            TcpState::Established(s) => s.conn.send_all(payload).await,
+            TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
+                return Err(TcpSendError::ConnNotEstablished)
+            }
+            _ => return Err(TcpSendError::ConnWillBeClosed),
+        }
     }
 
     pub async fn initiate_connection(

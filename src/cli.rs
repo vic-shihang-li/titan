@@ -1,4 +1,5 @@
 use crate::node::Node;
+use crate::protocol::tcp::{Port, SocketDescriptor};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -8,6 +9,7 @@ use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     ListInterface(Option<String>),
     ListRoute(Option<String>),
@@ -15,19 +17,97 @@ pub enum Command {
     InterfaceDown(u16),
     InterfaceUp(u16),
     SendIPv4Packet(IPv4SendCmd),
-    SendTCPPacket(TCPSendCmd),
+    SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenSocket(u16),
-    ConnectSocket(Ipv4Addr, u16),
+    ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
-    Shutdown(u16, u16),
-    Close(u16),
+    Shutdown(SocketDescriptor, TcpShutdownKind),
+    Close(SocketDescriptor),
+    SendFile(SendFileCmd),
+    RecvFile(RecvFileCmd),
     Quit,
 }
 
-pub struct TCPSendCmd {}
+#[derive(Debug, PartialEq, Eq)]
+pub enum TcpShutdownKind {
+    Read,
+    Write,
+    ReadWrite,
+}
 
-pub struct TCPReadCmd {}
+#[derive(Debug, PartialEq, Eq)]
+pub struct SendFileCmd {
+    path: String,
+    dest_ip: Ipv4Addr,
+    port: Port,
+}
 
+impl SendFileCmd {
+    fn new(path: String, dest_ip: Ipv4Addr, port: Port) -> Self {
+        Self {
+            path,
+            dest_ip,
+            port,
+        }
+    }
+}
+
+impl From<SendFileCmd> for Command {
+    fn from(s: SendFileCmd) -> Self {
+        Command::SendFile(s)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecvFileCmd {
+    out_path: String,
+    port: Port,
+}
+
+impl RecvFileCmd {
+    fn new(out_path: String, port: Port) -> Self {
+        Self { out_path, port }
+    }
+}
+
+impl From<RecvFileCmd> for Command {
+    fn from(s: RecvFileCmd) -> Self {
+        Command::RecvFile(s)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct TCPReadCmd {
+    descriptor: SocketDescriptor,
+    num_bytes: usize,
+    would_block: bool,
+}
+
+impl TCPReadCmd {
+    fn new_blocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
+        Self {
+            descriptor,
+            num_bytes,
+            would_block: true,
+        }
+    }
+
+    fn new_nonblocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
+        Self {
+            descriptor,
+            num_bytes,
+            would_block: false,
+        }
+    }
+}
+
+impl From<TCPReadCmd> for Command {
+    fn from(r: TCPReadCmd) -> Self {
+        Command::ReadSocket(r)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct IPv4SendCmd {
     virtual_ip: Ipv4Addr,
     protocol: Protocol,
@@ -58,7 +138,7 @@ impl Cli {
                         eprintln!("Commencing Graceful Shutdown");
                         shutdown_flag = true;
                     }
-                    match self.parse_command(line) {
+                    match Self::parse_command(line) {
                         Ok(cmd) => {
                             self.execute_command(cmd).await;
                         }
@@ -86,7 +166,7 @@ impl Cli {
         }
     }
 
-    fn parse_command(&self, line: String) -> Result<Command, ParseError> {
+    fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
         eprintln!("cmd: {}", cmd);
@@ -129,8 +209,8 @@ impl Cli {
                     eprintln!("Failed to send packet: {:?}", e);
                 }
             }
-            Command::SendTCPPacket(_cmd) => {
-                todo!() //TODO implement
+            Command::SendTCPPacket(socket_descriptor, payload) => {
+                self.tcp_send(socket_descriptor, payload).await;
             }
             Command::OpenSocket(_port) => {
                 todo!()
@@ -144,8 +224,14 @@ impl Cli {
             Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
             }
-            Command::Close(_socket) => {
-                todo!() //TODO implement
+            Command::Close(socket_descriptor) => {
+                self.close_socket(socket_descriptor).await;
+            }
+            Command::SendFile(_cmd) => {
+                todo!()
+            }
+            Command::RecvFile(_cmd) => {
+                todo!()
             }
             Command::Quit => {
                 eprintln!("Quitting");
@@ -208,6 +294,24 @@ impl Cli {
                 println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
                 println!("{}", sockets)
             }
+        }
+    }
+
+    async fn tcp_send(&self, socket_descriptor: SocketDescriptor, payload: Vec<u8>) {
+        if let Err(e) = self.node.tcp_send(socket_descriptor, &payload).await {
+            eprintln!(
+                "Failed to send on socket {}. Error: {:?}",
+                socket_descriptor.0, e
+            )
+        }
+    }
+
+    async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
+        if self.node.close_socket(socket_descriptor).await.is_err() {
+            eprintln!(
+                "Failed to close socket: socket {} does not exist",
+                socket_descriptor.0
+            );
         }
     }
 }
@@ -301,50 +405,134 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             Ok(Command::OpenSocket(port))
         }
         "c" => {
-            todo!() //TODO implement
+            let ip = tokens.next().ok_or(ParseConnectError::NoIp)?;
+            let ip = ip.parse().map_err(|_| ParseConnectError::InvalidIp)?;
+            let port = tokens.next().ok_or(ParseConnectError::NoPort)?;
+            let port: u16 = port.parse().map_err(|_| ParseConnectError::InvalidPort)?;
+            Ok(Command::ConnectSocket(ip, port.into()))
         }
         "s" => {
-            todo!() //TODO implement
+            let sid = tokens.next().ok_or(ParseTcpSendError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpSendError::InvalidSocketDescriptor)?,
+            );
+            let payload = tokens.next().ok_or(ParseTcpSendError::NoPayload)?;
+            Ok(Command::SendTCPPacket(sid, payload.as_bytes().into()))
         }
         "r" => {
-            todo!() //TODO implement
+            let sid = tokens.next().ok_or(ParseTcpReadError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpReadError::InvalidSocketDescriptor)?,
+            );
+            let num_bytes: usize = tokens
+                .next()
+                .ok_or(ParseTcpReadError::NoNumBytesToRead)?
+                .parse()
+                .map_err(|_| ParseTcpReadError::InvalidNumBytesToRead)?;
+
+            let maybe_blocking = tokens.next();
+            let blocking = match maybe_blocking {
+                Some(token) => match token {
+                    "y" => true,
+                    "N" => false,
+                    _ => return Err(ParseTcpReadError::InvalidBlockingIndicator.into()),
+                },
+                None => false,
+            };
+
+            match blocking {
+                true => Ok(TCPReadCmd::new_blocking(sid, num_bytes).into()),
+                false => Ok(TCPReadCmd::new_nonblocking(sid, num_bytes).into()),
+            }
         }
         "sd" => {
-            todo!() //TODO implement
+            let sid = tokens
+                .next()
+                .ok_or(ParseTcpShutdownError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
+            );
+
+            let maybe_option = tokens.next();
+            let opt = match maybe_option {
+                Some(token) => match token {
+                    "w" | "write" => TcpShutdownKind::Write,
+                    "r" | "read" => TcpShutdownKind::Read,
+
+                    "both" => TcpShutdownKind::ReadWrite,
+                    _ => {
+                        return Err(ParseTcpShutdownError::InvalidShutdownType(token.into()).into())
+                    }
+                },
+                None => TcpShutdownKind::Write,
+            };
+
+            Ok(Command::Shutdown(sid, opt))
         }
         "cl" => {
-            todo!() //TODO implement
+            let sid = tokens
+                .next()
+                .ok_or(ParseTcpShutdownError::NoSocketDescriptor)?;
+            let sid = SocketDescriptor(
+                sid.parse()
+                    .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
+            );
+
+            Ok(Command::Close(sid))
         }
         "sf" => {
-            todo!() //TODO implement
+            let filename = tokens.next().ok_or(ParseSendFileError::NoFile)?;
+            let ip = tokens
+                .next()
+                .ok_or(ParseSendFileError::NoIp)?
+                .parse()
+                .map_err(|_| ParseSendFileError::InvalidIp)?;
+            let port = tokens
+                .next()
+                .ok_or(ParseSendFileError::NoPort)?
+                .parse::<u16>()
+                .map_err(|_| ParseSendFileError::InvalidPort)?
+                .into();
+
+            Ok(SendFileCmd::new(filename.into(), ip, port).into())
         }
         "rf" => {
-            todo!() //TODO implement
+            let filename = tokens.next().ok_or(ParseRecvFileError::NoFile)?;
+            let port = tokens
+                .next()
+                .ok_or(ParseRecvFileError::NoPort)?
+                .parse::<u16>()
+                .map_err(|_| ParseRecvFileError::InvalidPort)?
+                .into();
+            Ok(RecvFileCmd::new(filename.into(), port).into())
         }
         "q" => Ok(Command::Quit),
         _ => Err(ParseError::Unknown),
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseOpenSocketError {
     NoPort,
     InvalidPort,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseDownError {
     InvalidLinkId,
     NoLinkId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseUpError {
     InvalidLinkId,
     NoLinkId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseSendError {
     NoIp,
     InvalidIp,
@@ -353,13 +541,73 @@ pub enum ParseSendError {
     NoPayload,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseConnectError {
+    NoIp,
+    InvalidIp,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpSendError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    NoPayload,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpReadError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    NoNumBytesToRead,
+    InvalidNumBytesToRead,
+    InvalidBlockingIndicator,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseTcpShutdownError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+    InvalidShutdownType(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseCloseError {
+    NoSocketDescriptor,
+    InvalidSocketDescriptor,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseSendFileError {
+    NoFile,
+    NoIp,
+    InvalidIp,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseRecvFileError {
+    NoFile,
+    NoPort,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     Unknown,
     Down(ParseDownError),
     Up(ParseUpError),
     Send(ParseSendError),
     OpenSocket(ParseOpenSocketError),
+    Connect(ParseConnectError),
+    TcpSend(ParseTcpSendError),
+    TcpRead(ParseTcpReadError),
+    TcpShutdown(ParseTcpShutdownError),
+    TcpClose(ParseCloseError),
+    SendFile(ParseSendFileError),
+    RecvFile(ParseRecvFileError),
 }
 
 impl Display for ParseError {
@@ -388,6 +636,55 @@ impl Display for ParseError {
                     e
                 )
             }
+            ParseError::Connect(e) => {
+                write!(
+                    f,
+                    "Invalid connect command. Usage: c <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpSend(e) => {
+                write!(
+                    f,
+                    "Invalid send command. Usage: s <socket_id> <data>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpRead(e) => {
+                write!(
+                    f,
+                    "Invalid read command. Usage: r <socket ID> <numbytes> <y|N>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpShutdown(e) => {
+                write!(
+                    f,
+                    "Invalid shutdown command. Usage: sd <socket ID> <read|write|both>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::TcpClose(e) => {
+                write!(
+                    f,
+                    "Invalid close command. Usage: cl <socket ID>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::SendFile(e) => {
+                write!(
+                    f,
+                    "Invalid send file command. Usage: sf <filename> <ip> <port>. Error: {:?}",
+                    e
+                )
+            }
+            ParseError::RecvFile(e) => {
+                write!(
+                    f,
+                    "Invalid receive file command. Usage: rf <filename> <port>. Error: {:?}",
+                    e
+                )
+            }
         }
     }
 }
@@ -413,5 +710,275 @@ impl From<ParseSendError> for ParseError {
 impl From<ParseOpenSocketError> for ParseError {
     fn from(v: ParseOpenSocketError) -> Self {
         ParseError::OpenSocket(v)
+    }
+}
+
+impl From<ParseConnectError> for ParseError {
+    fn from(v: ParseConnectError) -> Self {
+        ParseError::Connect(v)
+    }
+}
+
+impl From<ParseTcpSendError> for ParseError {
+    fn from(v: ParseTcpSendError) -> Self {
+        ParseError::TcpSend(v)
+    }
+}
+
+impl From<ParseTcpReadError> for ParseError {
+    fn from(v: ParseTcpReadError) -> Self {
+        ParseError::TcpRead(v)
+    }
+}
+
+impl From<ParseTcpShutdownError> for ParseError {
+    fn from(v: ParseTcpShutdownError) -> Self {
+        ParseError::TcpShutdown(v)
+    }
+}
+
+impl From<ParseSendFileError> for ParseError {
+    fn from(v: ParseSendFileError) -> Self {
+        ParseError::SendFile(v)
+    }
+}
+
+impl From<ParseRecvFileError> for ParseError {
+    fn from(v: ParseRecvFileError) -> Self {
+        ParseError::RecvFile(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn parse_connect() {
+        assert_eq!(
+            Cli::parse_command("c".into()).unwrap_err(),
+            ParseConnectError::NoIp.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1".into()).unwrap_err(),
+            ParseConnectError::InvalidIp.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1.2.3.4".into()).unwrap_err(),
+            ParseConnectError::NoPort.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("c 1.2.3.4 ss".into()).unwrap_err(),
+            ParseConnectError::InvalidPort.into()
+        );
+
+        let c = Cli::parse_command("c 1.2.3.4 33".into()).unwrap();
+        let expected = Command::ConnectSocket(Ipv4Addr::new(1, 2, 3, 4), 33u16.into());
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn parse_tcp_send() {
+        assert_eq!(
+            Cli::parse_command("s".into()).unwrap_err(),
+            ParseTcpSendError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("s ssss".into()).unwrap_err(),
+            ParseTcpSendError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("s 33".into()).unwrap_err(),
+            ParseTcpSendError::NoPayload.into(),
+        );
+
+        let c = Cli::parse_command("s 33 heehee".into()).unwrap();
+        let expected = Command::SendTCPPacket(
+            SocketDescriptor(33),
+            String::from("heehee").as_bytes().into(),
+        );
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn parse_tcp_read() {
+        assert_eq!(
+            Cli::parse_command("r".into()).unwrap_err(),
+            ParseTcpReadError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r ssss".into()).unwrap_err(),
+            ParseTcpReadError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33".into()).unwrap_err(),
+            ParseTcpReadError::NoNumBytesToRead.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33 heehee".into()).unwrap_err(),
+            ParseTcpReadError::InvalidNumBytesToRead.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("r 33 100 n".into()).unwrap_err(),
+            ParseTcpReadError::InvalidBlockingIndicator.into()
+        );
+
+        let c = Cli::parse_command("r 33 100 y".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_blocking(SocketDescriptor(33), 100).into()
+        );
+        let c = Cli::parse_command("r 33 100 N".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+        );
+        let c = Cli::parse_command("r 33 100".into()).unwrap();
+        assert_eq!(
+            c,
+            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+        );
+    }
+
+    #[test]
+    fn parse_tcp_shutdown() {
+        assert_eq!(
+            Cli::parse_command("sd".into()).unwrap_err(),
+            ParseTcpShutdownError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sd ss".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sd 3 yes".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidShutdownType("yes".into()).into(),
+        );
+
+        let c = Cli::parse_command("sd 3".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 r".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
+        );
+
+        let c = Cli::parse_command("sd 3 read".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
+        );
+
+        let c = Cli::parse_command("sd 3 w".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 write".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
+        );
+
+        let c = Cli::parse_command("sd 3 both".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::ReadWrite)
+        );
+    }
+
+    #[test]
+    fn parse_close_socket() {
+        assert_eq!(
+            Cli::parse_command("cl".into()).unwrap_err(),
+            ParseTcpShutdownError::NoSocketDescriptor.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("cl xx".into()).unwrap_err(),
+            ParseTcpShutdownError::InvalidSocketDescriptor.into(),
+        );
+
+        let c = Cli::parse_command("cl 33".into()).unwrap();
+        assert_eq!(c, Command::Close(SocketDescriptor(33)));
+    }
+
+    #[test]
+    fn parse_send_file() {
+        assert_eq!(
+            Cli::parse_command("sf".into()).unwrap_err(),
+            ParseSendFileError::NoFile.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world".into()).unwrap_err(),
+            ParseSendFileError::NoIp.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 121".into()).unwrap_err(),
+            ParseSendFileError::InvalidIp.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 1.2.3.4".into()).unwrap_err(),
+            ParseSendFileError::NoPort.into(),
+        );
+
+        assert_eq!(
+            Cli::parse_command("sf hello_world 1.2.3.4 xxx".into()).unwrap_err(),
+            ParseSendFileError::InvalidPort.into(),
+        );
+
+        let c = Cli::parse_command("sf hello 1.2.3.4 3434".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::SendFile(SendFileCmd::new(
+                "hello".into(),
+                Ipv4Addr::new(1, 2, 3, 4),
+                Port(3434)
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_recv_file() {
+        assert_eq!(
+            Cli::parse_command("rf".into()).unwrap_err(),
+            ParseRecvFileError::NoFile.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("rf hello".into()).unwrap_err(),
+            ParseRecvFileError::NoPort.into()
+        );
+
+        assert_eq!(
+            Cli::parse_command("rf hello xx".into()).unwrap_err(),
+            ParseRecvFileError::InvalidPort.into()
+        );
+
+        let c = Cli::parse_command("rf hello 5000".into()).unwrap();
+        assert_eq!(
+            c,
+            Command::RecvFile(RecvFileCmd::new(String::from("hello"), Port(5000)))
+        );
     }
 }

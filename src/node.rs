@@ -3,7 +3,8 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    Port, Remote, Tcp, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
+    Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
+    TcpListenError, TcpListener, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -151,6 +152,13 @@ impl Node {
         self.net.iter_links().await
     }
 
+    pub async fn close_socket(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Result<(), TcpCloseError> {
+        self.tcp.close(socket_descriptor).await
+    }
+
     /// Send bytes to a destination.
     ///
     /// The destination is typically the next-hop address for a packet.
@@ -161,6 +169,17 @@ impl Node {
         dest_vip: Ipv4Addr,
     ) -> Result<(), route::SendError> {
         self.router.send(payload, protocol, dest_vip).await
+    }
+
+    /// Send bytes over a TCP connection.
+    pub async fn tcp_send(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        payload: &[u8],
+    ) -> Result<(), TcpSendError> {
+        self.tcp
+            .send_on_socket_descriptor(socket_descriptor, payload)
+            .await
     }
 
     pub async fn run(&self) {
