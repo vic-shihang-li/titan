@@ -23,7 +23,7 @@ pub enum Command {
     ConnectSocket(Ipv4Addr, Port),
     ReadSocket(TCPReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
-    CloseListenSocket(SocketDescriptor),
+    Close(SocketDescriptor),
     SendFile(SendFileCmd),
     RecvFile(RecvFileCmd),
     Quit,
@@ -251,8 +251,7 @@ impl Cli {
             Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
             }
-            Command::CloseListenSocket(socket_descriptor) => {
-                // TODO: change this to close listening socket.
+            Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
             }
             Command::SendFile(cmd) => {
@@ -524,7 +523,7 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
                     .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
             );
 
-            Ok(Command::CloseListenSocket(sid))
+            Ok(Command::Close(sid))
         }
         "sf" => {
             let filename = tokens.next().ok_or(ParseSendFileError::NoFile)?;
@@ -616,7 +615,7 @@ pub enum ParseTcpShutdownError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ParseCloseListenSocketError {
+pub enum ParseCloseError {
     NoSocketDescriptor,
     InvalidSocketDescriptor,
 }
@@ -648,7 +647,7 @@ pub enum ParseError {
     TcpSend(ParseTcpSendError),
     TcpRead(ParseTcpReadError),
     TcpShutdown(ParseTcpShutdownError),
-    CloseListenSocket(ParseCloseListenSocketError),
+    TcpClose(ParseCloseError),
     SendFile(ParseSendFileError),
     RecvFile(ParseRecvFileError),
 }
@@ -707,7 +706,7 @@ impl Display for ParseError {
                     e
                 )
             }
-            ParseError::CloseListenSocket(e) => {
+            ParseError::TcpClose(e) => {
                 write!(
                     f,
                     "Invalid close command. Usage: cl <socket ID>. Error: {:?}",
@@ -960,7 +959,7 @@ mod tests {
         );
 
         let c = Cli::parse_command("cl 33".into()).unwrap();
-        assert_eq!(c, Command::CloseListenSocket(SocketDescriptor(33)));
+        assert_eq!(c, Command::Close(SocketDescriptor(33)));
     }
 
     #[test]
