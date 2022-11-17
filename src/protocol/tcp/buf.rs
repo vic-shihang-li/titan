@@ -234,10 +234,12 @@ impl<const N: usize> SendBuf<N> {
                     drop(send_buf);
                     not_full.wait().await;
                 } else {
-                    self.written.notify_all();
                     break;
                 }
             }
+
+            // notify all pending write waiters
+            self.written.notify_all();
 
             Ok(())
         } else {
