@@ -503,41 +503,52 @@ mod tests {
         Args,
     };
 
+    const NUM_REPEATS: usize = 1;
+
     #[tokio::test]
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
-        let payload = String::from("hello world!").as_bytes().into();
-        let f = test_send_recv(payload, vec![], 0, 0);
-        test_timeout(Duration::from_secs(1), f).await;
+
+        for _ in 0..NUM_REPEATS {
+            let payload = String::from("hello world!").as_bytes().into();
+            let f = test_send_recv(payload, vec![], 0, 0);
+            test_timeout(Duration::from_secs(1), f).await;
+        }
     }
 
     #[tokio::test]
     async fn send_file() {
         let test_file_size = 50_000_000;
 
-        let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0);
-        test_timeout(Duration::from_secs(8), f).await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0);
+            test_timeout(Duration::from_secs(8), f).await;
+        }
     }
 
     #[tokio::test]
     async fn lossy_send_file() {
         let test_file_size = 1_500_000;
 
-        let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
-        test_timeout(Duration::from_secs(10), f).await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
+            test_timeout(Duration::from_secs(10), f).await;
+        }
     }
 
     #[tokio::test]
     async fn bidirectional_send_file() {
         let test_file_size = 10_000_000;
 
-        let f = test_send_recv(
-            make_in_mem_test_file(test_file_size),
-            make_in_mem_test_file(test_file_size),
-            0,
-            0,
-        );
-        test_timeout(Duration::from_secs(10), f).await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(
+                make_in_mem_test_file(test_file_size),
+                make_in_mem_test_file(test_file_size),
+                0,
+                0,
+            );
+            test_timeout(Duration::from_secs(10), f).await;
+        }
     }
 
     #[tokio::test]
@@ -545,13 +556,15 @@ mod tests {
         // TODO: increase file size
         let test_file_size = 1_000_000;
 
-        let f = test_send_recv(
-            make_in_mem_test_file(test_file_size),
-            make_in_mem_test_file(test_file_size),
-            5,
-            5,
-        );
-        test_timeout(Duration::from_secs(10), f).await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(
+                make_in_mem_test_file(test_file_size),
+                make_in_mem_test_file(test_file_size),
+                5,
+                5,
+            );
+            test_timeout(Duration::from_secs(10), f).await;
+        }
     }
 
     // General-purposed TCP test that sends two payloads to one another.
