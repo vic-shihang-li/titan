@@ -28,6 +28,7 @@ pub struct TcpTransport<const N: usize> {
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
     retrans_interval: Duration,
+    zero_window_probe_interval: Duration,
     send_ack_request: Arc<DedupedNotifier>,
     last_ack_transmitted: usize,
     remaining_window_sz: usize,
@@ -53,6 +54,7 @@ impl<const N: usize> TcpTransport<N> {
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
             retrans_interval: Duration::from_millis(5),
+            zero_window_probe_interval: Duration::from_millis(1),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
             remaining_window_sz: TCP_DEFAULT_WINDOW_SZ,
@@ -65,7 +67,7 @@ impl<const N: usize> TcpTransport<N> {
 
         // Set upper bound on how long before acks are sent back to sender.
         let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
-
+        let mut zero_window_probe_interval = tokio::time::interval(self.zero_window_probe_interval);
         let mut retrans_interval = tokio::time::interval(self.retrans_interval);
         let mut window_sz_update = self.send_buf.window_size_update();
 
@@ -80,6 +82,9 @@ impl<const N: usize> TcpTransport<N> {
                 }
                 Ok(window_sz) = window_sz_update.recv() => {
                     self.remaining_window_sz = window_sz.into();
+                }
+                _ = zero_window_probe_interval.tick() => {
+                    self.check_and_zero_window_probe().await;
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
@@ -120,6 +125,12 @@ impl<const N: usize> TcpTransport<N> {
         next_segment_sz
     }
 
+    async fn check_and_zero_window_probe(&mut self) {
+        if self.remaining_window_sz == 0 {
+            self.zero_window_probe().await;
+        }
+    }
+
     async fn check_and_retransmit_ack(&mut self) {
         if self.last_transmitted.elapsed() > self.ack_batch_timeout {
             let curr_ack = self.recv_buf.head().await;
@@ -156,6 +167,13 @@ impl<const N: usize> TcpTransport<N> {
                     }
                 },
             }
+        }
+    }
+
+    async fn zero_window_probe(&mut self) {
+        let mut buf = [0; 1];
+        if self.send_buf.try_slice(self.seq_no, &mut buf).await.is_ok() {
+            self.send(self.seq_no, &buf).await.ok();
         }
     }
 
