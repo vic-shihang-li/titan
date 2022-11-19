@@ -887,6 +887,22 @@ pub struct FinWait2 {
 }
 
 impl FinWait2 {
+    async fn handle_packet<'a>(
+        self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) -> TcpState {
+        if tcp_header.fin() {
+            self.handle_fin(tcp_header).await.into()
+        } else {
+            self.conn
+                .handle_packet(ip_header, tcp_header, payload)
+                .await;
+            self.into()
+        }
+    }
+
     async fn handle_fin<'a>(&self, tcp_header: &TcpHeaderSlice<'a>) -> TimeWait {
         let ack_packet = self.make_ack_packet(tcp_header);
         self.router
@@ -1108,13 +1124,7 @@ impl Socket {
                 (s.handle_packet(ip_header, tcp_header, payload).await, None)
             }
             TcpState::FinWait1(s) => (s.handle_packet(ip_header, tcp_header, payload).await, None),
-            TcpState::FinWait2(s) => {
-                if tcp_header.fin() {
-                    (s.handle_fin(tcp_header).await.into(), None)
-                } else {
-                    (s.into(), None)
-                }
-            }
+            TcpState::FinWait2(s) => (s.handle_packet(ip_header, tcp_header, payload).await, None),
             TcpState::Closing(s) => {
                 if tcp_header.ack() {
                     (s.handle_ack().into(), None)

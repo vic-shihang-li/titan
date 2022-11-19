@@ -615,15 +615,17 @@ mod tests {
         let recv_cfg = abc_net.b.clone();
 
         let recv_listen_port = Port(5656);
-        let barr = Arc::new(Barrier::new(2));
+        let listen_barr = Arc::new(Barrier::new(2));
+        let listen_barr_clone = listen_barr.clone();
+        let close_barr = Arc::new(Barrier::new(2));
+        let close_barr_clone = close_barr.clone();
 
-        let listen_barr = barr.clone();
         let n1_cfg = send_cfg.clone();
         let n2_cfg = recv_cfg.clone();
 
         let n1 = tokio::spawn(async move {
             let node = create_and_start_node(n1_cfg, 0).await;
-            listen_barr.wait().await;
+            listen_barr_clone.wait().await;
 
             let dest_ip = {
                 let recv_ips = n2_cfg.get_my_interface_ips();
@@ -636,26 +638,38 @@ mod tests {
             let socket_id = conn.socket_id();
             node.close_socket(socket_id).await.unwrap();
 
+            // test closed socket cannot be written into
             let r = conn.send_all(&payload).await;
             assert_eq!(r.unwrap_err(), TcpSendError::ConnClosed);
 
             // Give socket state some time to settle.
             tokio::time::sleep(Duration::from_secs(2)).await;
-            let sock_ref = node.get_socket(socket_id).await.unwrap();
-            assert_eq!(sock_ref.status(), SocketStatus::FinWait2);
+            {
+                let sock_ref = node.get_socket(socket_id).await.unwrap();
+                assert_eq!(sock_ref.status(), SocketStatus::FinWait2);
+            }
+            close_barr.wait().await;
+
+            // test closed socket can still receive data
+            let mut buf = vec![0; payload.len()];
+            conn.read_all(&mut buf).await.unwrap();
+            assert!(buf == payload);
         });
 
         let n2 = tokio::spawn(async move {
             let node = create_and_start_node(recv_cfg, 0).await;
 
             let mut listener = node.listen(recv_listen_port).await.unwrap();
-            barr.wait().await;
+            listen_barr.wait().await;
 
             let conn = listener.accept().await.unwrap();
 
             let mut buf = vec![0; payload_clone.len()];
             conn.read_all(&mut buf).await.unwrap();
             assert!(buf == payload_clone);
+
+            close_barr_clone.wait().await;
+            conn.send_all(&payload_clone).await.unwrap();
         });
 
         n1.await.unwrap();
