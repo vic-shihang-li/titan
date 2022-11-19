@@ -153,11 +153,20 @@ impl<const N: usize> InnerTcpConn<N> {
     ) {
         assert!(tcp_header.ack());
 
-        if let Err(e) = self
-            .send_buf
-            .set_tail(tcp_header.acknowledgment_number().try_into().unwrap())
-            .await
-        {
+        self.send_buf.set_window_size(tcp_header.window_size());
+        self.update_last_acked_byte(tcp_header.acknowledgment_number())
+            .await;
+
+        if !payload.is_empty() {
+            self.write_received_bytes(tcp_header.sequence_number(), payload)
+                .await;
+        }
+    }
+}
+
+impl<const N: usize> InnerTcpConn<N> {
+    async fn update_last_acked_byte(&self, ack: u32) {
+        if let Err(e) = self.send_buf.set_tail(ack.try_into().unwrap()).await {
             match e {
                 SetTailError::LowerThanCurrent => log::error!("Remote responded with a lower ack"),
                 SetTailError::TooBig => log::error!(
@@ -165,20 +174,18 @@ impl<const N: usize> InnerTcpConn<N> {
                 ),
             }
         }
+    }
 
-        self.send_buf.set_window_size(tcp_header.window_size());
-
-        if !payload.is_empty() {
-            if let Err(e) = self
-                .recv_buf
-                .write(tcp_header.sequence_number().try_into().unwrap(), payload)
-                .await
-            {
-                match e {
-                    WriteRangeError::SeqNoTooSmall(_) => log::info!("Received delayed packet"),
-                    WriteRangeError::ExceedBuffer(_) => {
-                        log::error!("Remote did not honor window size")
-                    }
+    async fn write_received_bytes(&self, seq_no: u32, payload: &[u8]) {
+        if let Err(e) = self
+            .recv_buf
+            .write(seq_no.try_into().unwrap(), payload)
+            .await
+        {
+            match e {
+                WriteRangeError::SeqNoTooSmall(_) => log::info!("Received delayed packet"),
+                WriteRangeError::ExceedBuffer(_) => {
+                    log::error!("Remote did not honor window size")
                 }
             }
         }
