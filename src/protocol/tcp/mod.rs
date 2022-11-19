@@ -142,7 +142,29 @@ impl Tcp {
         socket.send_all(payload).await
     }
 
-    pub async fn close(&self, socket_descriptor: SocketDescriptor) -> Result<(), TcpCloseError> {
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+        let table = self.sockets.read().await;
+        let socket: *const Socket = table.socket_map.get(&socket_id)?;
+        Some(SocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
+    pub async fn close(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
+        let mut table = self.sockets.write().await;
+        let sock = table
+            .get_mut_socket_by_id(socket_id)
+            .ok_or(TcpCloseError::NoSocketOnId(socket_id))?;
+
+        sock.close().await;
+        Ok(())
+    }
+
+    pub async fn close_by_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Result<(), TcpCloseError> {
         let mut table = self.sockets.write().await;
         let sock = table
             .get_mut_socket_by_descriptor(socket_descriptor)
@@ -150,6 +172,21 @@ impl Tcp {
 
         sock.close().await;
         Ok(())
+    }
+}
+
+pub struct SocketRef<'a> {
+    _guard: RwLockReadGuard<'a, SocketTable>,
+    socket: *const Socket,
+}
+
+impl<'a> Deref for SocketRef<'a> {
+    type Target = Socket;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // read guard to the socket table, where this socket resides.
+        unsafe { &*self.socket }
     }
 }
 

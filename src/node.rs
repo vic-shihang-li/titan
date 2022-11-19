@@ -184,6 +184,10 @@ impl Node {
             .await
     }
 
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+        self.tcp.get_socket(socket_id).await
+    }
+
     pub async fn run(&self) {
         let mut listener = self.net.listen().await;
         while let Ok(bytes) = listener.recv().await {
