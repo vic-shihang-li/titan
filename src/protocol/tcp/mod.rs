@@ -493,7 +493,7 @@ impl ProtocolHandler for TcpHandler {
 mod tests {
     use super::*;
 
-    use std::{sync::Arc, time::Duration};
+    use std::{future::Future, sync::Arc, time::Duration};
 
     use tokio::sync::Barrier;
 
@@ -518,8 +518,10 @@ mod tests {
 
     #[tokio::test]
     async fn lossy_send_file() {
-        let test_file_size = 1_000_000;
-        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5).await;
+        let test_file_size = 1_500_000;
+
+        let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
+        test_timeout(Duration::from_secs(20), f).await;
     }
 
     #[tokio::test]
@@ -644,5 +646,11 @@ mod tests {
         // Give nodes time to converge on routes
         tokio::time::sleep(Duration::from_millis(300)).await;
         node
+    }
+
+    async fn test_timeout<F: Future>(dur: Duration, f: F) {
+        tokio::time::timeout(dur, f)
+            .await
+            .expect("Test should finish within time limit");
     }
 }

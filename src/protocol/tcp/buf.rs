@@ -288,6 +288,8 @@ struct InnerSendBuf<const N: usize> {
     head: usize,
     // Ring buffer.
     buf: [u8; N],
+    // Debugging use only
+    initial_seq_no: usize,
 }
 
 pub fn make_default_sendbuf(starting_seq_no: usize) -> SendBuf<TCP_DEFAULT_WINDOW_SZ> {
@@ -426,6 +428,7 @@ impl<const N: usize> InnerSendBuf<N> {
             tail: initial_seq_no,
             head: initial_seq_no,
             last_tail_mutated: Instant::now(),
+            initial_seq_no,
         }
     }
 
@@ -530,7 +533,7 @@ impl<const N: usize> InnerSendBuf<N> {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 struct SegmentMeta {
     seq_no: usize,
     size: usize,
@@ -714,6 +717,8 @@ struct InnerRecvBuf<const N: usize> {
     tail: usize,
     head: usize,
     early_arrivals: BinaryHeap<Reverse<SegmentMeta>>,
+    // Debugging use only
+    initial_seq_no: usize,
 }
 
 #[derive(Debug)]
@@ -727,12 +732,13 @@ pub enum WriteRangeError {
 }
 
 impl<const N: usize> InnerRecvBuf<N> {
-    pub fn new(starting_seq_no: usize) -> Self {
+    pub fn new(initial_seq_no: usize) -> Self {
         Self {
             buf: [0; N],
-            tail: starting_seq_no,
-            head: starting_seq_no,
+            tail: initial_seq_no,
+            head: initial_seq_no,
             early_arrivals: BinaryHeap::new(),
+            initial_seq_no,
         }
     }
 
@@ -876,10 +882,10 @@ impl<const N: usize> InnerRecvBuf<N> {
 
     fn drain_early_arrivals(&mut self) {
         while !self.early_arrivals.is_empty() {
-            let top = self.early_arrivals.peek().unwrap();
-            if top.0.seq_no <= self.head {
-                let top = self.early_arrivals.pop().unwrap();
-                self.head = max(self.head, top.0.seq_no + top.0.size);
+            let top = self.early_arrivals.peek().unwrap().0;
+            if top.seq_no <= self.head {
+                self.early_arrivals.pop().unwrap();
+                self.head = max(self.head, top.seq_no + top.size);
             } else {
                 break;
             }

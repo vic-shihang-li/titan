@@ -501,11 +501,11 @@ impl SynSent {
     ) -> Result<Established, TransportError> {
         assert!(syn_ack_packet.syn());
         assert!(syn_ack_packet.ack());
+        assert_eq!(syn_ack_packet.acknowledgment_number(), self.seq_no);
 
         self.syn_packet_rtx_handle.acked();
 
         let ack_pkt = self.make_ack_packet(syn_ack_packet);
-
         let ack_no = syn_ack_packet.acknowledgment_number() + 1;
 
         self.router
