@@ -513,7 +513,9 @@ mod tests {
     #[tokio::test]
     async fn send_file() {
         let test_file_size = 50_000_000;
-        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0).await;
+
+        let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0);
+        test_timeout(Duration::from_secs(8), f).await;
     }
 
     #[tokio::test]
@@ -538,18 +540,17 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn lossy_bidirectional_send_file() {
         // TODO: increase file size
         let test_file_size = 1_000_000;
 
-        test_send_recv(
+        let f = test_send_recv(
             make_in_mem_test_file(test_file_size),
             make_in_mem_test_file(test_file_size),
             5,
             5,
-        )
-        .await;
+        );
+        test_timeout(Duration::from_secs(10), f).await;
     }
 
     // General-purposed TCP test that sends two payloads to one another.

@@ -3,7 +3,7 @@ use crate::protocol::tcp::transport::RetransmissionConfig;
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
-use crate::utils::sync::{DedupedNotifier, RaceOneShotSender};
+use crate::utils::sync::RaceOneShotSender;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
@@ -90,7 +90,7 @@ struct InnerTcpConn<const N: usize> {
     remote: Remote,
     local_port: Port,
     transport_worker: JoinHandle<()>,
-    should_ack: Arc<DedupedNotifier>,
+    should_ack: broadcast::Sender<()>,
     ack_policy: AckBatchPolicy<ACK_BATCH_SZ>,
 }
 
@@ -104,13 +104,12 @@ impl<const N: usize> InnerTcpConn<N> {
     ) -> Self {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
-        let should_ack = Arc::new(DedupedNotifier::new());
+        let (should_ack_tx, should_ack_rx) = broadcast::channel(10);
 
         let sb = send_buf.clone();
         let rb = recv_buf.clone();
-        let should_ack_notifier = should_ack.clone();
         let transport_worker = tokio::spawn(async move {
-            TcpTransport::init(sb, rb, remote, local_port, router, should_ack_notifier)
+            TcpTransport::init(sb, rb, remote, local_port, router, should_ack_rx)
                 .await
                 .run()
                 .await;
@@ -122,7 +121,7 @@ impl<const N: usize> InnerTcpConn<N> {
             remote,
             local_port,
             transport_worker,
-            should_ack,
+            should_ack: should_ack_tx,
             ack_policy: AckBatchPolicy::<ACK_BATCH_SZ>::default(),
         }
     }
@@ -172,7 +171,7 @@ impl<const N: usize> InnerTcpConn<N> {
         }
 
         if self.ack_policy.should_ack() {
-            self.should_ack.notify().ok();
+            self.should_ack.send(()).unwrap();
         }
     }
 }
@@ -196,18 +195,25 @@ impl<const N: usize> InnerTcpConn<N> {
             .await
         {
             match e {
-                WriteRangeError::SeqNoTooSmall(_) => log::info!("Received delayed packet"),
+                WriteRangeError::SeqNoTooSmall(min_seq_no) => log::info!(
+                    "Received delayed packet, min seq no: {}, got seq no {}",
+                    min_seq_no,
+                    seq_no
+                ),
                 WriteRangeError::ExceedBuffer(_) => {
                     log::error!("Remote did not honor window size")
                 }
-            }
+            };
+
+            self.should_ack.send(()).unwrap();
         }
     }
 }
 
 impl<const N: usize> Drop for InnerTcpConn<N> {
     fn drop(&mut self) {
-        self.transport_worker.abort();
+        // TODO: notify transport worker for shutdown
+        // self.transport_worker.abort();
     }
 }
 

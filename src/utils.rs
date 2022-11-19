@@ -9,10 +9,7 @@ pub async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f:
 }
 
 pub mod sync {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex as StdMutex,
-    };
+    use std::sync::{Arc, Mutex as StdMutex};
 
     use tokio::sync::broadcast;
 
@@ -102,44 +99,6 @@ pub mod sync {
                     },
                 }
             }
-        }
-    }
-
-    /// Like Notifier, this utility allows a sender to notify a waiter.
-    /// Unlike Notifier, there is at most one pending notification in flight.
-    /// If the waiter hasn't consumed a notification yet, subsequent sender
-    /// notifications are ignored.
-    #[derive(Debug)]
-    pub struct DedupedNotifier {
-        flag: AtomicBool,
-        notifier: Notifier,
-    }
-
-    impl DedupedNotifier {
-        pub fn new() -> Self {
-            Self {
-                flag: AtomicBool::new(false),
-                notifier: Notifier::default(),
-            }
-        }
-
-        pub fn notify(&self) -> Result<(), ()> {
-            if self
-                .flag
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                self.notifier.notify_all();
-                Ok(())
-            } else {
-                Err(())
-            }
-        }
-
-        pub async fn wait(&self) {
-            let waiter = self.notifier.notified();
-            waiter.wait().await;
-            self.flag.store(false, Ordering::SeqCst);
         }
     }
 

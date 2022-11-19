@@ -5,12 +5,11 @@ use std::{
 };
 
 use etherparse::TcpHeader;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     protocol::Protocol,
     route::{Router, SendError},
-    utils::sync::DedupedNotifier,
 };
 
 use super::{
@@ -29,7 +28,7 @@ pub struct TcpTransport<const N: usize> {
     ack_batch_timeout: Duration,
     retrans_interval: Duration,
     zero_window_probe_interval: Duration,
-    send_ack_request: Arc<DedupedNotifier>,
+    send_ack_request: broadcast::Receiver<()>,
     last_ack_transmitted: usize,
     remaining_window_sz: usize,
 }
@@ -41,7 +40,7 @@ impl<const N: usize> TcpTransport<N> {
         remote: Remote,
         local_port: Port,
         router: Arc<Router>,
-        should_ack: Arc<DedupedNotifier>,
+        should_ack: broadcast::Receiver<()>,
     ) -> Self {
         let seq_no = send_buf.tail().await;
         Self {
@@ -91,7 +90,7 @@ impl<const N: usize> TcpTransport<N> {
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
-                _ = self.send_ack_request.wait() => {
+                _ = self.send_ack_request.recv() => {
                     self.send_ack().await.ok();
                 }
                 _ = retrans_interval.tick() => {
