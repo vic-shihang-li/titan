@@ -86,16 +86,6 @@ impl<const N: usize> SendBuf<N> {
         self.window_size_tx.subscribe()
     }
 
-    /// Get the window size that we transmit to our remote counterpart.
-    pub async fn advertised_window_size(&self) -> u16 {
-        self.inner
-            .lock()
-            .await
-            .write_remaining_size()
-            .try_into()
-            .unwrap()
-    }
-
     /// Try to write bytes into the buffer, returning the number of bytes written.
     pub async fn write(&self, bytes: &[u8]) -> Result<usize, SendBufClosed> {
         if !self.open.load(Ordering::Acquire) {

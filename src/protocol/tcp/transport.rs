@@ -185,7 +185,7 @@ impl<const N: usize> TcpTransport<N> {
         let src_port = self.local_port.0;
         let dst_port = self.remote.port().0;
         let seq_no = seq_no.try_into().expect("seq no overflow");
-        let window_sz = self.send_buf.advertised_window_size().await;
+        let window_sz = self.recv_buf.window_size().await.try_into().unwrap();
 
         let mut header = TcpHeader::new(src_port, dst_port, seq_no, window_sz);
         header.syn = true;
