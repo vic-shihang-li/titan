@@ -198,7 +198,9 @@ impl<const N: usize> SendBuf<N> {
     ) -> Result<usize, SliceError> {
         let send_buf = self.inner.lock().await;
         let unconsumed = send_buf.unconsumed();
-        assert!(start_seq_no >= send_buf.tail);
+        if start_seq_no < send_buf.tail {
+            return Err(SliceError::StartSeqTooLow(send_buf.tail));
+        }
         let offset = start_seq_no - send_buf.tail;
         unconsumed.slice(offset, buf.len()).map(|slice| {
             slice.copy_into_buf(buf).unwrap();
@@ -308,6 +310,9 @@ pub enum SetTailError {
 
 #[derive(Debug)]
 pub enum SliceError {
+    /// Errs when the slice starts at a sequence number lower than the current
+    /// buffer tail. Contains the current buffer tail in the error.
+    StartSeqTooLow(usize),
     /// Errs when the requested slice goes beyond the actual slice.
     /// Returns the maximum number of bytes sliceable.
     OutOfRange(usize),

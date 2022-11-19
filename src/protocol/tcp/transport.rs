@@ -78,7 +78,9 @@ impl<const N: usize> TcpTransport<N> {
                     if segment_sz == 0  {
                         segment_sz = min(self.remaining_window_sz, MAX_SEGMENT_SZ);
                     }
-                    segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                    if segment_sz > 0 {
+                        segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                    }
                 }
                 Ok(window_sz) = window_sz_update.recv() => {
                     self.remaining_window_sz = window_sz.into();
@@ -118,6 +120,10 @@ impl<const N: usize> TcpTransport<N> {
             Err(e) => match e {
                 SliceError::OutOfRange(unconsumed_sz) => {
                     next_segment_sz = min(unconsumed_sz, self.remaining_window_sz);
+                }
+                SliceError::StartSeqTooLow(next_seq_no) => {
+                    // send buf's tail has been advanced due to zero probing.
+                    self.seq_no = next_seq_no;
                 }
             },
         }
@@ -164,6 +170,9 @@ impl<const N: usize> TcpTransport<N> {
                         {
                             self.send(tail, &segment_buf[..remaining_sz]).await.ok();
                         }
+                    }
+                    SliceError::StartSeqTooLow(_) => {
+                        // OK. The segment to retransmit was just acked.
                     }
                 },
             }
