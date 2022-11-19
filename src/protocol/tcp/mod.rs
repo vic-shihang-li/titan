@@ -507,7 +507,8 @@ mod tests {
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
         let payload = String::from("hello world!").as_bytes().into();
-        test_send_recv(payload, vec![], 0, 0).await;
+        let f = test_send_recv(payload, vec![], 0, 0);
+        test_timeout(Duration::from_secs(1), f).await;
     }
 
     #[tokio::test]
@@ -523,20 +524,20 @@ mod tests {
         let test_file_size = 1_500_000;
 
         let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
-        test_timeout(Duration::from_secs(20), f).await;
+        test_timeout(Duration::from_secs(10), f).await;
     }
 
     #[tokio::test]
     async fn bidirectional_send_file() {
         let test_file_size = 10_000_000;
 
-        test_send_recv(
+        let f = test_send_recv(
             make_in_mem_test_file(test_file_size),
             make_in_mem_test_file(test_file_size),
             0,
             0,
-        )
-        .await;
+        );
+        test_timeout(Duration::from_secs(10), f).await;
     }
 
     #[tokio::test]
