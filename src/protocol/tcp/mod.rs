@@ -553,8 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn lossy_bidirectional_send_file() {
-        // TODO: increase file size
-        let test_file_size = 1_000_000;
+        let test_file_size = 2_000_000;
 
         for _ in 0..NUM_REPEATS {
             let f = test_send_recv(
