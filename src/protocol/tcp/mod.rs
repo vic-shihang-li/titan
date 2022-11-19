@@ -68,7 +68,7 @@ pub enum TcpAcceptError {
     ListenSocketClosed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TcpSendError {
     NoSocket(SocketDescriptor),
     ConnNotEstablished,
@@ -636,10 +636,13 @@ mod tests {
             let socket_id = conn.socket_id();
             node.close_socket(socket_id).await.unwrap();
 
+            let r = conn.send_all(&payload).await;
+            assert_eq!(r.unwrap_err(), TcpSendError::ConnClosed);
+
             // Give socket state some time to settle.
             tokio::time::sleep(Duration::from_secs(2)).await;
-            let socket = node.get_socket(socket_id).await.unwrap();
-            assert_eq!(socket.status(), SocketStatus::FinWait2);
+            let sock_ref = node.get_socket(socket_id).await.unwrap();
+            assert_eq!(sock_ref.status(), SocketStatus::FinWait2);
         });
 
         let n2 = tokio::spawn(async move {
