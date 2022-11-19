@@ -3,11 +3,12 @@ use crate::protocol::tcp::transport::RetransmissionConfig;
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
-use crate::utils::sync::RaceOneShotSender;
+use crate::utils::sync::{DedupedNotifier, RaceOneShotSender};
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
@@ -16,15 +17,6 @@ use tokio::task::JoinHandle;
 use super::buf::{RecvBuf, SendBuf};
 use super::transport::{transport_single_message, AckHandle, TcpTransport};
 use super::{Port, Remote, SocketId, TcpCloseError, TcpConnError, TCP_DEFAULT_WINDOW_SZ};
-
-#[derive(Debug)]
-struct InnerTcpConn<const N: usize> {
-    send_buf: SendBuf<N>,
-    recv_buf: RecvBuf<N>,
-    remote: Remote,
-    local_port: Port,
-    transport_worker: JoinHandle<()>,
-}
 
 #[derive(Clone, Debug)]
 pub struct TcpConn {
@@ -89,6 +81,19 @@ impl TcpConn {
     }
 }
 
+const ACK_BATCH_SZ: usize = 10;
+
+#[derive(Debug)]
+struct InnerTcpConn<const N: usize> {
+    send_buf: SendBuf<N>,
+    recv_buf: RecvBuf<N>,
+    remote: Remote,
+    local_port: Port,
+    transport_worker: JoinHandle<()>,
+    should_ack: Arc<DedupedNotifier>,
+    ack_policy: AckBatchPolicy<ACK_BATCH_SZ>,
+}
+
 impl<const N: usize> InnerTcpConn<N> {
     fn new(
         remote: Remote,
@@ -99,11 +104,13 @@ impl<const N: usize> InnerTcpConn<N> {
     ) -> Self {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
+        let should_ack = Arc::new(DedupedNotifier::new());
 
         let sb = send_buf.clone();
         let rb = recv_buf.clone();
+        let should_ack_notifier = should_ack.clone();
         let transport_worker = tokio::spawn(async move {
-            TcpTransport::init(sb, rb, remote, local_port, router)
+            TcpTransport::init(sb, rb, remote, local_port, router, should_ack_notifier)
                 .await
                 .run()
                 .await;
@@ -115,6 +122,8 @@ impl<const N: usize> InnerTcpConn<N> {
             remote,
             local_port,
             transport_worker,
+            should_ack,
+            ack_policy: AckBatchPolicy::<ACK_BATCH_SZ>::default(),
         }
     }
 
@@ -160,6 +169,10 @@ impl<const N: usize> InnerTcpConn<N> {
         if !payload.is_empty() {
             self.write_received_bytes(tcp_header.sequence_number(), payload)
                 .await;
+        }
+
+        if self.ack_policy.should_ack() {
+            self.should_ack.notify().ok();
         }
     }
 }
@@ -224,6 +237,18 @@ impl TcpListener {
             .recv()
             .await
             .ok_or(TcpAcceptError::ListenSocketClosed)
+    }
+}
+
+/// Utility that that allows a TcpConn to batch up to LAG Ack packets.
+#[derive(Default, Debug)]
+struct AckBatchPolicy<const LAG: usize> {
+    count: AtomicUsize,
+}
+
+impl<const LAG: usize> AckBatchPolicy<LAG> {
+    fn should_ack(&self) -> bool {
+        self.count.fetch_add(1, Ordering::AcqRel) % LAG == 0
     }
 }
 

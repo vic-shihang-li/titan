@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 use crate::{
     protocol::Protocol,
     route::{Router, SendError},
+    utils::sync::DedupedNotifier,
 };
 
 use super::{
@@ -27,6 +28,7 @@ pub struct TcpTransport<const N: usize> {
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
     retrans_interval: Duration,
+    send_ack_request: Arc<DedupedNotifier>,
     last_ack_transmitted: usize,
 }
 
@@ -37,6 +39,7 @@ impl<const N: usize> TcpTransport<N> {
         remote: Remote,
         local_port: Port,
         router: Arc<Router>,
+        should_ack: Arc<DedupedNotifier>,
     ) -> Self {
         let seq_no = send_buf.tail().await;
         Self {
@@ -49,6 +52,7 @@ impl<const N: usize> TcpTransport<N> {
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
             retrans_interval: Duration::from_millis(5),
+            send_ack_request: should_ack,
             last_ack_transmitted: 0,
         }
     }
@@ -72,6 +76,9 @@ impl<const N: usize> TcpTransport<N> {
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
+                }
+                _ = self.send_ack_request.wait() => {
+                    self.send_ack().await.ok();
                 }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
@@ -107,9 +114,7 @@ impl<const N: usize> TcpTransport<N> {
         if self.last_transmitted.elapsed() > self.ack_batch_timeout {
             let curr_ack = self.recv_buf.head().await;
             if curr_ack != self.last_ack_transmitted {
-                // The empty-payload packet's main purpose is to update the remote
-                // about our latest ACK sequence number.
-                self.send(self.seq_no, &[]).await.ok();
+                self.send_ack().await.ok();
             }
         }
     }
@@ -142,6 +147,12 @@ impl<const N: usize> TcpTransport<N> {
                 },
             }
         }
+    }
+
+    async fn send_ack(&mut self) -> Result<(), SendError> {
+        // The empty-payload packet's main purpose is to update the remote
+        // about our latest ACK sequence number.
+        self.send(self.seq_no, &[]).await
     }
 
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
