@@ -3,6 +3,7 @@
 mod buf;
 #[allow(dead_code, unused_variables)]
 mod socket;
+mod transport;
 
 use std::collections::HashMap;
 use std::hash::Hash;
