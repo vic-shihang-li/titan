@@ -708,16 +708,7 @@ impl Established {
             self.conn
                 .handle_packet(ip_header, tcp_header, payload)
                 .await;
-            Self {
-                local_port: self.local_port,
-                remote_ip: self.remote_ip,
-                remote_port: self.remote_port,
-                conn: self.conn,
-                last_ack: tcp_header.acknowledgment_number(),
-                last_seq: tcp_header.sequence_number(),
-                router: self.router,
-            }
-            .into()
+            self.into()
         }
     }
 
@@ -850,15 +841,7 @@ impl FinWait1 {
             self.conn
                 .handle_packet(ip_header, tcp_header, payload)
                 .await;
-            let state = Self {
-                local_port: self.local_port,
-                remote_ip: self.remote_ip,
-                remote_port: self.remote_port,
-                conn: self.conn,
-                router: self.router,
-                fin_acked_tx: self.fin_acked_tx,
-            };
-            state.into()
+            self.into()
         }
     }
 
