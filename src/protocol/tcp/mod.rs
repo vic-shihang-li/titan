@@ -7,6 +7,7 @@ mod transport;
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::time::Duration;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
@@ -17,7 +18,7 @@ use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use self::socket::{SynReceived, TcpState, TransportError};
 
@@ -79,7 +80,8 @@ pub struct TcpReadError {}
 
 #[derive(Debug)]
 pub enum TcpCloseError {
-    NoConnection(SocketDescriptor),
+    NoSocketOnDescriptor(SocketDescriptor),
+    NoSocketOnId(SocketId),
     AlreadyClosed,
 }
 
@@ -168,7 +170,7 @@ impl Tcp {
         let mut table = self.sockets.write().await;
         let sock = table
             .get_mut_socket_by_descriptor(socket_descriptor)
-            .ok_or(TcpCloseError::NoConnection(socket_descriptor))?;
+            .ok_or(TcpCloseError::NoSocketOnDescriptor(socket_descriptor))?;
 
         sock.close().await;
         Ok(())
@@ -240,22 +242,22 @@ pub enum BuildSocketIdError {
 }
 
 impl SocketIdBuilder {
-    fn with_remote_ip(&mut self, remote_ip: Ipv4Addr) -> &mut Self {
+    pub fn with_remote_ip(&mut self, remote_ip: Ipv4Addr) -> &mut Self {
         self.remote_ip = Some(remote_ip);
         self
     }
 
-    fn with_remote_port(&mut self, remote_port: Port) -> &mut Self {
+    pub fn with_remote_port(&mut self, remote_port: Port) -> &mut Self {
         self.remote_port = Some(remote_port);
         self
     }
 
-    fn with_local_port(&mut self, local_port: Port) -> &mut Self {
+    pub fn with_local_port(&mut self, local_port: Port) -> &mut Self {
         self.local_port = Some(local_port);
         self
     }
 
-    fn build(&self) -> Result<SocketId, BuildSocketIdError> {
+    pub fn build(&self) -> Result<SocketId, BuildSocketIdError> {
         Ok(SocketId {
             remote: (
                 self.remote_ip.ok_or(BuildSocketIdError::NoRemoteIp)?,
@@ -536,7 +538,7 @@ mod tests {
 
     use crate::{
         node::{Node, NodeBuilder},
-        protocol::{rip::RipHandler, Protocol},
+        protocol::{rip::RipHandler, tcp::socket::SocketStatus, Protocol},
         Args,
     };
 
@@ -601,6 +603,60 @@ mod tests {
             );
             test_timeout(Duration::from_secs(10), f).await;
         }
+    }
+
+    #[tokio::test]
+    async fn close_conn() {
+        let payload: Vec<_> = "hello world!".as_bytes().into();
+        let payload_clone = payload.clone();
+
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let send_cfg = abc_net.a.clone();
+        let recv_cfg = abc_net.b.clone();
+
+        let recv_listen_port = Port(5656);
+        let barr = Arc::new(Barrier::new(2));
+
+        let listen_barr = barr.clone();
+        let n1_cfg = send_cfg.clone();
+        let n2_cfg = recv_cfg.clone();
+
+        let n1 = tokio::spawn(async move {
+            let node = create_and_start_node(n1_cfg, 0).await;
+            listen_barr.wait().await;
+
+            let dest_ip = {
+                let recv_ips = n2_cfg.get_my_interface_ips();
+                recv_ips[0]
+            };
+
+            let conn = node.connect(dest_ip, recv_listen_port).await.unwrap();
+            conn.send_all(&payload).await.unwrap();
+
+            let socket_id = conn.socket_id();
+            node.close_socket(socket_id).await.unwrap();
+
+            // Give socket state some time to settle.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let socket = node.get_socket(socket_id).await.unwrap();
+            assert_eq!(socket.status(), SocketStatus::FinWait2);
+        });
+
+        let n2 = tokio::spawn(async move {
+            let node = create_and_start_node(recv_cfg, 0).await;
+
+            let mut listener = node.listen(recv_listen_port).await.unwrap();
+            barr.wait().await;
+
+            let conn = listener.accept().await.unwrap();
+
+            let mut buf = vec![0; payload_clone.len()];
+            conn.read_all(&mut buf).await.unwrap();
+            assert!(buf == payload_clone);
+        });
+
+        n1.await.unwrap();
+        n2.await.unwrap();
     }
 
     // General-purposed TCP test that sends two payloads to one another.

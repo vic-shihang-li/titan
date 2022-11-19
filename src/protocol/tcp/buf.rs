@@ -24,6 +24,7 @@ pub struct SendBuf<const N: usize> {
     window_size_tx: broadcast::Sender<u16>,
     window_size_rx: Arc<broadcast::Receiver<u16>>,
     not_full: Notifier,
+    empty: Notifier,
     written: Notifier,
     open: Arc<AtomicBool>,
     closing: Notifier,
@@ -40,6 +41,7 @@ impl<const N: usize> SendBuf<N> {
             window_size_tx,
             window_size_rx,
             not_full: Notifier::new(),
+            empty: Notifier::new(),
             written: Notifier::new(),
             open: Arc::new(AtomicBool::new(true)),
             closing: Notifier::new(),
@@ -84,6 +86,10 @@ impl<const N: usize> SendBuf<N> {
     /// Get notified when window size is updated.
     pub fn window_size_update(&self) -> broadcast::Receiver<u16> {
         self.window_size_tx.subscribe()
+    }
+
+    pub fn closed(&self) -> bool {
+        !self.open.load(Ordering::Acquire)
     }
 
     /// Try to write bytes into the buffer, returning the number of bytes written.
@@ -147,6 +153,9 @@ impl<const N: usize> SendBuf<N> {
         buf.set_tail(seq_no).map(|updated| {
             if updated {
                 self.not_full.notify_all();
+                if buf.size() == 0 {
+                    self.empty.notify_all();
+                }
             }
         })
     }
@@ -223,43 +232,37 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
-    pub async fn close(&self, fin_packet: &[u8]) -> Result<(), SendBufClosed> {
+    /// When a buffer is closed, wait for all of its content to be consumed.
+    ///
+    /// Returns the final sequence number of the buffer, which is both the head
+    /// and the tail of the buffer.
+    ///
+    /// Panics if called on an unclosed buffer.
+    pub async fn wait_for_empty(&self) -> usize {
+        assert!(
+            self.closed(),
+            "Should only be used to drain buffer content after it is closed"
+        );
+        loop {
+            let send_buf = self.inner.lock().await;
+            if send_buf.is_empty() {
+                return send_buf.head;
+            }
+            let notifier = self.empty.notified();
+            drop(send_buf);
+            notifier.wait().await;
+        }
+    }
+
+    pub async fn close(&self) -> Result<(), SendBufClosed> {
         if self
             .open
             .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
             .unwrap()
         {
-            let mut curr = 0;
-            // queue fin packet
-            loop {
-                let mut send_buf = self.inner.lock().await;
-                let written = send_buf.write(&fin_packet[curr..]);
-                curr += written;
-                if curr < fin_packet.len() {
-                    let not_full = self.not_full.notified();
-                    drop(send_buf);
-                    not_full.wait().await;
-                } else {
-                    break;
-                }
-            }
-
-            // notify all pending write waiters
-            self.written.notify_all();
-
             Ok(())
         } else {
             Err(SendBufClosed)
-        }
-    }
-
-    pub async fn wait_for_closing(&self) {
-        loop {
-            let notifier = self.closing.notified();
-            notifier.wait().await;
-            if self.open.load(Ordering::Relaxed) {
-                break;
-            }
         }
     }
 }

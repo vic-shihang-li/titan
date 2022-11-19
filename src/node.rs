@@ -5,8 +5,8 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
-    TcpListenError, TcpListener, TcpSendError,
+    Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError,
+    TcpHandler, TcpListenError, TcpListener, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -154,11 +154,15 @@ impl Node {
         self.net.iter_links().await
     }
 
-    pub async fn close_socket(
+    pub async fn close_socket(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
+        self.tcp.close(socket_id).await
+    }
+
+    pub async fn close_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
     ) -> Result<(), TcpCloseError> {
-        self.tcp.close(socket_descriptor).await
+        self.tcp.close_by_descriptor(socket_descriptor).await
     }
 
     /// Send bytes to a destination.

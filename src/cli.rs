@@ -337,7 +337,12 @@ impl Cli {
     }
 
     async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
-        if self.node.close_socket(socket_descriptor).await.is_err() {
+        if self
+            .node
+            .close_socket_by_descriptor(socket_descriptor)
+            .await
+            .is_err()
+        {
             eprintln!(
                 "Failed to close socket: socket {} does not exist",
                 socket_descriptor.0

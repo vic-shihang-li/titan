@@ -33,6 +33,11 @@ pub struct TcpTransport<const N: usize> {
     remaining_window_sz: usize,
 }
 
+enum NextSendDecision {
+    NextSegmentSize(usize),
+    SendBufClosed,
+}
+
 impl<const N: usize> TcpTransport<N> {
     pub async fn init(
         send_buf: SendBuf<N>,
@@ -78,7 +83,10 @@ impl<const N: usize> TcpTransport<N> {
                         segment_sz = min(self.remaining_window_sz, MAX_SEGMENT_SZ);
                     }
                     if segment_sz > 0 {
-                        segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                        match self.try_consume_and_send(&mut segment[..segment_sz]).await {
+                            NextSendDecision::NextSegmentSize(sz) => segment_sz = sz,
+                            NextSendDecision::SendBufClosed => break,
+                        }
                     }
                 }
                 Ok(window_sz) = window_sz_update.recv() => {
@@ -100,34 +108,38 @@ impl<const N: usize> TcpTransport<N> {
         }
     }
 
-    async fn try_consume_and_send(&mut self, buf: &mut [u8]) -> usize {
-        #[allow(unused_assignments)]
-        let mut next_segment_sz = MAX_SEGMENT_SZ;
-
+    async fn try_consume_and_send(&mut self, buf: &mut [u8]) -> NextSendDecision {
         match self.send_buf.try_slice(self.seq_no, buf).await {
             Ok(bytes_readable) => {
                 // TODO: handle send failure
                 if self.send(self.seq_no, buf).await.is_ok() {
                     self.seq_no += buf.len();
                     self.remaining_window_sz -= buf.len();
-                    next_segment_sz = min(
+
+                    let next_seg_sz = min(
                         MAX_SEGMENT_SZ,
                         min(self.remaining_window_sz, bytes_readable),
                     );
+                    NextSendDecision::NextSegmentSize(next_seg_sz)
+                } else {
+                    NextSendDecision::NextSegmentSize(buf.len())
                 }
             }
             Err(e) => match e {
                 SliceError::OutOfRange(unconsumed_sz) => {
-                    next_segment_sz = min(unconsumed_sz, self.remaining_window_sz);
+                    if unconsumed_sz == 0 && self.send_buf.closed() {
+                        return NextSendDecision::SendBufClosed;
+                    }
+                    NextSendDecision::NextSegmentSize(min(unconsumed_sz, self.remaining_window_sz))
                 }
                 SliceError::StartSeqTooLow(next_seq_no) => {
-                    // send buf's tail has been advanced due to zero probing.
+                    // SendBuf's tail has been advanced due to zero probing.
                     self.seq_no = next_seq_no;
+
+                    NextSendDecision::NextSegmentSize(min(self.remaining_window_sz, MAX_SEGMENT_SZ))
                 }
             },
         }
-
-        next_segment_sz
     }
 
     async fn check_and_zero_window_probe(&mut self) {
