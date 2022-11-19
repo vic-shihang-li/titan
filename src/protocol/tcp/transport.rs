@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     buf::{RecvBuf, SendBuf, SliceError},
-    Port, Remote, MAX_SEGMENT_SZ,
+    Port, Remote, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ,
 };
 
 pub struct TcpTransport<const N: usize> {
@@ -30,6 +30,7 @@ pub struct TcpTransport<const N: usize> {
     retrans_interval: Duration,
     send_ack_request: Arc<DedupedNotifier>,
     last_ack_transmitted: usize,
+    remaining_window_sz: usize,
 }
 
 impl<const N: usize> TcpTransport<N> {
@@ -54,6 +55,7 @@ impl<const N: usize> TcpTransport<N> {
             retrans_interval: Duration::from_millis(5),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
+            remaining_window_sz: TCP_DEFAULT_WINDOW_SZ,
         }
     }
 
@@ -65,14 +67,19 @@ impl<const N: usize> TcpTransport<N> {
         let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
 
         let mut retrans_interval = tokio::time::interval(self.retrans_interval);
+        let mut window_sz_update = self.send_buf.window_size_update();
 
         loop {
             tokio::select! {
                 _ = self.send_buf.wait_for_new_data(self.seq_no) => {
-                    if segment_sz == 0 {
-                        segment_sz = MAX_SEGMENT_SZ;
+                    segment_sz = min(segment_sz, self.remaining_window_sz);
+                    if segment_sz == 0  {
+                        segment_sz = min(self.remaining_window_sz, MAX_SEGMENT_SZ);
                     }
                     segment_sz = self.try_consume_and_send(&mut segment[..segment_sz]).await;
+                }
+                Ok(window_sz) = window_sz_update.recv() => {
+                    self.remaining_window_sz = window_sz.into();
                 }
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
@@ -91,18 +98,21 @@ impl<const N: usize> TcpTransport<N> {
         #[allow(unused_assignments)]
         let mut next_segment_sz = MAX_SEGMENT_SZ;
 
-        let window_sz = self.send_buf.window_size().into();
         match self.send_buf.try_slice(self.seq_no, buf).await {
             Ok(bytes_readable) => {
                 // TODO: handle send failure
                 if self.send(self.seq_no, buf).await.is_ok() {
                     self.seq_no += buf.len();
-                    next_segment_sz = min(MAX_SEGMENT_SZ, min(window_sz, bytes_readable));
+                    self.remaining_window_sz -= buf.len();
+                    next_segment_sz = min(
+                        MAX_SEGMENT_SZ,
+                        min(self.remaining_window_sz, bytes_readable),
+                    );
                 }
             }
             Err(e) => match e {
                 SliceError::OutOfRange(unconsumed_sz) => {
-                    next_segment_sz = min(unconsumed_sz, window_sz);
+                    next_segment_sz = min(unconsumed_sz, self.remaining_window_sz);
                 }
             },
         }

@@ -7,7 +7,7 @@ use std::{
     usize,
 };
 
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::utils::sync::Notifier;
 
@@ -21,6 +21,8 @@ pub struct SendBufClosed;
 pub struct SendBuf<const N: usize> {
     inner: Arc<Mutex<InnerSendBuf<N>>>,
     window_size: Arc<AtomicU16>,
+    window_size_tx: broadcast::Sender<u16>,
+    window_size_rx: Arc<broadcast::Receiver<u16>>,
     not_full: Notifier,
     written: Notifier,
     open: Arc<AtomicBool>,
@@ -30,9 +32,13 @@ pub struct SendBuf<const N: usize> {
 impl<const N: usize> SendBuf<N> {
     /// Constructs a new SendBuf.
     pub fn new(initial_seq_no: usize) -> Self {
+        let (window_size_tx, window_size_rx) = broadcast::channel(48);
+        let window_size_rx = Arc::new(window_size_rx);
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
             window_size: Arc::new(AtomicU16::new(N.try_into().unwrap())),
+            window_size_tx,
+            window_size_rx,
             not_full: Notifier::new(),
             written: Notifier::new(),
             open: Arc::new(AtomicBool::new(true)),
@@ -65,11 +71,19 @@ impl<const N: usize> SendBuf<N> {
     /// Set the window size that was sent to us by our remote.
     pub fn set_window_size(&self, window_size: u16) {
         self.window_size.store(window_size, SeqCst);
+        self.window_size_tx
+            .send(window_size)
+            .expect("SendBuffer should maintain one subscriber");
     }
 
     /// Get the window size that was sent to us by our remote.
     pub fn window_size(&self) -> u16 {
         self.window_size.load(SeqCst)
+    }
+
+    /// Get notified when window size is updated.
+    pub fn window_size_update(&self) -> broadcast::Receiver<u16> {
+        self.window_size_tx.subscribe()
     }
 
     /// Get the window size that we transmit to our remote counterpart.
