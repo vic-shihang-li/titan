@@ -513,7 +513,7 @@ impl SynSent {
             .await
             .map_err(|_| TransportError::DestUnreachable(self.dest_ip))?;
 
-        let send_buf_start = (self.seq_no + 1).try_into().unwrap();
+        let send_buf_start = self.seq_no.try_into().unwrap();
         let recv_buf_start = (syn_ack_packet.sequence_number() + 1).try_into().unwrap();
 
         let conn = TcpConn::new(
@@ -572,7 +572,7 @@ impl SynReceived {
         self.synack_ack_handle.acked();
 
         let send_buf_start = self.seq_no.try_into().unwrap();
-        let recv_buf_start = (ack_packet.sequence_number() + 1).try_into().unwrap();
+        let recv_buf_start = ack_packet.sequence_number().try_into().unwrap();
 
         let conn = TcpConn::new(
             Remote::new(self.remote_ip, self.remote_port),
