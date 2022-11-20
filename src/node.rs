@@ -228,18 +228,34 @@ impl Node {
     }
 
     pub async fn send_file(&self, cmd: SendFileCmd) -> Result<(), SendFileError> {
-        let file = fs::read_to_string(&cmd.path)
+        let input = fs::read_to_string(&cmd.path)
             .await
             .map_err(SendFileError::OpenFile)?;
 
+        self.connect_and_send_bytes(Remote::new(cmd.dest_ip, cmd.port), input.as_bytes())
+            .await
+    }
+
+    pub async fn recv_file(&self, cmd: RecvFileCmd) -> Result<(), RecvFileError> {
+        let received = self.listen_and_recv_bytes(cmd.port).await?;
+
+        let mut out_file = File::create(cmd.out_path).await?;
+        out_file.write_all(&received).await?;
+
+        Ok(())
+    }
+
+    pub async fn connect_and_send_bytes(
+        &self,
+        remote: Remote,
+        bytes: &[u8],
+    ) -> Result<(), SendFileError> {
         let conn = self
-            .connect(cmd.dest_ip, cmd.port)
+            .connect(remote.ip(), remote.port())
             .await
             .map_err(SendFileError::Connect)?;
 
-        conn.send_all(file.as_bytes())
-            .await
-            .map_err(SendFileError::Send)?;
+        conn.send_all(bytes).await.map_err(SendFileError::Send)?;
 
         // TODO: close connection
         // conn.close().await;
@@ -247,12 +263,8 @@ impl Node {
         Ok(())
     }
 
-    pub async fn recv_file(&self, cmd: RecvFileCmd) -> Result<(), RecvFileError> {
-        let mut listener = self
-            .tcp
-            .listen(cmd.port)
-            .await
-            .map_err(RecvFileError::Listen)?;
+    pub async fn listen_and_recv_bytes(&self, port: Port) -> Result<Vec<u8>, RecvFileError> {
+        let mut listener = self.tcp.listen(port).await.map_err(RecvFileError::Listen)?;
 
         let socket = listener.accept().await.map_err(RecvFileError::Accept)?;
 
@@ -273,10 +285,7 @@ impl Node {
             }
         }
 
-        let mut out_file = File::create(cmd.out_path).await?;
-        out_file.write_all(&out_buf).await?;
-
-        Ok(())
+        Ok(out_buf)
     }
 }
 
