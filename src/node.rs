@@ -257,8 +257,9 @@ impl Node {
 
         conn.send_all(bytes).await.map_err(SendFileError::Send)?;
 
-        // TODO: close connection
-        // conn.close().await;
+        self.close_socket(conn.socket_id())
+            .await
+            .expect("Socket should be open");
 
         Ok(())
     }
