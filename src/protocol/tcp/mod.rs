@@ -7,7 +7,7 @@ mod transport;
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
@@ -20,7 +20,7 @@ use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use self::socket::{SynReceived, TransportError};
 
@@ -177,6 +177,28 @@ impl Tcp {
         })
     }
 
+    pub async fn get_socket_mut(&self, socket_id: SocketId) -> Option<MutSocketRef<'_>> {
+        let mut table = self.sockets.write().await;
+        let socket: *mut Socket = table.socket_map.get_mut(&socket_id)?;
+        Some(MutSocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
+    pub async fn get_socket_mut_by_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Option<MutSocketRef<'_>> {
+        let mut table = self.sockets.write().await;
+        let id = *table.socket_id_map.get(&socket_descriptor)?;
+        let socket: *mut Socket = table.socket_map.get_mut(&id)?;
+        Some(MutSocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
     pub async fn close(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
         let mut table = self.sockets.write().await;
         let sock = table
@@ -235,6 +257,32 @@ impl<'a> Deref for SocketRef<'a> {
         // SAFETY: this socket pointer is valid because this struct holds a
         // read guard to the socket table, where this socket resides.
         unsafe { &*self.socket }
+    }
+}
+
+pub struct MutSocketRef<'a> {
+    _guard: RwLockWriteGuard<'a, SocketTable>,
+    socket: *mut Socket,
+}
+
+/// SAFETY: its write-guard member is Send
+unsafe impl<'a> Send for MutSocketRef<'a> {}
+
+impl<'a> Deref for MutSocketRef<'a> {
+    type Target = Socket;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // write guard to the socket table, where this socket resides.
+        unsafe { &*self.socket }
+    }
+}
+
+impl<'a> DerefMut for MutSocketRef<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // write guard to the socket table, where this socket resides.
+        unsafe { &mut *self.socket }
     }
 }
 

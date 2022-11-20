@@ -241,8 +241,8 @@ impl Cli {
             Command::ReadSocket(cmd) => {
                 self.tcp_read(cmd).await;
             }
-            Command::Shutdown(_socket, _option) => {
-                todo!() //TODO implement
+            Command::Shutdown(socket, opt) => {
+                self.shutdown(socket, opt).await;
             }
             Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
@@ -333,6 +333,19 @@ impl Cli {
                     }
                 }
             });
+        }
+    }
+
+    async fn shutdown(&self, descriptor: SocketDescriptor, option: TcpShutdownKind) {
+        match self.node.get_socket_mut_by_descriptor(descriptor).await {
+            Some(mut socket) => match option {
+                TcpShutdownKind::Read => socket.close_read().await,
+                TcpShutdownKind::Write => socket.close().await,
+                TcpShutdownKind::ReadWrite => socket.close_rw().await,
+            },
+            None => {
+                eprintln!("Socket {} not found", descriptor.0)
+            }
         }
     }
 

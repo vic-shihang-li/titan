@@ -89,17 +89,11 @@ impl TcpConn {
 
     /// Close the write-end of the socket.
     async fn close(&self) {
-        self.inner
-            .close()
-            .await
-            .expect("Socket sendbuf should only be closed once");
+        self.inner.close().await.ok();
     }
 
     async fn close_read(&self) {
-        self.inner
-            .close_read()
-            .await
-            .expect("Socket recvbuf should only be closed once");
+        self.inner.close_read().await.ok();
     }
 
     async fn handle_packet<'a>(
@@ -839,6 +833,10 @@ impl Established {
         }
     }
 
+    async fn close_read(&self) {
+        self.conn.close_read().await;
+    }
+
     fn make_shutdown_fin_packet(fin_seq_no: usize, local_port: Port, remote_port: Port) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -1245,6 +1243,35 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(s) => {
+                let state = s.active_close().await;
+                self.state = Some(state.into());
+            }
+            _ => {
+                self.state = Some(state);
+                eprintln!("Should not be able to close a connection that's not established");
+            }
+        }
+    }
+
+    pub async fn close_read(&mut self) {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Established(s) => {
+                s.close_read().await;
+                self.state = Some(s.into());
+            }
+            _ => {
+                self.state = Some(state);
+                eprintln!("Should not be able to close a connection that's not established");
+            }
+        }
+    }
+
+    pub async fn close_rw(&mut self) {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Established(s) => {
+                s.close_read().await;
                 let state = s.active_close().await;
                 self.state = Some(state.into());
             }
