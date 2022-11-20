@@ -153,7 +153,7 @@ impl<const N: usize> SendBuf<N> {
         buf.set_tail(seq_no).map(|updated| {
             if updated {
                 self.not_full.notify_all();
-                if buf.size() == 0 {
+                if buf.read_remaining_size() == 0 {
                     self.empty.notify_all();
                 }
             }
@@ -245,7 +245,7 @@ impl<const N: usize> SendBuf<N> {
         );
         loop {
             let send_buf = self.inner.lock().await;
-            if send_buf.is_empty() {
+            if send_buf.read_remaining_size() == 0 {
                 return send_buf.head;
             }
             let notifier = self.empty.notified();
@@ -562,6 +562,7 @@ impl Ord for SegmentMeta {
 #[derive(Debug)]
 pub struct RecvBufClosed;
 
+#[derive(Debug)]
 pub enum FillError {
     /// Failed to fill the entire provided buffer because the receive buffer
     /// has been closed (because the remote has closed).
@@ -614,7 +615,10 @@ impl<const N: usize> RecvBuf<N> {
     pub async fn close(&self) -> Result<(), RecvBufClosed> {
         self.open
             .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
-            .map(|_| ())
+            .map(|_| {
+                // notify pending readers, if any
+                self.written.notify_all();
+            })
             .map_err(|_| RecvBufClosed)
     }
 
@@ -1052,7 +1056,7 @@ mod tests {
             let consumer = tokio::spawn(async move {
                 let mut out_buf = vec![0; data2.len()];
                 for _ in 0..num_repeats {
-                    buf.fill(&mut out_buf).await;
+                    buf.fill(&mut out_buf).await.unwrap();
                     assert_eq!(out_buf, data2);
                 }
             });

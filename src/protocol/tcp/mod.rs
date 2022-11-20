@@ -564,7 +564,7 @@ mod tests {
         let test_file_size = 50_000_000;
 
         for _ in 0..NUM_REPEATS {
-            let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0);
+            let f = test_send_file(make_in_mem_test_file(test_file_size), 0);
             test_timeout(Duration::from_secs(8), f).await;
         }
     }
@@ -673,7 +673,49 @@ mod tests {
             assert!(buf == payload_clone);
 
             close_barr_clone.wait().await;
+            let socket_id = conn.socket_id();
+            // Remote should be in passvie close
+            {
+                let sock_ref = node.get_socket(socket_id).await.unwrap();
+                assert_eq!(sock_ref.status(), SocketStatus::CloseWait);
+            }
             conn.send_all(&payload_clone).await.unwrap();
+        });
+
+        n1.await.unwrap();
+        n2.await.unwrap();
+    }
+
+    async fn test_send_file(in_mem_file: Vec<u8>, drop_factor: usize) {
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let send_cfg = abc_net.a.clone();
+        let recv_cfg = abc_net.b.clone();
+
+        let n1_cfg = send_cfg.clone();
+        let n2_cfg = recv_cfg.clone();
+        let expected = in_mem_file.clone();
+        let listen_port = Port(8981);
+
+        let n1 = tokio::spawn(async move {
+            let node = create_and_start_node(n1_cfg, 0).await;
+
+            let dest_ip = {
+                let recv_ips = n2_cfg.get_my_interface_ips();
+                recv_ips[0]
+            };
+            let remote = Remote::new(dest_ip, listen_port);
+
+            // Give listener time to set up
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            node.connect_and_send_bytes(remote, &in_mem_file)
+                .await
+                .unwrap();
+        });
+
+        let n2 = tokio::spawn(async move {
+            let node = create_and_start_node(recv_cfg, drop_factor).await;
+            let got = node.listen_and_recv_bytes(listen_port).await.unwrap();
+            assert_eq!(got, expected);
         });
 
         n1.await.unwrap();

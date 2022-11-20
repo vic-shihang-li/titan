@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, channel};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
@@ -55,6 +55,28 @@ impl TcpConn {
     /// Reads N bytes from the connection, where N is `out_buffer`'s size.
     pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
         self.inner.read_all(out_buffer).await
+    }
+
+    /// Read all bytes from the connection until it is closed.
+    pub async fn read_till_closed(&self) -> Vec<u8> {
+        let mut read_buf = [0; 1024];
+        let mut out_buf = Vec::new();
+
+        loop {
+            match self.read_all(&mut read_buf).await {
+                Ok(_) => {
+                    out_buf.extend_from_slice(&read_buf);
+                }
+                Err(e) => match e {
+                    TcpReadError::Closed(read_bytes) => {
+                        out_buf.extend_from_slice(&read_buf[..read_bytes]);
+                        break;
+                    }
+                },
+            }
+        }
+
+        out_buf
     }
 
     pub fn socket_id(&self) -> SocketId {
@@ -173,7 +195,9 @@ impl<const N: usize> InnerTcpConn<N> {
         while curr < out_buffer.len() {
             let end = min(out_buffer.len(), curr + MAX_READ_SZ);
             match self.recv_buf.fill(&mut out_buffer[curr..end]).await {
-                Ok(_) => curr = end,
+                Ok(_) => {
+                    curr = end;
+                }
                 Err(e) => match e {
                     FillError::Closed(filled_bytes) => {
                         curr += filled_bytes;
@@ -743,17 +767,44 @@ impl Established {
 
     /// Perform transition from Established -> FinWait1 in a close() syscall.
     async fn active_close(self) -> FinWait1 {
+        // Below are the stages of transition from Established -> FinWait1 -> Finwait2.
+        //
+        // 1. Mark the write-side of TcpConn as closed. This stops new data from
+        // being written into SendBuf.
+        //
+        // 2. Established transitions to FinWait1 immediately, without blocking.
+        //
+        // 3. FIN packet is not sent until all data in SendBuf has been acked
+        // by the remote. Once SendBuf is empty, transmit the FIN packet. This
+        // is done in an asynchronous thread.
+        //
+        // 4. The FIN packet's sequence number is communicated to the socket,
+        // now in FinWait1, via a shared Mutex<Option<usize>>.
+        //
+        // 5. The FinWait1 socket checks this Mutex<Option<usize>> every time it
+        // processes an incoming packet. When the FIN's ACK arrives, FIN's
+        // sequence number would've been written already.
+        //
+        // 6. The socket transitions into FinWait2 until it receives a packet
+        // where ACK = FIN.seq_no + 1.
+        //
+        // 7. Upon transitioning into FinWait2, a oneshot message is sent to the
+        // FIN packet transporter. This stops the FIN packet's retransmissions.
+
         let conn = self.conn.clone();
         conn.close().await;
 
         let (fin_acked_tx, fin_acked_rx) = oneshot::channel();
+        let fin_seq_no: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
 
         let router_clone = self.router.clone();
         let local_port = self.local_port;
         let remote = Remote::new(self.remote_ip, self.remote_port);
+        let fin_seq_no_clone = fin_seq_no.clone();
         tokio::spawn(async move {
             let fin_seq_no = conn.drain_content_on_close().await;
             let fin_packet = Self::make_shutdown_fin_packet(fin_seq_no, local_port, remote.port());
+
             let mut ack_handle = transport_single_message(
                 fin_packet,
                 remote,
@@ -761,6 +812,12 @@ impl Established {
                 RetransmissionConfig::default(),
                 |_| {},
             );
+
+            {
+                let mut write_guard = fin_seq_no_clone.lock().await;
+                *write_guard = Some(fin_seq_no);
+            }
+
             // TODO: optimize
             fin_acked_rx.await.unwrap();
             ack_handle.acked();
@@ -772,6 +829,7 @@ impl Established {
             remote_port: self.remote_port,
             conn: self.conn,
             fin_acked_tx,
+            fin_seq_no,
             router: self.router,
         }
     }
@@ -813,6 +871,7 @@ pub struct FinWait1 {
     remote_port: Port,
     conn: TcpConn,
     router: Arc<Router>,
+    fin_seq_no: Arc<Mutex<Option<usize>>>,
     fin_acked_tx: oneshot::Sender<()>,
 }
 
@@ -825,34 +884,29 @@ impl FinWait1 {
     ) -> TcpState {
         let ack = tcp_header.ack();
         let fin = tcp_header.fin();
-        if ack {
-            // Got ACK from our FIN packet.
-            if fin {
-                // Remote closed too
-                let ack_packet = self.make_ack_packet(tcp_header);
-                self.router
-                    .send(&ack_packet, Protocol::Tcp, self.remote_ip)
-                    .await
-                    .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
-                    .unwrap();
 
-                self.fin_acked_tx.send(()).unwrap();
+        let fin_seq_no = *self.fin_seq_no.lock().await;
 
-                let state = TimeWait {};
-                state.into()
-            } else {
-                self.fin_acked_tx.send(()).unwrap();
+        if fin && ack {
+            // Remote closed too
+            let ack_packet = self.make_ack_packet(tcp_header);
+            self.router
+                .send(&ack_packet, Protocol::Tcp, self.remote_ip)
+                .await
+                .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
+                .unwrap();
 
-                let state = FinWait2 {
-                    conn: self.conn,
-                    local_port: self.local_port,
-                    remote_ip: self.remote_ip,
-                    remote_port: self.remote_port,
-                    router: self.router,
-                };
-                state.into()
+            if let Some(fin_seq_no) = fin_seq_no {
+                if tcp_header.acknowledgment_number() == fin_seq_no as u32 + 1 {
+                    self.fin_acked_tx.send(()).unwrap();
+                }
             }
-        } else if fin {
+
+            let state = TimeWait {};
+            return state.into();
+        }
+
+        if fin {
             // Simultaneous close
 
             let ack_packet: Vec<u8> = self.make_ack_packet(tcp_header);
@@ -865,14 +919,29 @@ impl FinWait1 {
             let state = Closing {
                 fin_acked_tx: self.fin_acked_tx,
             };
-            state.into()
-        } else {
-            // Handle normal traffic
-            self.conn
-                .handle_packet(ip_header, tcp_header, payload)
-                .await;
-            self.into()
+            return state.into();
         }
+
+        if ack {
+            if let Some(fin_seq_no) = fin_seq_no {
+                self.fin_acked_tx.send(()).unwrap();
+
+                let state = FinWait2 {
+                    conn: self.conn,
+                    local_port: self.local_port,
+                    remote_ip: self.remote_ip,
+                    remote_port: self.remote_port,
+                    router: self.router,
+                };
+                return state.into();
+            }
+        }
+
+        // Handle normal traffic
+        self.conn
+            .handle_packet(ip_header, tcp_header, payload)
+            .await;
+        self.into()
     }
 
     fn make_ack_packet<'a>(&self, tcp_header: &TcpHeaderSlice<'a>) -> Vec<u8> {

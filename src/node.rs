@@ -7,7 +7,7 @@ use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError,
-    TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
+    TcpHandler, TcpListenError, TcpListener, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -266,27 +266,8 @@ impl Node {
 
     pub async fn listen_and_recv_bytes(&self, port: Port) -> Result<Vec<u8>, RecvFileError> {
         let mut listener = self.tcp.listen(port).await.map_err(RecvFileError::Listen)?;
-
         let socket = listener.accept().await.map_err(RecvFileError::Accept)?;
-
-        let mut read_buf = [0; 1024];
-        let mut out_buf = Vec::new();
-
-        loop {
-            match socket.read_all(&mut read_buf).await {
-                Ok(_) => {
-                    out_buf.extend_from_slice(&read_buf);
-                }
-                Err(e) => match e {
-                    TcpReadError::Closed(read_bytes) => {
-                        out_buf.extend_from_slice(&read_buf[..read_bytes]);
-                        break;
-                    }
-                },
-            }
-        }
-
-        Ok(out_buf)
+        Ok(socket.read_till_closed().await)
     }
 }
 
