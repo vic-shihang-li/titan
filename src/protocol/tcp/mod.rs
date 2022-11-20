@@ -220,7 +220,9 @@ impl Tcp {
 
         if matches!(sock.status(), SocketStatus::Listen) {
             // For listen sockets, delete directly
-            table.remove_by_id(sock.id());
+            let sock_id = sock.id();
+            drop(sock);
+            table.remove_by_id(sock_id);
         } else {
             sock.close().await;
         }
