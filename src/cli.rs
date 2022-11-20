@@ -22,7 +22,7 @@ pub enum Command {
     SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenListenSocket(Port),
     ConnectSocket(Ipv4Addr, Port),
-    ReadSocket(TCPReadCmd),
+    ReadSocket(TcpReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
     SendFile(SendFileCmd),
@@ -98,13 +98,13 @@ impl From<RecvFileCmd> for Command {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct TCPReadCmd {
+pub struct TcpReadCmd {
     descriptor: SocketDescriptor,
     num_bytes: usize,
     would_block: bool,
 }
 
-impl TCPReadCmd {
+impl TcpReadCmd {
     fn new_blocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
         Self {
             descriptor,
@@ -122,8 +122,8 @@ impl TCPReadCmd {
     }
 }
 
-impl From<TCPReadCmd> for Command {
-    fn from(r: TCPReadCmd) -> Self {
+impl From<TcpReadCmd> for Command {
+    fn from(r: TcpReadCmd) -> Self {
         Command::ReadSocket(r)
     }
 }
@@ -238,8 +238,8 @@ impl Cli {
             Command::ConnectSocket(ip, port) => {
                 self.connect(ip, port).await;
             }
-            Command::ReadSocket(_cmd) => {
-                todo!() //TODO implement
+            Command::ReadSocket(cmd) => {
+                self.tcp_read(cmd).await;
             }
             Command::Shutdown(_socket, _option) => {
                 todo!() //TODO implement
@@ -308,6 +308,31 @@ impl Cli {
                 "Failed to send on socket {}. Error: {:?}",
                 socket_descriptor.0, e
             )
+        }
+    }
+
+    async fn tcp_read(&self, cmd: TcpReadCmd) {
+        if cmd.would_block {
+            match self.node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
+                Ok(bytes) => {
+                    println!("{}", String::from_utf8_lossy(&bytes))
+                }
+                Err(e) => {
+                    eprintln!("Failed to read: {:?}", e);
+                }
+            }
+        } else {
+            let node = self.node.clone();
+            tokio::spawn(async move {
+                match node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
+                    Ok(bytes) => {
+                        println!("{}", String::from_utf8_lossy(&bytes))
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read: {:?}", e);
+                    }
+                }
+            });
         }
     }
 
@@ -493,8 +518,8 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             };
 
             match blocking {
-                true => Ok(TCPReadCmd::new_blocking(sid, num_bytes).into()),
-                false => Ok(TCPReadCmd::new_nonblocking(sid, num_bytes).into()),
+                true => Ok(TcpReadCmd::new_blocking(sid, num_bytes).into()),
+                false => Ok(TcpReadCmd::new_nonblocking(sid, num_bytes).into()),
             }
         }
         "sd" => {
@@ -886,17 +911,17 @@ mod tests {
         let c = Cli::parse_command("r 33 100 y".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_blocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_blocking(SocketDescriptor(33), 100).into()
         );
         let c = Cli::parse_command("r 33 100 N".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
         );
         let c = Cli::parse_command("r 33 100".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
         );
     }
 

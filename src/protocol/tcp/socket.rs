@@ -75,6 +75,7 @@ impl TcpConn {
                         out_buf.extend_from_slice(&read_buf[..read_bytes]);
                         break;
                     }
+                    _ => unreachable!(),
                 },
             }
         }
@@ -1151,6 +1152,17 @@ impl Socket {
                 Err(TcpSendError::ConnNotEstablished)
             }
             _ => Err(TcpSendError::ConnClosed),
+        }
+    }
+
+    /// Reads N bytes from the connection, where N is `out_buffer`'s size.
+    pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
+        match self.state.as_ref().unwrap() {
+            TcpState::Established(s) => s.conn.read_all(out_buffer).await,
+            TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
+                Err(TcpReadError::ConnNotEstablished)
+            }
+            _ => Err(TcpReadError::Closed(0)),
         }
     }
 

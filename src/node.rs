@@ -7,7 +7,7 @@ use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError,
-    TcpHandler, TcpListenError, TcpListener, TcpSendError,
+    TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -186,6 +186,17 @@ impl Node {
     ) -> Result<(), TcpSendError> {
         self.tcp
             .send_on_socket_descriptor(socket_descriptor, payload)
+            .await
+    }
+
+    /// Read some bytes over a TCP connection.
+    pub async fn tcp_read(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        n_bytes: usize,
+    ) -> Result<Vec<u8>, TcpReadError> {
+        self.tcp
+            .read_on_socket_descriptor(socket_descriptor, n_bytes)
             .await
     }
 

@@ -79,9 +79,11 @@ pub enum TcpSendError {
 
 #[derive(Debug)]
 pub enum TcpReadError {
+    NoSocket(SocketDescriptor),
     /// Failed to fill the provided buffer because the remote has closed.
     /// Returns the number of bytes written into the buffer.
     Closed(usize),
+    ConnNotEstablished,
 }
 
 #[derive(Debug)]
@@ -148,6 +150,22 @@ impl Tcp {
             .ok_or(TcpSendError::NoSocket(socket_descriptor))?;
 
         socket.send_all(payload).await
+    }
+
+    pub async fn read_on_socket_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        n_bytes: usize,
+    ) -> Result<Vec<u8>, TcpReadError> {
+        let mut sockets = self.sockets.write().await;
+        let socket = sockets
+            .get_mut_socket_by_descriptor(socket_descriptor)
+            .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
+
+        let mut out_buf = vec![0; n_bytes];
+        socket.read_all(&mut out_buf).await?;
+
+        Ok(out_buf)
     }
 
     pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
