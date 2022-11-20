@@ -22,7 +22,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use self::socket::{SynReceived, TransportError};
+use self::socket::{SocketStatus, SynReceived, TransportError};
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
@@ -218,7 +218,13 @@ impl Tcp {
             .get_mut_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpCloseError::NoSocketOnDescriptor(socket_descriptor))?;
 
-        sock.close().await;
+        if matches!(sock.status(), SocketStatus::Listen) {
+            // For listen sockets, delete directly
+            table.remove_by_id(sock.id());
+        } else {
+            sock.close().await;
+        }
+
         Ok(())
     }
 
