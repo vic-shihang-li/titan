@@ -365,8 +365,8 @@ impl SocketTable {
             .build()
             .unwrap();
 
-        let s = syn_recvd_state.into_socket(sock_id);
         let descriptor = self.socket_builder.allocate_socket_descriptor();
+        let s = syn_recvd_state.into_socket(sock_id, descriptor);
 
         self.insert(descriptor, s)
     }

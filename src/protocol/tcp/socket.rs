@@ -702,10 +702,7 @@ impl SynReceived {
             self.router.clone(),
         );
 
-        self.new_conn_tx
-            .send(conn.clone())
-            .await
-            .expect("TcpListener not notified");
+        self.new_conn_tx.send(conn.clone()).await.ok();
 
         Established {
             local_port: self.local_port,
@@ -718,8 +715,8 @@ impl SynReceived {
         }
     }
 
-    pub fn into_socket(self, socket_id: SocketId) -> Socket {
-        Socket::with_state(socket_id, self.into())
+    pub fn into_socket(self, socket_id: SocketId, descriptor: SocketDescriptor) -> Socket {
+        Socket::with_state(socket_id, descriptor, self.into())
     }
 }
 

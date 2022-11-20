@@ -179,9 +179,9 @@ impl Cli {
                     eprintln!("CTRL-D");
                     break;
                 }
-                Err(err) => {
-                    eprintln!("Error: {:?}", err);
-                    break;
+                Err(_) => {
+                    // eprintln!("Error: {:?}", err);
+                    // break;
                 }
             }
         }
@@ -190,7 +190,6 @@ impl Cli {
     fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
-        eprintln!("cmd: {}", cmd);
         cmd_arg_handler(cmd, tokens)
     }
 
@@ -236,8 +235,8 @@ impl Cli {
             Command::OpenListenSocket(port) => {
                 self.open_listen_socket_on(port).await;
             }
-            Command::ConnectSocket(_ip, _port) => {
-                todo!() //TODO implement
+            Command::ConnectSocket(ip, port) => {
+                self.connect(ip, port).await;
             }
             Command::ReadSocket(_cmd) => {
                 todo!() //TODO implement
@@ -249,11 +248,9 @@ impl Cli {
                 self.close_socket(socket_descriptor).await;
             }
             Command::SendFile(cmd) => {
-                self.send_file(cmd).await;
+                self.send_file(cmd);
             }
-            Command::RecvFile(_cmd) => {
-                todo!()
-            }
+            Command::RecvFile(cmd) => self.recv_file(cmd),
             Command::Quit => {
                 eprintln!("Quitting");
             }
@@ -320,11 +317,36 @@ impl Cli {
         }
     }
 
-    async fn send_file(&self, cmd: SendFileCmd) {
+    async fn connect(&self, ip: Ipv4Addr, port: Port) {
+        if let Err(e) = self.node.connect(ip, port).await {
+            eprintln!("Failed to connect to {}:{}. Error: {:?}", ip, port.0, e)
+        }
+    }
+
+    fn send_file(&self, cmd: SendFileCmd) {
         let node = self.node.clone();
         tokio::spawn(async move {
-            if let Err(e) = node.send_file(cmd).await {
-                eprintln!("Failed to send file. Error: {:?}", e)
+            match node.send_file(cmd).await {
+                Ok(_) => {
+                    eprintln!("Send file complete.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to send file. Error: {:?}", e)
+                }
+            }
+        });
+    }
+
+    fn recv_file(&self, cmd: RecvFileCmd) {
+        let node = self.node.clone();
+        tokio::spawn(async move {
+            match node.recv_file(cmd).await {
+                Ok(_) => {
+                    eprintln!("Receive file complete");
+                }
+                Err(e) => {
+                    eprintln!("Failed to receive file. Error: {:?}", e)
+                }
             }
         });
     }
