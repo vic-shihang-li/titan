@@ -444,7 +444,7 @@ impl From<LastAck> for TcpState {
     }
 }
 
-pub struct Closed {
+struct Closed {
     seq_no: u32,
     router: Arc<Router>,
 }
@@ -521,7 +521,7 @@ impl Closed {
     }
 }
 
-pub struct Listen {
+struct Listen {
     port: Port,
     seq_no: u32,
     router: Arc<Router>,
@@ -585,7 +585,7 @@ impl Listen {
     }
 }
 
-pub struct SynSent {
+struct SynSent {
     seq_no: u32,
     src_port: Port,
     dest_ip: Ipv4Addr,
@@ -676,7 +676,7 @@ pub struct SynReceived {
 }
 
 impl SynReceived {
-    pub async fn establish<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
+    async fn establish<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
         assert!(ack_packet.ack());
         self.synack_ack_handle.acked();
 
@@ -720,7 +720,7 @@ impl SynReceived {
     }
 }
 
-pub struct Established {
+struct Established {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -869,7 +869,7 @@ impl Established {
     }
 }
 
-pub struct FinWait1 {
+struct FinWait1 {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -964,7 +964,7 @@ impl FinWait1 {
     }
 }
 
-pub struct FinWait2 {
+struct FinWait2 {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -1013,7 +1013,7 @@ impl FinWait2 {
     }
 }
 
-pub struct Closing {
+struct Closing {
     fin_acked_tx: oneshot::Sender<()>,
 }
 
@@ -1024,9 +1024,9 @@ impl Closing {
     }
 }
 
-pub struct TimeWait {}
+struct TimeWait {}
 
-pub struct CloseWait {
+struct CloseWait {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -1060,7 +1060,7 @@ impl CloseWait {
     }
 }
 
-pub struct LastAck {
+struct LastAck {
     router: Arc<Router>,
 }
 
