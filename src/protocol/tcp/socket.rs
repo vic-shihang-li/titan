@@ -688,31 +688,37 @@ impl Established {
         payload: &[u8],
     ) -> TcpState {
         if tcp_header.fin() {
-            let ack_packet = self.make_handshake_ack_packet(tcp_header);
-            self.router
-                .send(&ack_packet, Protocol::Tcp, self.remote_ip)
-                .await
-                .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
-                .unwrap();
-            let state = CloseWait {
-                conn: self.conn,
-                last_seq: self.last_seq,
-                last_ack: self.last_ack,
-                local_port: self.local_port,
-                remote_ip: self.remote_ip,
-                remote_port: self.remote_port,
-                router: self.router,
-            };
-            state.into()
-        } else {
-            self.conn
-                .handle_packet(ip_header, tcp_header, payload)
-                .await;
-            self.into()
+            return self.passive_close(tcp_header).await.into();
+        }
+        self.conn
+            .handle_packet(ip_header, tcp_header, payload)
+            .await;
+        self.into()
+    }
+
+    /// Perform transition from Established to CloseWait upon receiving a FIN
+    /// packet.
+    async fn passive_close<'a>(self, tcp_header: &TcpHeaderSlice<'a>) -> CloseWait {
+        let ack_packet = self.make_handshake_ack_packet(tcp_header);
+        self.router
+            .send(&ack_packet, Protocol::Tcp, self.remote_ip)
+            .await
+            .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
+            .unwrap();
+
+        CloseWait {
+            conn: self.conn,
+            last_seq: self.last_seq,
+            last_ack: self.last_ack,
+            local_port: self.local_port,
+            remote_ip: self.remote_ip,
+            remote_port: self.remote_port,
+            router: self.router,
         }
     }
 
-    async fn close(self) -> FinWait1 {
+    /// Perform transition from Established -> FinWait1 in a close() syscall.
+    async fn active_close(self) -> FinWait1 {
         let conn = self.conn.clone();
         conn.close().await;
 
@@ -1127,7 +1133,7 @@ impl Socket {
         let state = self.state.take().unwrap();
         match state {
             TcpState::Established(s) => {
-                let state = s.close().await;
+                let state = s.active_close().await;
                 self.state = Some(state.into());
             }
             _ => {
