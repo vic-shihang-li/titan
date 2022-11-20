@@ -1,12 +1,13 @@
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
-use tokio::fs;
+use tokio::fs::{self, File};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
     Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError,
-    TcpHandler, TcpListenError, TcpListener, TcpSendError,
+    TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -263,14 +264,17 @@ impl Node {
                 Ok(_) => {
                     out_buf.extend_from_slice(&read_buf);
                 }
-                Err(_e) => {
-                    // TODOs:
-                    // Check if error is indeed conn closed.
-                    // Extend final, remaining bytes.
-                    break;
-                }
+                Err(e) => match e {
+                    TcpReadError::Closed(read_bytes) => {
+                        out_buf.extend_from_slice(&read_buf[..read_bytes]);
+                        break;
+                    }
+                },
             }
         }
+
+        let mut out_file = File::create(cmd.out_path).await?;
+        out_file.write_all(&out_buf).await?;
 
         Ok(())
     }

@@ -76,7 +76,11 @@ pub enum TcpSendError {
 }
 
 #[derive(Debug)]
-pub struct TcpReadError {}
+pub enum TcpReadError {
+    /// Failed to fill the provided buffer because the remote has closed.
+    /// Returns the number of bytes written into the buffer.
+    Closed(usize),
+}
 
 #[derive(Debug)]
 pub enum TcpCloseError {

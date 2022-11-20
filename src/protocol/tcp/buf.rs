@@ -559,6 +559,16 @@ impl Ord for SegmentMeta {
     }
 }
 
+#[derive(Debug)]
+pub struct RecvBufClosed;
+
+pub enum FillError {
+    /// Failed to fill the entire provided buffer because the receive buffer
+    /// has been closed (because the remote has closed).
+    /// Returns the number of bytes written into the buffer.
+    Closed(usize),
+}
+
 /// The receiving-side of TCP transmission buffer.
 #[derive(Debug, Clone)]
 pub struct RecvBuf<const N: usize> {
@@ -601,6 +611,17 @@ impl<const N: usize> RecvBuf<N> {
         self.inner.lock().await.write_remaining_size()
     }
 
+    pub async fn close(&self) -> Result<(), RecvBufClosed> {
+        self.open
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .map(|_| ())
+            .map_err(|_| RecvBufClosed)
+    }
+
+    pub fn closed(&self) -> bool {
+        !self.open.load(Ordering::Acquire)
+    }
+
     /// Try to fill the provided buffer.
     ///
     /// The method returns a slice of the written bytes, which will be a subslice
@@ -640,9 +661,9 @@ impl<const N: usize> RecvBuf<N> {
     ///
     /// Filling the buffer simultaneously advances the buffer tail: bytes, once
     /// consumed, are discarded from RecvBuf.
-    pub async fn fill<'a>(&self, dest: &'a mut [u8]) {
+    pub async fn fill<'a>(&self, dest: &'a mut [u8]) -> Result<(), FillError> {
         if dest.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mut curr = 0;
@@ -654,6 +675,10 @@ impl<const N: usize> RecvBuf<N> {
                 self.read.notify_all();
             }
             if curr < dest.len() {
+                if self.closed() {
+                    // will not receive any more bytes from the remote
+                    return Err(FillError::Closed(curr));
+                }
                 let written = self.written.notified();
                 drop(recv_buf);
                 written.wait().await;
@@ -661,6 +686,8 @@ impl<const N: usize> RecvBuf<N> {
                 break;
             }
         }
+
+        Ok(())
     }
 
     /// Try to write the provided bytes into RecvBuf, starting at the provided

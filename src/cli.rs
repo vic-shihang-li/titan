@@ -68,9 +68,15 @@ impl From<SendFileCmd> for Command {
 
 #[derive(Debug)]
 pub enum RecvFileError {
-    OpenFile(std::io::Error),
+    FileIo(std::io::Error),
     Listen(TcpListenError),
     Accept(TcpAcceptError),
+}
+
+impl From<std::io::Error> for RecvFileError {
+    fn from(e: std::io::Error) -> Self {
+        RecvFileError::FileIo(e)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

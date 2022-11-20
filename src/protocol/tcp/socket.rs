@@ -1,4 +1,4 @@
-use crate::protocol::tcp::buf::{SetTailError, WriteRangeError};
+use crate::protocol::tcp::buf::{FillError, SetTailError, WriteRangeError};
 use crate::protocol::tcp::transport::RetransmissionConfig;
 use crate::protocol::tcp::{SocketIdBuilder, TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
@@ -61,11 +61,19 @@ impl TcpConn {
         self.socket_id
     }
 
+    /// Close the write-end of the socket.
     async fn close(&self) {
         self.inner
             .close()
             .await
-            .expect("Socket should only be closed once");
+            .expect("Socket sendbuf should only be closed once");
+    }
+
+    async fn close_read(&self) {
+        self.inner
+            .close_read()
+            .await
+            .expect("Socket recvbuf should only be closed once");
     }
 
     async fn handle_packet<'a>(
@@ -144,6 +152,13 @@ impl<const N: usize> InnerTcpConn<N> {
             .map_err(|_| TcpCloseError::AlreadyClosed)
     }
 
+    async fn close_read(&self) -> Result<(), TcpCloseError> {
+        self.recv_buf
+            .close()
+            .await
+            .map_err(|_| TcpCloseError::AlreadyClosed)
+    }
+
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
         self.send_buf
             .write_all(bytes)
@@ -157,8 +172,15 @@ impl<const N: usize> InnerTcpConn<N> {
         let mut curr = 0;
         while curr < out_buffer.len() {
             let end = min(out_buffer.len(), curr + MAX_READ_SZ);
-            self.recv_buf.fill(&mut out_buffer[curr..end]).await;
-            curr = end;
+            match self.recv_buf.fill(&mut out_buffer[curr..end]).await {
+                Ok(_) => curr = end,
+                Err(e) => match e {
+                    FillError::Closed(filled_bytes) => {
+                        curr += filled_bytes;
+                        return Err(TcpReadError::Closed(curr));
+                    }
+                },
+            }
         }
 
         Ok(())
@@ -705,6 +727,8 @@ impl Established {
             .await
             .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
             .unwrap();
+
+        self.conn.close_read().await;
 
         CloseWait {
             conn: self.conn,
