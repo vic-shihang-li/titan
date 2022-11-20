@@ -358,7 +358,7 @@ impl From<&TcpState> for SocketStatus {
     }
 }
 
-pub enum TcpState {
+enum TcpState {
     Closed(Closed),
     SynSent(SynSent),
     SynReceived(SynReceived),
@@ -713,6 +713,10 @@ impl SynReceived {
             last_ack: ack_packet.acknowledgment_number(),
             last_seq: self.seq_no,
         }
+    }
+
+    pub fn into_socket(self, socket_id: SocketId) -> Socket {
+        Socket::with_state(socket_id, self.into())
     }
 }
 
@@ -1090,7 +1094,7 @@ impl Socket {
         }
     }
 
-    pub fn with_state(id: SocketId, state: TcpState) -> Self {
+    fn with_state(id: SocketId, state: TcpState) -> Self {
         Self {
             id,
             state: Some(state),

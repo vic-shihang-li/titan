@@ -20,7 +20,7 @@ use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
 use tokio::sync::{RwLock, RwLockReadGuard};
 
-use self::socket::{SynReceived, TcpState, TransportError};
+use self::socket::{SynReceived, TransportError};
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
@@ -341,11 +341,10 @@ impl SocketTable {
             .build()
             .unwrap();
 
-        let (descriptor, socket) = self
-            .socket_builder
-            .build_with_id_state(sock_id, syn_recvd_state.into());
+        let s = syn_recvd_state.into_socket(sock_id);
+        let descriptor = self.socket_builder.allocate_socket_descriptor();
 
-        self.insert(descriptor, socket)
+        self.insert(descriptor, s)
     }
 
     pub fn remove_by_id(&mut self, id: SocketId) {
@@ -417,18 +416,8 @@ impl SocketBuilder {
     }
 
     fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
-        let descriptor = self.make_socket_descriptor();
+        let descriptor = self.allocate_socket_descriptor();
         let sock = Socket::new(socket_id, self.router.clone());
-        (descriptor, sock)
-    }
-
-    fn build_with_id_state(
-        &mut self,
-        socket_id: SocketId,
-        state: TcpState,
-    ) -> (SocketDescriptor, Socket) {
-        let descriptor = self.make_socket_descriptor();
-        let sock = Socket::with_state(socket_id, state);
         (descriptor, sock)
     }
 
@@ -443,7 +432,7 @@ impl SocketBuilder {
             .unwrap()
     }
 
-    fn make_socket_descriptor(&mut self) -> SocketDescriptor {
+    fn allocate_socket_descriptor(&mut self) -> SocketDescriptor {
         let descriptor = SocketDescriptor(
             self.next_socket_descriptor
                 .try_into()
