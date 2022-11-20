@@ -18,6 +18,8 @@ use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 use self::socket::{SynReceived, TransportError};
@@ -178,6 +180,28 @@ impl Tcp {
 
         sock.close().await;
         Ok(())
+    }
+
+    pub async fn print_sockets(&self, file: Option<String>) {
+        match file {
+            Some(file) => {
+                let mut f = File::create(file).await.unwrap();
+                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
+                    .await
+                    .unwrap();
+                let table = self.sockets.read().await;
+                for (_, socket) in table.socket_map.iter() {
+                    f.write_all(format!("{}", socket).as_bytes()).await.unwrap();
+                }
+            }
+            None => {
+                println!("id\t\tstate\t\tlocal window size\t\tremote window size");
+                let table = self.sockets.read().await;
+                for (_, socket) in table.socket_map.iter() {
+                    println!("{}", socket);
+                }
+            }
+        }
     }
 }
 
@@ -417,7 +441,7 @@ impl SocketBuilder {
 
     fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
         let descriptor = self.allocate_socket_descriptor();
-        let sock = Socket::new(socket_id, self.router.clone());
+        let sock = Socket::new(socket_id, descriptor, self.router.clone());
         (descriptor, sock)
     }
 
@@ -500,7 +524,8 @@ impl ProtocolHandler for TcpHandler {
                         .await
                 }
                 None => {
-                    panic!("Received TCP packet that doesn't match with any connection")
+                    log::info!("Received TCP packet that doesn't match with any connection");
+                    return;
                 }
             },
         };

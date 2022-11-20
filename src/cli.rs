@@ -302,20 +302,7 @@ impl Cli {
     }
 
     async fn print_sockets(&self, file: Option<String>) {
-        // TODO fetch socket table from TCP API
-        let sockets = "test";
-        match file {
-            Some(file) => {
-                let mut f = File::create(file).unwrap();
-                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
-                    .unwrap();
-                f.write_all(format!("{}\n", sockets).as_bytes()).unwrap();
-            }
-            None => {
-                println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
-                println!("{}", sockets)
-            }
-        }
+        self.node.print_sockets(file).await;
     }
 
     async fn tcp_send(&self, socket_descriptor: SocketDescriptor, payload: Vec<u8>) {

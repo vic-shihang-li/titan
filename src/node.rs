@@ -269,6 +269,10 @@ impl Node {
         let socket = listener.accept().await.map_err(RecvFileError::Accept)?;
         Ok(socket.read_till_closed().await)
     }
+
+    pub async fn print_sockets(&self, file: Option<String>) {
+        self.tcp.print_sockets(file).await
+    }
 }
 
 impl Node {

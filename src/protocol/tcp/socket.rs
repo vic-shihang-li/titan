@@ -7,6 +7,7 @@ use crate::utils::sync::RaceOneShotSender;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
+use std::fmt::Display;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -16,7 +17,9 @@ use tokio::task::JoinHandle;
 
 use super::buf::{RecvBuf, SendBuf};
 use super::transport::{transport_single_message, AckHandle, TcpTransport};
-use super::{Port, Remote, SocketId, TcpCloseError, TcpConnError, TCP_DEFAULT_WINDOW_SZ};
+use super::{
+    Port, Remote, SocketDescriptor, SocketId, TcpCloseError, TcpConnError, TCP_DEFAULT_WINDOW_SZ,
+};
 
 #[derive(Clone, Debug)]
 pub struct TcpConn {
@@ -1083,20 +1086,23 @@ pub enum UpdateAction {
 
 pub struct Socket {
     id: SocketId,
+    descriptor: SocketDescriptor,
     state: Option<TcpState>,
 }
 
 impl Socket {
-    pub fn new(id: SocketId, router: Arc<Router>) -> Self {
+    pub fn new(id: SocketId, descriptor: SocketDescriptor, router: Arc<Router>) -> Self {
         Self {
             id,
+            descriptor,
             state: Some(TcpState::new(router)),
         }
     }
 
-    fn with_state(id: SocketId, state: TcpState) -> Self {
+    fn with_state(id: SocketId, descriptor: SocketDescriptor, state: TcpState) -> Self {
         Self {
             id,
+            descriptor,
             state: Some(state),
         }
     }
@@ -1238,5 +1244,22 @@ impl Socket {
                 eprintln!("Should not be able to close a connection that's not established");
             }
         }
+    }
+}
+
+impl Display for Socket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id = self.descriptor.0;
+        let state = SocketStatus::from(self.state.as_ref().unwrap());
+
+        // TODO: print actual window sizes
+        let local_window_sz = 0;
+        let remote_window_sz = 0;
+
+        write!(
+            f,
+            "{}\t{:?}\t{}\t{}",
+            id, state, local_window_sz, remote_window_sz
+        )
     }
 }
