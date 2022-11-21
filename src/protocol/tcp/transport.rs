@@ -206,7 +206,10 @@ impl<const N: usize> TcpTransport<N> {
 
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
         let mut bytes = Vec::new();
-        let tcp_header = self.prepare_tcp_packet(seq_no, self.remote.ip()).await;
+        let mut tcp_header = self.prepare_tcp_packet(seq_no).await;
+        let src_ip = self.router.find_src_vip_with_dest(self.remote.ip()).await.unwrap();
+        let checksum = tcp_header.calc_checksum_ipv4_raw(src_ip, self.remote.ip().octets(), payload).unwrap();
+        tcp_header.checksum = checksum;
         let ack = tcp_header.acknowledgment_number;
         tcp_header.write(&mut bytes).unwrap();
         bytes.extend_from_slice(payload);
@@ -220,7 +223,7 @@ impl<const N: usize> TcpTransport<N> {
             })
     }
 
-    async fn prepare_tcp_packet(&self, seq_no: usize, dst_ip: Ipv4Addr) -> TcpHeader {
+    async fn prepare_tcp_packet(&self, seq_no: usize) -> TcpHeader {
         let src_port = self.local_port.0;
         let dst_port = self.remote.port().0;
         let seq_no = seq_no.try_into().expect("seq no overflow");
@@ -230,10 +233,6 @@ impl<const N: usize> TcpTransport<N> {
         header.syn = true;
         header.ack = true;
         header.acknowledgment_number = self.recv_buf.head().await.try_into().unwrap();
-        let payload: &[u8]  = &[];
-        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
-        let checksum = header.calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload).unwrap();
-        header.checksum = checksum;
         header
     }
 }

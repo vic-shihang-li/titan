@@ -756,7 +756,7 @@ impl Established {
     /// Perform transition from Established to CloseWait upon receiving a FIN
     /// packet.
     async fn passive_close<'a>(self, tcp_header: &TcpHeaderSlice<'a>) -> CloseWait {
-        let ack_packet = self.make_handshake_ack_packet(tcp_header);
+        let ack_packet = self.make_handshake_ack_packet(tcp_header, self.remote_ip).await;
         self.router
             .send(&ack_packet, Protocol::Tcp, self.remote_ip)
             .await
@@ -809,12 +809,13 @@ impl Established {
         let fin_seq_no: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
 
         let router_clone = self.router.clone();
+        let src_ip = self.router.find_src_vip_with_dest(self.remote_ip).await.unwrap();
         let local_port = self.local_port;
         let remote = Remote::new(self.remote_ip, self.remote_port);
         let fin_seq_no_clone = fin_seq_no.clone();
         tokio::spawn(async move {
             let fin_seq_no = conn.drain_content_on_close().await;
-            let fin_packet = Self::make_shutdown_fin_packet(fin_seq_no, local_port, remote.port());
+            let fin_packet = Self::make_shutdown_fin_packet(fin_seq_no, local_port, remote.port(), src_ip, remote.ip().octets());
 
             let mut ack_handle = transport_single_message(
                 fin_packet,
@@ -849,7 +850,7 @@ impl Established {
         self.conn.close_read().await;
     }
 
-    fn make_shutdown_fin_packet(fin_seq_no: usize, local_port: Port, remote_port: Port) -> Vec<u8> {
+    fn make_shutdown_fin_packet(fin_seq_no: usize, local_port: Port, remote_port: Port, src_ip: [u8;4] , dst_ip: [u8;4]) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let mut header = TcpHeader::new(
@@ -859,12 +860,15 @@ impl Established {
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.fin = true;
+        let payload: &[u8] = &[];
+        let checksum = header.calc_checksum_ipv4_raw(src_ip, dst_ip, payload).unwrap();
+        header.checksum = checksum;
         header.write(&mut bytes).unwrap();
 
         bytes
     }
 
-    fn make_handshake_ack_packet<'a>(&self, fin_ack_header: &TcpHeaderSlice<'a>) -> Vec<u8> {
+    async fn make_handshake_ack_packet<'a>(&self, fin_ack_header: &TcpHeaderSlice<'a>, dst_ip: Ipv4Addr) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let mut header = TcpHeader::new(
@@ -875,6 +879,10 @@ impl Established {
         );
         header.ack = true;
         header.acknowledgment_number = fin_ack_header.sequence_number() + 1;
+        let payload:&[u8] = &[];
+        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        let checksum = header.calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload).unwrap();
+        header.checksum = checksum;
         header.write(&mut bytes).unwrap();
         bytes
     }

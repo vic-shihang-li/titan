@@ -584,9 +584,10 @@ impl ProtocolHandler for TcpHandler {
         let tcp_payload = &payload[tcp_header.slice().len()..];
         if checksum != tcp_header.calc_checksum_ipv4(ip_header, tcp_payload).unwrap() {
             log::error!("TCP checksum failed");
+            eprintln!("CHECKSUM FAILED")
             // TODO: do not proceed if checksum fails
         } else {
-            eprintln!("YOO CHECKSUM PASSED");
+            eprintln!("CHECKSUM PASSED");
             let mut sockets = self.tcp.sockets.write().await;
             let action = match sockets.get_mut_socket_by_id(sock_id) {
                 Some(socket) => {
