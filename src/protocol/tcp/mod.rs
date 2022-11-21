@@ -3,9 +3,11 @@
 mod buf;
 #[allow(dead_code, unused_variables)]
 mod socket;
+mod transport;
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
@@ -16,9 +18,11 @@ use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
-use tokio::sync::RwLock;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use self::socket::{SynReceived, TcpState, TransportError};
+use self::socket::{SocketStatus, SynReceived, TransportError};
 
 pub const TCP_DEFAULT_WINDOW_SZ: usize = (1 << 16) - 1;
 
@@ -66,22 +70,26 @@ pub enum TcpAcceptError {
     ListenSocketClosed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TcpSendError {
     NoSocket(SocketDescriptor),
     ConnNotEstablished,
-    ConnWillBeClosed,
-    ConnWriteClosed,
+    ConnClosed,
 }
 
 #[derive(Debug)]
 pub enum TcpReadError {
-    ConnReadClosed
+    NoSocket(SocketDescriptor),
+    /// Failed to fill the provided buffer because the remote has closed.
+    /// Returns the number of bytes written into the buffer.
+    Closed(usize),
+    ConnNotEstablished,
 }
 
 #[derive(Debug)]
 pub enum TcpCloseError {
-    NoConnection(SocketDescriptor),
+    NoSocketOnDescriptor(SocketDescriptor),
+    NoSocketOnId(SocketId),
     AlreadyClosed,
 }
 
@@ -144,14 +152,145 @@ impl Tcp {
         socket.send_all(payload).await
     }
 
-    pub async fn close(&self, socket_descriptor: SocketDescriptor) -> Result<(), TcpCloseError> {
+    pub async fn read_on_socket_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        n_bytes: usize,
+    ) -> Result<Vec<u8>, TcpReadError> {
+        let mut sockets = self.sockets.write().await;
+        let socket = sockets
+            .get_mut_socket_by_descriptor(socket_descriptor)
+            .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
+
+        let mut out_buf = vec![0; n_bytes];
+        socket.read_all(&mut out_buf).await?;
+
+        Ok(out_buf)
+    }
+
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+        let table = self.sockets.read().await;
+        let socket: *const Socket = table.socket_map.get(&socket_id)?;
+        Some(SocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
+    pub async fn get_socket_mut(&self, socket_id: SocketId) -> Option<MutSocketRef<'_>> {
+        let mut table = self.sockets.write().await;
+        let socket: *mut Socket = table.socket_map.get_mut(&socket_id)?;
+        Some(MutSocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
+    pub async fn get_socket_mut_by_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Option<MutSocketRef<'_>> {
+        let mut table = self.sockets.write().await;
+        let id = *table.socket_id_map.get(&socket_descriptor)?;
+        let socket: *mut Socket = table.socket_map.get_mut(&id)?;
+        Some(MutSocketRef {
+            _guard: table,
+            socket,
+        })
+    }
+
+    pub async fn close(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
         let mut table = self.sockets.write().await;
         let sock = table
-            .get_mut_socket_by_descriptor(socket_descriptor)
-            .ok_or(TcpCloseError::NoConnection(socket_descriptor))?;
+            .get_mut_socket_by_id(socket_id)
+            .ok_or(TcpCloseError::NoSocketOnId(socket_id))?;
 
         sock.close().await;
         Ok(())
+    }
+
+    pub async fn close_by_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Result<(), TcpCloseError> {
+        let mut table = self.sockets.write().await;
+        let sock = table
+            .get_mut_socket_by_descriptor(socket_descriptor)
+            .ok_or(TcpCloseError::NoSocketOnDescriptor(socket_descriptor))?;
+
+        if matches!(sock.status(), SocketStatus::Listen) {
+            // For listen sockets, delete directly
+            let sock_id = sock.id();
+            drop(sock);
+            table.remove_by_id(sock_id);
+        } else {
+            sock.close().await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn print_sockets(&self, file: Option<String>) {
+        match file {
+            Some(file) => {
+                let mut f = File::create(file).await.unwrap();
+                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
+                    .await
+                    .unwrap();
+                let table = self.sockets.read().await;
+                for (_, socket) in table.socket_map.iter() {
+                    f.write_all(format!("{}", socket).as_bytes()).await.unwrap();
+                }
+            }
+            None => {
+                println!("id\t\tstate\t\tlocal window size\t\tremote window size");
+                let table = self.sockets.read().await;
+                for (_, socket) in table.socket_map.iter() {
+                    println!("{}", socket);
+                }
+            }
+        }
+    }
+}
+
+pub struct SocketRef<'a> {
+    _guard: RwLockReadGuard<'a, SocketTable>,
+    socket: *const Socket,
+}
+
+impl<'a> Deref for SocketRef<'a> {
+    type Target = Socket;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // read guard to the socket table, where this socket resides.
+        unsafe { &*self.socket }
+    }
+}
+
+pub struct MutSocketRef<'a> {
+    _guard: RwLockWriteGuard<'a, SocketTable>,
+    socket: *mut Socket,
+}
+
+/// SAFETY: its write-guard member is Send
+unsafe impl<'a> Send for MutSocketRef<'a> {}
+
+impl<'a> Deref for MutSocketRef<'a> {
+    type Target = Socket;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // write guard to the socket table, where this socket resides.
+        unsafe { &*self.socket }
+    }
+}
+
+impl<'a> DerefMut for MutSocketRef<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: this socket pointer is valid because this struct holds a
+        // write guard to the socket table, where this socket resides.
+        unsafe { &mut *self.socket }
     }
 }
 
@@ -205,22 +344,22 @@ pub enum BuildSocketIdError {
 }
 
 impl SocketIdBuilder {
-    fn with_remote_ip(&mut self, remote_ip: Ipv4Addr) -> &mut Self {
+    pub fn with_remote_ip(&mut self, remote_ip: Ipv4Addr) -> &mut Self {
         self.remote_ip = Some(remote_ip);
         self
     }
 
-    fn with_remote_port(&mut self, remote_port: Port) -> &mut Self {
+    pub fn with_remote_port(&mut self, remote_port: Port) -> &mut Self {
         self.remote_port = Some(remote_port);
         self
     }
 
-    fn with_local_port(&mut self, local_port: Port) -> &mut Self {
+    pub fn with_local_port(&mut self, local_port: Port) -> &mut Self {
         self.local_port = Some(local_port);
         self
     }
 
-    fn build(&self) -> Result<SocketId, BuildSocketIdError> {
+    pub fn build(&self) -> Result<SocketId, BuildSocketIdError> {
         Ok(SocketId {
             remote: (
                 self.remote_ip.ok_or(BuildSocketIdError::NoRemoteIp)?,
@@ -300,11 +439,10 @@ impl SocketTable {
             .build()
             .unwrap();
 
-        let (descriptor, socket) = self
-            .socket_builder
-            .build_with_id_state(sock_id, syn_recvd_state.into());
+        let descriptor = self.socket_builder.allocate_socket_descriptor();
+        let s = syn_recvd_state.into_socket(sock_id, descriptor);
 
-        self.insert(descriptor, socket)
+        self.insert(descriptor, s)
     }
 
     pub fn remove_by_id(&mut self, id: SocketId) {
@@ -376,18 +514,8 @@ impl SocketBuilder {
     }
 
     fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
-        let descriptor = self.make_socket_descriptor();
-        let sock = Socket::new(socket_id, self.router.clone());
-        (descriptor, sock)
-    }
-
-    fn build_with_id_state(
-        &mut self,
-        socket_id: SocketId,
-        state: TcpState,
-    ) -> (SocketDescriptor, Socket) {
-        let descriptor = self.make_socket_descriptor();
-        let sock = Socket::with_state(socket_id, state);
+        let descriptor = self.allocate_socket_descriptor();
+        let sock = Socket::new(socket_id, descriptor, self.router.clone());
         (descriptor, sock)
     }
 
@@ -402,7 +530,7 @@ impl SocketBuilder {
             .unwrap()
     }
 
-    fn make_socket_descriptor(&mut self) -> SocketDescriptor {
+    fn allocate_socket_descriptor(&mut self) -> SocketDescriptor {
         let descriptor = SocketDescriptor(
             self.next_socket_descriptor
                 .try_into()
@@ -470,7 +598,8 @@ impl ProtocolHandler for TcpHandler {
                         .await
                 }
                 None => {
-                    panic!("Received TCP packet that doesn't match with any connection")
+                    log::info!("Received TCP packet that doesn't match with any connection");
+                    return;
                 }
             },
         };
@@ -495,61 +624,190 @@ impl ProtocolHandler for TcpHandler {
 mod tests {
     use super::*;
 
-    use std::{sync::Arc, time::Duration};
+    use std::{future::Future, sync::Arc, time::Duration};
 
     use tokio::sync::Barrier;
 
     use crate::{
         node::{Node, NodeBuilder},
-        protocol::{rip::RipHandler, Protocol},
+        protocol::{rip::RipHandler, tcp::socket::SocketStatus, Protocol},
         Args,
     };
+
+    const NUM_REPEATS: usize = 1;
 
     #[tokio::test]
     async fn hello_world() {
         // A minimal test case that establishes TCP connection and sends some bytes.
-        let payload = String::from("hello world!").as_bytes().into();
-        test_send_recv(payload, vec![], 0, 0).await;
+
+        for _ in 0..NUM_REPEATS {
+            let payload = String::from("hello world!").as_bytes().into();
+            let f = test_send_recv(payload, vec![], 0, 0);
+            test_timeout(Duration::from_secs(1), f).await;
+        }
     }
 
     #[tokio::test]
     async fn send_file() {
         let test_file_size = 50_000_000;
-        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 0).await;
+
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_file(make_in_mem_test_file(test_file_size), 0);
+            test_timeout(Duration::from_secs(8), f).await;
+        }
     }
 
     #[tokio::test]
     async fn lossy_send_file() {
-        let test_file_size = 1_000_000;
-        test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5).await;
+        let test_file_size = 1_500_000;
+
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
+            test_timeout(Duration::from_secs(10), f).await;
+        }
     }
 
     #[tokio::test]
     async fn bidirectional_send_file() {
         let test_file_size = 10_000_000;
 
-        test_send_recv(
-            make_in_mem_test_file(test_file_size),
-            make_in_mem_test_file(test_file_size),
-            0,
-            0,
-        )
-        .await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(
+                make_in_mem_test_file(test_file_size),
+                make_in_mem_test_file(test_file_size),
+                0,
+                0,
+            );
+            test_timeout(Duration::from_secs(10), f).await;
+        }
     }
 
     #[tokio::test]
-    #[ignore]
     async fn lossy_bidirectional_send_file() {
-        // TODO: increase file size
-        let test_file_size = 1_000_000;
+        let test_file_size = 2_000_000;
 
-        test_send_recv(
-            make_in_mem_test_file(test_file_size),
-            make_in_mem_test_file(test_file_size),
-            5,
-            5,
-        )
-        .await;
+        for _ in 0..NUM_REPEATS {
+            let f = test_send_recv(
+                make_in_mem_test_file(test_file_size),
+                make_in_mem_test_file(test_file_size),
+                5,
+                5,
+            );
+            test_timeout(Duration::from_secs(10), f).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn close_conn() {
+        let payload: Vec<_> = "hello world!".as_bytes().into();
+        let payload_clone = payload.clone();
+
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let send_cfg = abc_net.a.clone();
+        let recv_cfg = abc_net.b.clone();
+
+        let recv_listen_port = Port(5656);
+        let listen_barr = Arc::new(Barrier::new(2));
+        let listen_barr_clone = listen_barr.clone();
+        let close_barr = Arc::new(Barrier::new(2));
+        let close_barr_clone = close_barr.clone();
+
+        let n1_cfg = send_cfg.clone();
+        let n2_cfg = recv_cfg.clone();
+
+        let n1 = tokio::spawn(async move {
+            let node = create_and_start_node(n1_cfg, 0).await;
+            listen_barr_clone.wait().await;
+
+            let dest_ip = {
+                let recv_ips = n2_cfg.get_my_interface_ips();
+                recv_ips[0]
+            };
+
+            let conn = node.connect(dest_ip, recv_listen_port).await.unwrap();
+            conn.send_all(&payload).await.unwrap();
+
+            let socket_id = conn.socket_id();
+            node.close_socket(socket_id).await.unwrap();
+
+            // test closed socket cannot be written into
+            let r = conn.send_all(&payload).await;
+            assert_eq!(r.unwrap_err(), TcpSendError::ConnClosed);
+
+            // Give socket state some time to settle.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            {
+                let sock_ref = node.get_socket(socket_id).await.unwrap();
+                assert_eq!(sock_ref.status(), SocketStatus::FinWait2);
+            }
+            close_barr.wait().await;
+
+            // test closed socket can still receive data
+            let mut buf = vec![0; payload.len()];
+            conn.read_all(&mut buf).await.unwrap();
+            assert!(buf == payload);
+        });
+
+        let n2 = tokio::spawn(async move {
+            let node = create_and_start_node(recv_cfg, 0).await;
+
+            let mut listener = node.listen(recv_listen_port).await.unwrap();
+            listen_barr.wait().await;
+
+            let conn = listener.accept().await.unwrap();
+
+            let mut buf = vec![0; payload_clone.len()];
+            conn.read_all(&mut buf).await.unwrap();
+            assert!(buf == payload_clone);
+
+            close_barr_clone.wait().await;
+            let socket_id = conn.socket_id();
+            // Remote should be in passvie close
+            {
+                let sock_ref = node.get_socket(socket_id).await.unwrap();
+                assert_eq!(sock_ref.status(), SocketStatus::CloseWait);
+            }
+            conn.send_all(&payload_clone).await.unwrap();
+        });
+
+        n1.await.unwrap();
+        n2.await.unwrap();
+    }
+
+    async fn test_send_file(in_mem_file: Vec<u8>, drop_factor: usize) {
+        let abc_net = crate::fixture::netlinks::abc::gen_unique();
+        let send_cfg = abc_net.a.clone();
+        let recv_cfg = abc_net.b.clone();
+
+        let n1_cfg = send_cfg.clone();
+        let n2_cfg = recv_cfg.clone();
+        let expected = in_mem_file.clone();
+        let listen_port = Port(8981);
+
+        let n1 = tokio::spawn(async move {
+            let node = create_and_start_node(n1_cfg, 0).await;
+
+            let dest_ip = {
+                let recv_ips = n2_cfg.get_my_interface_ips();
+                recv_ips[0]
+            };
+            let remote = Remote::new(dest_ip, listen_port);
+
+            // Give listener time to set up
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            node.connect_and_send_bytes(remote, &in_mem_file)
+                .await
+                .unwrap();
+        });
+
+        let n2 = tokio::spawn(async move {
+            let node = create_and_start_node(recv_cfg, drop_factor).await;
+            let got = node.listen_and_recv_bytes(listen_port).await.unwrap();
+            assert_eq!(got, expected);
+        });
+
+        n1.await.unwrap();
+        n2.await.unwrap();
     }
 
     // General-purposed TCP test that sends two payloads to one another.
@@ -646,5 +904,11 @@ mod tests {
         // Give nodes time to converge on routes
         tokio::time::sleep(Duration::from_millis(300)).await;
         node
+    }
+
+    async fn test_timeout<F: Future>(dur: Duration, f: F) {
+        tokio::time::timeout(dur, f)
+            .await
+            .expect("Test should finish within time limit");
     }
 }

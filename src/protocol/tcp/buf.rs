@@ -7,18 +7,24 @@ use std::{
     usize,
 };
 
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::utils::sync::Notifier;
 
 use super::TCP_DEFAULT_WINDOW_SZ;
+
+#[derive(Debug)]
+pub struct SendBufClosed;
 
 /// The send-side TCP transmission buffer.
 #[derive(Debug, Clone)]
 pub struct SendBuf<const N: usize> {
     inner: Arc<Mutex<InnerSendBuf<N>>>,
     window_size: Arc<AtomicU16>,
+    window_size_tx: broadcast::Sender<u16>,
+    window_size_rx: Arc<broadcast::Receiver<u16>>,
     not_full: Notifier,
+    empty: Notifier,
     written: Notifier,
     open: Arc<AtomicBool>,
     closing: Notifier,
@@ -27,10 +33,15 @@ pub struct SendBuf<const N: usize> {
 impl<const N: usize> SendBuf<N> {
     /// Constructs a new SendBuf.
     pub fn new(initial_seq_no: usize) -> Self {
+        let (window_size_tx, window_size_rx) = broadcast::channel(48);
+        let window_size_rx = Arc::new(window_size_rx);
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
             window_size: Arc::new(AtomicU16::new(N.try_into().unwrap())),
+            window_size_tx,
+            window_size_rx,
             not_full: Notifier::new(),
+            empty: Notifier::new(),
             written: Notifier::new(),
             open: Arc::new(AtomicBool::new(true)),
             closing: Notifier::new(),
@@ -45,14 +56,6 @@ impl<const N: usize> SendBuf<N> {
     /// Get the last ACK, i.e., the next byte expected by the remote side.
     pub async fn tail(&self) -> usize {
         self.inner.lock().await.tail
-    }
-
-    pub fn get_open_status(&self) -> Arc<AtomicBool> {
-        self.open.clone()
-    }
-
-    pub fn notify_closing(&self) {
-        self.closing.notify_all();
     }
 
     /// Like tail(), but also returns the elapsed duration since the ACK was
@@ -70,6 +73,9 @@ impl<const N: usize> SendBuf<N> {
     /// Set the window size that was sent to us by our remote.
     pub fn set_window_size(&self, window_size: u16) {
         self.window_size.store(window_size, SeqCst);
+        self.window_size_tx
+            .send(window_size)
+            .expect("SendBuffer should maintain one subscriber");
     }
 
     /// Get the window size that was sent to us by our remote.
@@ -77,24 +83,26 @@ impl<const N: usize> SendBuf<N> {
         self.window_size.load(SeqCst)
     }
 
-    /// Get the window size that we transmit to our remote counterpart.
-    pub async fn advertised_window_size(&self) -> u16 {
-        self.inner
-            .lock()
-            .await
-            .write_remaining_size()
-            .try_into()
-            .unwrap()
+    /// Get notified when window size is updated.
+    pub fn window_size_update(&self) -> broadcast::Receiver<u16> {
+        self.window_size_tx.subscribe()
+    }
+
+    pub fn closed(&self) -> bool {
+        !self.open.load(Ordering::Acquire)
     }
 
     /// Try to write bytes into the buffer, returning the number of bytes written.
-    pub async fn write(&self, bytes: &[u8]) -> usize {
+    pub async fn write(&self, bytes: &[u8]) -> Result<usize, SendBufClosed> {
+        if !self.open.load(Ordering::Acquire) {
+            return Err(SendBufClosed);
+        }
         let mut send_buf = self.inner.lock().await;
         let written = send_buf.write(bytes);
         if written > 0 {
             self.written.notify_all();
         }
-        written
+        Ok(written)
     }
 
     /// Writes all bytes into the buffer.
@@ -106,13 +114,16 @@ impl<const N: usize> SendBuf<N> {
     ///
     /// To bound the amount of wait time, either use this API with
     /// `tokio::time::timeout` or use `SendBuf::write()`.
-    pub async fn write_all(&self, bytes: &[u8]) {
+    pub async fn write_all(&self, bytes: &[u8]) -> Result<(), SendBufClosed> {
         if bytes.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mut curr = 0;
         loop {
+            if !self.open.load(Ordering::Acquire) {
+                return Err(SendBufClosed);
+            }
             let mut send_buf = self.inner.lock().await;
             let written = send_buf.write(&bytes[curr..]);
             curr += written;
@@ -128,6 +139,8 @@ impl<const N: usize> SendBuf<N> {
                 break;
             }
         }
+
+        Ok(())
     }
 
     /// Advances the tail pointer to the provided sequence number.
@@ -140,6 +153,9 @@ impl<const N: usize> SendBuf<N> {
         buf.set_tail(seq_no).map(|updated| {
             if updated {
                 self.not_full.notify_all();
+                if buf.read_remaining_size() == 0 {
+                    self.empty.notify_all();
+                }
             }
         })
     }
@@ -191,7 +207,9 @@ impl<const N: usize> SendBuf<N> {
     ) -> Result<usize, SliceError> {
         let send_buf = self.inner.lock().await;
         let unconsumed = send_buf.unconsumed();
-        assert!(start_seq_no >= send_buf.tail);
+        if start_seq_no < send_buf.tail {
+            return Err(SliceError::StartSeqTooLow(send_buf.tail));
+        }
         let offset = start_seq_no - send_buf.tail;
         unconsumed.slice(offset, buf.len()).map(|slice| {
             slice.copy_into_buf(buf).unwrap();
@@ -214,13 +232,37 @@ impl<const N: usize> SendBuf<N> {
         }
     }
 
-    pub async fn wait_for_closing(&self) {
+    /// When a buffer is closed, wait for all of its content to be consumed.
+    ///
+    /// Returns the final sequence number of the buffer, which is both the head
+    /// and the tail of the buffer.
+    ///
+    /// Panics if called on an unclosed buffer.
+    pub async fn wait_for_empty(&self) -> usize {
+        assert!(
+            self.closed(),
+            "Should only be used to drain buffer content after it is closed"
+        );
         loop {
-            let notifier = self.closing.notified();
-            notifier.wait().await;
-            if self.open.load(Ordering::Relaxed) {
-                break;
+            let send_buf = self.inner.lock().await;
+            if send_buf.read_remaining_size() == 0 {
+                return send_buf.head;
             }
+            let notifier = self.empty.notified();
+            drop(send_buf);
+            notifier.wait().await;
+        }
+    }
+
+    pub async fn close(&self) -> Result<(), SendBufClosed> {
+        if self
+            .open
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .unwrap()
+        {
+            Ok(())
+        } else {
+            Err(SendBufClosed)
         }
     }
 }
@@ -251,6 +293,8 @@ struct InnerSendBuf<const N: usize> {
     head: usize,
     // Ring buffer.
     buf: [u8; N],
+    // Debugging use only
+    initial_seq_no: usize,
 }
 
 pub fn make_default_sendbuf(starting_seq_no: usize) -> SendBuf<TCP_DEFAULT_WINDOW_SZ> {
@@ -269,6 +313,9 @@ pub enum SetTailError {
 
 #[derive(Debug)]
 pub enum SliceError {
+    /// Errs when the slice starts at a sequence number lower than the current
+    /// buffer tail. Contains the current buffer tail in the error.
+    StartSeqTooLow(usize),
     /// Errs when the requested slice goes beyond the actual slice.
     /// Returns the maximum number of bytes sliceable.
     OutOfRange(usize),
@@ -389,6 +436,7 @@ impl<const N: usize> InnerSendBuf<N> {
             tail: initial_seq_no,
             head: initial_seq_no,
             last_tail_mutated: Instant::now(),
+            initial_seq_no,
         }
     }
 
@@ -493,7 +541,7 @@ impl<const N: usize> InnerSendBuf<N> {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 struct SegmentMeta {
     seq_no: usize,
     size: usize,
@@ -509,6 +557,17 @@ impl Ord for SegmentMeta {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.seq_no.cmp(&other.seq_no)
     }
+}
+
+#[derive(Debug)]
+pub struct RecvBufClosed;
+
+#[derive(Debug)]
+pub enum FillError {
+    /// Failed to fill the entire provided buffer because the receive buffer
+    /// has been closed (because the remote has closed).
+    /// Returns the number of bytes written into the buffer.
+    Closed(usize),
 }
 
 /// The receiving-side of TCP transmission buffer.
@@ -527,7 +586,7 @@ impl<const N: usize> RecvBuf<N> {
             inner: Arc::new(Mutex::new(InnerRecvBuf::new(starting_seq_no))),
             written: Notifier::new(),
             read: Notifier::new(),
-            open: Arc::new(AtomicBool::new(true))
+            open: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -551,6 +610,20 @@ impl<const N: usize> RecvBuf<N> {
     /// This is the allocated buffer size minus unconsumed, consecutive bytes.
     pub async fn window_size(&self) -> usize {
         self.inner.lock().await.write_remaining_size()
+    }
+
+    pub async fn close(&self) -> Result<(), RecvBufClosed> {
+        self.open
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .map(|_| {
+                // notify pending readers, if any
+                self.written.notify_all();
+            })
+            .map_err(|_| RecvBufClosed)
+    }
+
+    pub fn closed(&self) -> bool {
+        !self.open.load(Ordering::Acquire)
     }
 
     /// Try to fill the provided buffer.
@@ -592,9 +665,9 @@ impl<const N: usize> RecvBuf<N> {
     ///
     /// Filling the buffer simultaneously advances the buffer tail: bytes, once
     /// consumed, are discarded from RecvBuf.
-    pub async fn fill<'a>(&self, dest: &'a mut [u8]) {
+    pub async fn fill<'a>(&self, dest: &'a mut [u8]) -> Result<(), FillError> {
         if dest.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mut curr = 0;
@@ -606,6 +679,10 @@ impl<const N: usize> RecvBuf<N> {
                 self.read.notify_all();
             }
             if curr < dest.len() {
+                if self.closed() {
+                    // will not receive any more bytes from the remote
+                    return Err(FillError::Closed(curr));
+                }
                 let written = self.written.notified();
                 drop(recv_buf);
                 written.wait().await;
@@ -613,6 +690,8 @@ impl<const N: usize> RecvBuf<N> {
                 break;
             }
         }
+
+        Ok(())
     }
 
     /// Try to write the provided bytes into RecvBuf, starting at the provided
@@ -681,6 +760,8 @@ struct InnerRecvBuf<const N: usize> {
     tail: usize,
     head: usize,
     early_arrivals: BinaryHeap<Reverse<SegmentMeta>>,
+    // Debugging use only
+    initial_seq_no: usize,
 }
 
 #[derive(Debug)]
@@ -694,12 +775,13 @@ pub enum WriteRangeError {
 }
 
 impl<const N: usize> InnerRecvBuf<N> {
-    pub fn new(starting_seq_no: usize) -> Self {
+    pub fn new(initial_seq_no: usize) -> Self {
         Self {
             buf: [0; N],
-            tail: starting_seq_no,
-            head: starting_seq_no,
+            tail: initial_seq_no,
+            head: initial_seq_no,
             early_arrivals: BinaryHeap::new(),
+            initial_seq_no,
         }
     }
 
@@ -843,10 +925,10 @@ impl<const N: usize> InnerRecvBuf<N> {
 
     fn drain_early_arrivals(&mut self) {
         while !self.early_arrivals.is_empty() {
-            let top = self.early_arrivals.peek().unwrap();
-            if top.0.seq_no <= self.head {
-                let top = self.early_arrivals.pop().unwrap();
-                self.head = max(self.head, top.0.seq_no + top.0.size);
+            let top = self.early_arrivals.peek().unwrap().0;
+            if top.seq_no <= self.head {
+                self.early_arrivals.pop().unwrap();
+                self.head = max(self.head, top.seq_no + top.size);
             } else {
                 break;
             }
@@ -889,7 +971,7 @@ mod tests {
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
                 for _ in 0..num_repeats {
-                    producer_buf.write_all(&data).await;
+                    producer_buf.write_all(&data).await.unwrap();
                 }
             });
 
@@ -921,7 +1003,7 @@ mod tests {
             let producer_buf = buf.clone();
             let producer = tokio::spawn(async move {
                 for _ in 0..num_repeats {
-                    producer_buf.write_all(&data).await;
+                    producer_buf.write_all(&data).await.unwrap();
                 }
             });
 
@@ -978,7 +1060,7 @@ mod tests {
             let consumer = tokio::spawn(async move {
                 let mut out_buf = vec![0; data2.len()];
                 for _ in 0..num_repeats {
-                    buf.fill(&mut out_buf).await;
+                    buf.fill(&mut out_buf).await.unwrap();
                     assert_eq!(out_buf, data2);
                 }
             });

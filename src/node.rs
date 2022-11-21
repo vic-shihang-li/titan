@@ -1,10 +1,13 @@
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
+use tokio::fs::{self, File};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
+use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    Port, Remote, SocketDescriptor, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler,
-    TcpListenError, TcpListener, TcpSendError,
+    MutSocketRef, Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn,
+    TcpConnError, TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -152,11 +155,15 @@ impl Node {
         self.net.iter_links().await
     }
 
-    pub async fn close_socket(
+    pub async fn close_socket(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
+        self.tcp.close(socket_id).await
+    }
+
+    pub async fn close_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
     ) -> Result<(), TcpCloseError> {
-        self.tcp.close(socket_descriptor).await
+        self.tcp.close_by_descriptor(socket_descriptor).await
     }
 
     /// Send bytes to a destination.
@@ -179,6 +186,34 @@ impl Node {
     ) -> Result<(), TcpSendError> {
         self.tcp
             .send_on_socket_descriptor(socket_descriptor, payload)
+            .await
+    }
+
+    /// Read some bytes over a TCP connection.
+    pub async fn tcp_read(
+        &self,
+        socket_descriptor: SocketDescriptor,
+        n_bytes: usize,
+    ) -> Result<Vec<u8>, TcpReadError> {
+        self.tcp
+            .read_on_socket_descriptor(socket_descriptor, n_bytes)
+            .await
+    }
+
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+        self.tcp.get_socket(socket_id).await
+    }
+
+    pub async fn get_socket_mut(&self, socket_id: SocketId) -> Option<MutSocketRef<'_>> {
+        self.tcp.get_socket_mut(socket_id).await
+    }
+
+    pub async fn get_socket_mut_by_descriptor(
+        &self,
+        socket_descriptor: SocketDescriptor,
+    ) -> Option<MutSocketRef<'_>> {
+        self.tcp
+            .get_socket_mut_by_descriptor(socket_descriptor)
             .await
     }
 
@@ -214,6 +249,53 @@ impl Node {
 
     pub async fn listen(&self, port: Port) -> Result<TcpListener, TcpListenError> {
         self.tcp.listen(port).await
+    }
+
+    pub async fn send_file(&self, cmd: SendFileCmd) -> Result<(), SendFileError> {
+        let input = fs::read_to_string(&cmd.path)
+            .await
+            .map_err(SendFileError::OpenFile)?;
+
+        self.connect_and_send_bytes(Remote::new(cmd.dest_ip, cmd.port), input.as_bytes())
+            .await
+    }
+
+    pub async fn recv_file(&self, cmd: RecvFileCmd) -> Result<(), RecvFileError> {
+        let received = self.listen_and_recv_bytes(cmd.port).await?;
+
+        let mut out_file = File::create(cmd.out_path).await?;
+        out_file.write_all(&received).await?;
+
+        Ok(())
+    }
+
+    pub async fn connect_and_send_bytes(
+        &self,
+        remote: Remote,
+        bytes: &[u8],
+    ) -> Result<(), SendFileError> {
+        let conn = self
+            .connect(remote.ip(), remote.port())
+            .await
+            .map_err(SendFileError::Connect)?;
+
+        conn.send_all(bytes).await.map_err(SendFileError::Send)?;
+
+        self.close_socket(conn.socket_id())
+            .await
+            .expect("Socket should be open");
+
+        Ok(())
+    }
+
+    pub async fn listen_and_recv_bytes(&self, port: Port) -> Result<Vec<u8>, RecvFileError> {
+        let mut listener = self.tcp.listen(port).await.map_err(RecvFileError::Listen)?;
+        let socket = listener.accept().await.map_err(RecvFileError::Accept)?;
+        Ok(socket.read_till_closed().await)
+    }
+
+    pub async fn print_sockets(&self, file: Option<String>) {
+        self.tcp.print_sockets(file).await
     }
 }
 

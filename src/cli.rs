@@ -1,5 +1,7 @@
 use crate::node::Node;
-use crate::protocol::tcp::{Port, SocketDescriptor, TcpConnError, TcpSendError};
+use crate::protocol::tcp::{
+    Port, SocketDescriptor, TcpAcceptError, TcpConnError, TcpListenError, TcpSendError,
+};
 use crate::protocol::Protocol;
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt::Display;
@@ -8,7 +10,6 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
-use tokio::fs;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -21,7 +22,7 @@ pub enum Command {
     SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenListenSocket(Port),
     ConnectSocket(Ipv4Addr, Port),
-    ReadSocket(TCPReadCmd),
+    ReadSocket(TcpReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
     SendFile(SendFileCmd),
@@ -45,28 +46,9 @@ pub enum SendFileError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SendFileCmd {
-    path: String,
-    dest_ip: Ipv4Addr,
-    port: Port,
-}
-
-impl SendFileCmd {
-    pub async fn send(&self, node: &Node) -> Result<(), SendFileError> {
-        let file = fs::read_to_string(&self.path)
-            .await
-            .map_err(SendFileError::OpenFile)?;
-
-        let conn = node
-            .connect(self.dest_ip, self.port)
-            .await
-            .map_err(SendFileError::Connect)?;
-
-        conn.send_all(file.as_bytes())
-            .await
-            .map_err(SendFileError::Send)?;
-
-        Ok(())
-    }
+    pub path: String,
+    pub dest_ip: Ipv4Addr,
+    pub port: Port,
 }
 
 impl SendFileCmd {
@@ -78,17 +60,29 @@ impl SendFileCmd {
         }
     }
 }
-
 impl From<SendFileCmd> for Command {
     fn from(s: SendFileCmd) -> Self {
         Command::SendFile(s)
     }
 }
 
+#[derive(Debug)]
+pub enum RecvFileError {
+    FileIo(std::io::Error),
+    Listen(TcpListenError),
+    Accept(TcpAcceptError),
+}
+
+impl From<std::io::Error> for RecvFileError {
+    fn from(e: std::io::Error) -> Self {
+        RecvFileError::FileIo(e)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecvFileCmd {
-    out_path: String,
-    port: Port,
+    pub out_path: String,
+    pub port: Port,
 }
 
 impl RecvFileCmd {
@@ -104,13 +98,13 @@ impl From<RecvFileCmd> for Command {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct TCPReadCmd {
+pub struct TcpReadCmd {
     descriptor: SocketDescriptor,
     num_bytes: usize,
     would_block: bool,
 }
 
-impl TCPReadCmd {
+impl TcpReadCmd {
     fn new_blocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
         Self {
             descriptor,
@@ -128,8 +122,8 @@ impl TCPReadCmd {
     }
 }
 
-impl From<TCPReadCmd> for Command {
-    fn from(r: TCPReadCmd) -> Self {
+impl From<TcpReadCmd> for Command {
+    fn from(r: TcpReadCmd) -> Self {
         Command::ReadSocket(r)
     }
 }
@@ -186,9 +180,9 @@ impl Cli {
                     eprintln!("CTRL-D");
                     break;
                 }
-                Err(err) => {
-                    eprintln!("Error: {:?}", err);
-                    break;
+                Err(_) => {
+                    // eprintln!("Error: {:?}", err);
+                    // break;
                 }
             }
         }
@@ -197,7 +191,6 @@ impl Cli {
     fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let cmd = tokens.next().unwrap();
-        eprintln!("cmd: {}", cmd);
         cmd_arg_handler(cmd, tokens)
     }
 
@@ -243,24 +236,22 @@ impl Cli {
             Command::OpenListenSocket(port) => {
                 self.open_listen_socket_on(port).await;
             }
-            Command::ConnectSocket(_ip, _port) => {
-                todo!() //TODO implement
+            Command::ConnectSocket(ip, port) => {
+                self.connect(ip, port).await;
             }
-            Command::ReadSocket(_cmd) => {
-                todo!() //TODO implement
+            Command::ReadSocket(cmd) => {
+                self.tcp_read(cmd).await;
             }
-            Command::Shutdown(_socket, _option) => {
-                todo!() //TODO implement
+            Command::Shutdown(socket, opt) => {
+                self.shutdown(socket, opt).await;
             }
             Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
             }
             Command::SendFile(cmd) => {
-                self.send_file(cmd).await;
+                self.send_file(cmd);
             }
-            Command::RecvFile(_cmd) => {
-                todo!()
-            }
+            Command::RecvFile(cmd) => self.recv_file(cmd),
             Command::Quit => {
                 eprintln!("Quitting");
             }
@@ -309,20 +300,7 @@ impl Cli {
     }
 
     async fn print_sockets(&self, file: Option<String>) {
-        // TODO fetch socket table from TCP API
-        let sockets = "test";
-        match file {
-            Some(file) => {
-                let mut f = File::create(file).unwrap();
-                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
-                    .unwrap();
-                f.write_all(format!("{}\n", sockets).as_bytes()).unwrap();
-            }
-            None => {
-                println!("id\t\tstate\t\tlocal window size\t\tremote window size\n");
-                println!("{}", sockets)
-            }
-        }
+        self.node.print_sockets(file).await;
     }
 
     async fn tcp_send(&self, socket_descriptor: SocketDescriptor, payload: Vec<u8>) {
@@ -334,23 +312,91 @@ impl Cli {
         }
     }
 
+    async fn tcp_read(&self, cmd: TcpReadCmd) {
+        if cmd.would_block {
+            match self.node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
+                Ok(bytes) => {
+                    println!("{}", String::from_utf8_lossy(&bytes))
+                }
+                Err(e) => {
+                    eprintln!("Failed to read: {:?}", e);
+                }
+            }
+        } else {
+            let node = self.node.clone();
+            tokio::spawn(async move {
+                match node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
+                    Ok(bytes) => {
+                        println!("{}", String::from_utf8_lossy(&bytes))
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read: {:?}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    async fn shutdown(&self, descriptor: SocketDescriptor, option: TcpShutdownKind) {
+        match self.node.get_socket_mut_by_descriptor(descriptor).await {
+            Some(mut socket) => match option {
+                TcpShutdownKind::Read => socket.close_read().await,
+                TcpShutdownKind::Write => socket.close().await,
+                TcpShutdownKind::ReadWrite => socket.close_rw().await,
+            },
+            None => {
+                eprintln!("Socket {} not found", descriptor.0)
+            }
+        }
+    }
+
     async fn open_listen_socket_on(&self, port: Port) {
         if let Err(e) = self.node.listen(port).await {
             eprintln!("Failed to listen on port {}. Error: {:?}", port.0, e)
         }
     }
 
-    async fn send_file(&self, cmd: SendFileCmd) {
+    async fn connect(&self, ip: Ipv4Addr, port: Port) {
+        if let Err(e) = self.node.connect(ip, port).await {
+            eprintln!("Failed to connect to {}:{}. Error: {:?}", ip, port.0, e)
+        }
+    }
+
+    fn send_file(&self, cmd: SendFileCmd) {
         let node = self.node.clone();
         tokio::spawn(async move {
-            if let Err(e) = cmd.send(&node).await {
-                eprintln!("Failed to send file. Error: {:?}", e)
+            match node.send_file(cmd).await {
+                Ok(_) => {
+                    eprintln!("Send file complete.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to send file. Error: {:?}", e)
+                }
+            }
+        });
+    }
+
+    fn recv_file(&self, cmd: RecvFileCmd) {
+        let node = self.node.clone();
+        tokio::spawn(async move {
+            match node.recv_file(cmd).await {
+                Ok(_) => {
+                    eprintln!("Receive file complete");
+                }
+                Err(e) => {
+                    eprintln!("Failed to receive file. Error: {:?}", e)
+                }
             }
         });
     }
 
     async fn close_socket(&self, socket_descriptor: SocketDescriptor) {
-        if self.node.close_socket(socket_descriptor).await.is_err() {
+        if self
+            .node
+            .close_socket_by_descriptor(socket_descriptor)
+            .await
+            .is_err()
+        {
             eprintln!(
                 "Failed to close socket: socket {} does not exist",
                 socket_descriptor.0
@@ -486,8 +532,8 @@ fn cmd_arg_handler(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, Pa
             };
 
             match blocking {
-                true => Ok(TCPReadCmd::new_blocking(sid, num_bytes).into()),
-                false => Ok(TCPReadCmd::new_nonblocking(sid, num_bytes).into()),
+                true => Ok(TcpReadCmd::new_blocking(sid, num_bytes).into()),
+                false => Ok(TcpReadCmd::new_nonblocking(sid, num_bytes).into()),
             }
         }
         "sd" => {
@@ -879,17 +925,17 @@ mod tests {
         let c = Cli::parse_command("r 33 100 y".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_blocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_blocking(SocketDescriptor(33), 100).into()
         );
         let c = Cli::parse_command("r 33 100 N".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
         );
         let c = Cli::parse_command("r 33 100".into()).unwrap();
         assert_eq!(
             c,
-            TCPReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
         );
     }
 
