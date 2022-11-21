@@ -59,6 +59,10 @@ impl TcpConn {
             .expect("TCP conn should only be closed once");
     }
 
+    pub fn close_read(&self) {
+        self.inner.close_read();
+    }
+
     /// Sends bytes over a connection.
     ///
     /// Blocks until all bytes have been acknowledged by the other end.
@@ -136,27 +140,36 @@ impl<const N: usize> InnerTcpConn<N> {
         }
     }
 
+    pub fn close_read(&self) {
+        let open_status = self.send_buf.get_open_status();
+        open_status.compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .unwrap();
+    }
+
     async fn send_all(&self, bytes: &[u8]) -> Result<(), TcpSendError> {
         let open_status = self.send_buf.get_open_status();
         if open_status.load(Ordering::Relaxed) {
             self.send_buf.write_all(bytes).await;
             Ok(())
         } else {
-            Err(TcpSendError::ConnWillBeClosed)
+            Err(TcpSendError::ConnWriteClosed)
         }
     }
 
     async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
-        const MAX_READ_SZ: usize = 1024;
-
-        let mut curr = 0;
-        while curr < out_buffer.len() {
-            let end = min(out_buffer.len(), curr + MAX_READ_SZ);
-            self.recv_buf.fill(&mut out_buffer[curr..end]).await;
-            curr = end;
+        let open_status = self.recv_buf.get_open_status();
+        if open_status.load(Ordering::Relaxed) {
+            const MAX_READ_SZ: usize = 1024;
+            let mut curr = 0;
+            while curr < out_buffer.len() {
+                let end = min(out_buffer.len(), curr + MAX_READ_SZ);
+                self.recv_buf.fill(&mut out_buffer[curr..end]).await;
+                curr = end;
+            }
+            Ok(())
+        } else {
+            Err(TcpReadError::ConnReadClosed)
         }
-
-        Ok(())
     }
 
     async fn handle_packet<'a>(
@@ -1279,8 +1292,8 @@ impl Socket {
                     (s.into(), None)
                 }
             }
-            TcpState::TimeWait(s) => todo!(),
-            TcpState::CloseWait(s) => todo!(),
+            TcpState::TimeWait(_) => todo!(),
+            TcpState::CloseWait(_) => todo!(),
             TcpState::LastAck(s) => (s.handle_ack().into(), None), //TODO return action that triggers socket table pruning
         };
         self.state = Some(next_state);
@@ -1297,6 +1310,18 @@ impl Socket {
             _ => {
                 self.state = Some(state);
                 eprintln!("Should not be able to close a connection that's not established");
+            }
+        }
+    }
+
+    pub async fn close_read(&mut self) {
+        let state = self.state.take().unwrap();
+        match state {
+            TcpState::Established(s) => {
+                s.conn.close_read();
+            }
+            _ => {
+                eprintln!("Closing the read portion of a connection not in Established")
             }
         }
     }

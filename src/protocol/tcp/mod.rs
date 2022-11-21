@@ -71,10 +71,13 @@ pub enum TcpSendError {
     NoSocket(SocketDescriptor),
     ConnNotEstablished,
     ConnWillBeClosed,
+    ConnWriteClosed,
 }
 
 #[derive(Debug)]
-pub struct TcpReadError {}
+pub enum TcpReadError {
+    ConnReadClosed
+}
 
 #[derive(Debug)]
 pub enum TcpCloseError {

@@ -174,6 +174,7 @@ impl Cli {
                         }
                     }
                     if shutdown_flag {
+                        eprintln!("breaking");
                         break;
                     }
                 }

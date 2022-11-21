@@ -664,6 +664,10 @@ impl<const N: usize> RecvBuf<N> {
             }
         }
     }
+
+    pub fn get_open_status(&self) -> Arc<AtomicBool> {
+        self.open.clone()
+    }
 }
 
 /// A fixed-sized buffer for constructing a contiguous byte stream over TCP.
