@@ -30,6 +30,7 @@ pub enum Command {
     SendFile(SendFileCmd),
     RecvFile(RecvFileCmd),
     Quit,
+    None,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -155,6 +156,7 @@ impl HandleUserInput for CommandParser {
     ) -> Result<(), crate::repl::HandleUserInputError> {
         match Self::parse_command(user_input) {
             Ok(Command::Quit) => return Err(HandleUserInputError::Terminate),
+            Ok(Command::None) => (),
             Ok(cmd) => self
                 .tx
                 .send(cmd)
@@ -172,8 +174,11 @@ impl HandleUserInput for CommandParser {
 impl CommandParser {
     fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
-        let cmd = tokens.next().unwrap();
-        cmd_arg_handler(cmd, tokens)
+        let c = tokens.next();
+        match c {
+            Some(cmd) => cmd_arg_handler(cmd, tokens),
+            None => Ok(Command::None),
+        }
     }
 }
 
@@ -201,6 +206,7 @@ impl Cli {
 
     async fn execute_command(&self, cmd: Command) {
         match cmd {
+            Command::None => (),
             Command::ListInterface(op) => {
                 self.print_interfaces(op).await;
             }
