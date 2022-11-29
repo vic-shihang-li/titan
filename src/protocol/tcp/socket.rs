@@ -222,9 +222,9 @@ impl<const N: usize> InnerTcpConn<N> {
                 .await;
         }
 
-        // if self.ack_policy.should_ack() {
-        //     self.should_ack.send(()).unwrap();
-        // }
+        if self.ack_policy.should_ack() {
+            self.should_ack.send(()).unwrap();
+        }
     }
 }
 
@@ -828,7 +828,7 @@ impl Established {
         let remote = Remote::new(self.remote_ip, self.remote_port);
         let fin_seq_no_clone = fin_seq_no.clone();
         tokio::spawn(async move {
-            let fin_seq_no = conn.drain_content_on_close().await;
+            let fin_seq_no = conn.drain_content_on_close().await + 1;
             let fin_packet = Self::make_shutdown_fin_packet(
                 fin_seq_no,
                 local_port,
@@ -958,7 +958,7 @@ impl FinWait1 {
                 .unwrap();
 
             if let Some(fin_seq_no) = fin_seq_no {
-                if tcp_header.acknowledgment_number() == fin_seq_no as u32 + 1 {
+                if tcp_header.acknowledgment_number() > fin_seq_no as u32 {
                     self.fin_acked_tx.send(()).unwrap();
                 }
             }
@@ -989,16 +989,18 @@ impl FinWait1 {
 
         if ack {
             if let Some(fin_seq_no) = fin_seq_no {
-                self.fin_acked_tx.send(()).unwrap();
+                if tcp_header.acknowledgment_number() > fin_seq_no as u32 {
+                    self.fin_acked_tx.send(()).unwrap();
 
-                let state = FinWait2 {
-                    conn: self.conn,
-                    local_port: self.local_port,
-                    remote_ip: self.remote_ip,
-                    remote_port: self.remote_port,
-                    router: self.router,
-                };
-                return state.into();
+                    let state = FinWait2 {
+                        conn: self.conn,
+                        local_port: self.local_port,
+                        remote_ip: self.remote_ip,
+                        remote_port: self.remote_port,
+                        router: self.router,
+                    };
+                    return state.into();
+                }
             }
         }
 
@@ -1134,6 +1136,21 @@ impl CloseWait {
         LastAck {
             router: self.router.clone(),
         }
+    }
+
+    async fn handle_packet<'a>(
+        self,
+        ip_header: &Ipv4HeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'a>,
+        payload: &[u8],
+    ) -> TcpState {
+        if !payload.is_empty() {
+            log::warn!(
+                "Got payload when the remote has already closed their end of the connection"
+            );
+        }
+        self.conn.handle_packet(ip_header, tcp_header, &[]).await;
+        self.into()
     }
 
     async fn make_fin_packet(&self, src_port: Port, dst_port: Port, dst_ip: Ipv4Addr) -> Vec<u8> {
@@ -1344,8 +1361,8 @@ impl Socket {
                     (s.into(), None)
                 }
             }
-            TcpState::TimeWait(s) => todo!(),
-            TcpState::CloseWait(s) => todo!(),
+            TcpState::TimeWait(s) => (s.into(), None),
+            TcpState::CloseWait(s) => (s.handle_packet(ip_header, tcp_header, payload).await, None),
             TcpState::LastAck(s) => (s.handle_ack().into(), None), //TODO return action that triggers socket table pruning
         };
 

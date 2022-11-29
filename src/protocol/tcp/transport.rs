@@ -56,8 +56,8 @@ impl<const N: usize> TcpTransport<N> {
             router,
             seq_no,
             last_transmitted: Instant::now(),
-            ack_batch_timeout: Duration::from_millis(10),
-            retrans_interval: Duration::from_millis(100),
+            ack_batch_timeout: Duration::from_millis(1),
+            retrans_interval: Duration::from_millis(1),
             zero_window_probe_interval: Duration::from_millis(1),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
@@ -98,9 +98,9 @@ impl<const N: usize> TcpTransport<N> {
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
-                // _ = self.send_ack_request.recv() => {
-                //     self.send_ack().await.ok();
-                // }
+                _ = self.send_ack_request.recv() => {
+                    self.send_ack().await.ok();
+                }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
                 }
