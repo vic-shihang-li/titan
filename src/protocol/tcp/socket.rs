@@ -222,9 +222,9 @@ impl<const N: usize> InnerTcpConn<N> {
                 .await;
         }
 
-        if self.ack_policy.should_ack() {
-            self.should_ack.send(()).unwrap();
-        }
+        // if self.ack_policy.should_ack() {
+        //     self.should_ack.send(()).unwrap();
+        // }
     }
 }
 
@@ -256,7 +256,6 @@ impl<const N: usize> InnerTcpConn<N> {
                     log::error!("Remote did not honor window size")
                 }
             };
-
             self.should_ack.send(()).unwrap();
         }
     }
@@ -508,7 +507,6 @@ impl Closed {
         header.syn = true;
         let payload: &[u8] = &[];
         let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
-        println!("SRC_IP: {:?}, DST_IP: {}", src_ip, dst_ip);
         let checksum = header
             .calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload)
             .unwrap();

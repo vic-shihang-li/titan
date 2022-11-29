@@ -56,8 +56,8 @@ impl<const N: usize> TcpTransport<N> {
             router,
             seq_no,
             last_transmitted: Instant::now(),
-            ack_batch_timeout: Duration::from_millis(1),
-            retrans_interval: Duration::from_millis(5),
+            ack_batch_timeout: Duration::from_millis(10),
+            retrans_interval: Duration::from_millis(100),
             zero_window_probe_interval: Duration::from_millis(1),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
@@ -98,9 +98,9 @@ impl<const N: usize> TcpTransport<N> {
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
-                _ = self.send_ack_request.recv() => {
-                    self.send_ack().await.ok();
-                }
+                // _ = self.send_ack_request.recv() => {
+                //     self.send_ack().await.ok();
+                // }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
                 }
@@ -206,6 +206,7 @@ impl<const N: usize> TcpTransport<N> {
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
         let mut bytes = Vec::new();
         let mut tcp_header = self.prepare_tcp_packet(seq_no).await;
+
         let src_ip = self
             .router
             .find_src_vip_with_dest(self.remote.ip())
@@ -218,7 +219,6 @@ impl<const N: usize> TcpTransport<N> {
         let ack = tcp_header.acknowledgment_number;
         tcp_header.write(&mut bytes).unwrap();
         bytes.extend_from_slice(payload);
-
         self.router
             .send(&bytes, Protocol::Tcp, self.remote.ip())
             .await
