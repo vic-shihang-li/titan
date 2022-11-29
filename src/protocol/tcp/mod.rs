@@ -221,7 +221,6 @@ impl Tcp {
         if matches!(sock.status(), SocketStatus::Listen) {
             // For listen sockets, delete directly
             let sock_id = sock.id();
-            drop(sock);
             table.remove_by_id(sock_id);
         } else {
             sock.close().await;
@@ -498,7 +497,6 @@ impl SocketTable {
     }
 }
 
-
 struct SocketBuilder {
     next_socket_descriptor: usize,
     next_port: u16,
@@ -580,9 +578,12 @@ impl ProtocolHandler for TcpHandler {
             .unwrap();
         let checksum = tcp_header.checksum();
 
-
         let tcp_payload = &payload[tcp_header.slice().len()..];
-        if checksum != tcp_header.calc_checksum_ipv4(ip_header, tcp_payload).unwrap() {
+        if checksum
+            != tcp_header
+                .calc_checksum_ipv4(ip_header, tcp_payload)
+                .unwrap()
+        {
             log::error!("TCP checksum failed");
             eprintln!("CHECKSUM FAILED")
             // TODO: do not proceed if checksum fails
@@ -595,7 +596,8 @@ impl ProtocolHandler for TcpHandler {
                         .handle_packet(ip_header, &tcp_header, tcp_payload)
                         .await
                 }
-                None => match sockets.get_mut_listener_socket(tcp_header.destination_port().into()) {
+                None => match sockets.get_mut_listener_socket(tcp_header.destination_port().into())
+                {
                     Some(listener_sock) => {
                         listener_sock
                             .handle_packet(ip_header, &tcp_header, payload)
@@ -613,7 +615,10 @@ impl ProtocolHandler for TcpHandler {
                     UpdateAction::NewSynReceivedSocket(syn_recvd) => {
                         sockets
                             .add_new_syn_recvd_socket(
-                                Remote::new(ip_header.source_addr(), tcp_header.source_port().into()),
+                                Remote::new(
+                                    ip_header.source_addr(),
+                                    tcp_header.source_port().into(),
+                                ),
                                 tcp_header.destination_port().into(),
                                 syn_recvd,
                             )
@@ -622,8 +627,6 @@ impl ProtocolHandler for TcpHandler {
                 }
             }
         }
-
-
     }
 }
 
