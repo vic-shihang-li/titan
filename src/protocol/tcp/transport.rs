@@ -261,9 +261,9 @@ pub struct RetransmissionConfig {
 impl Default for RetransmissionConfig {
     fn default() -> Self {
         Self {
-            max_err_retries: 3,
+            max_err_retries: 80,
             retrans_interval: Duration::from_millis(50),
-            timeout: Duration::from_secs(1),
+            timeout: Duration::from_secs(3),
         }
     }
 }
