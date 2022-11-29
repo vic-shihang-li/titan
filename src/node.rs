@@ -6,8 +6,8 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::net::{self, LinkIter, LinkRef, Net};
 use crate::protocol::tcp::{
-    MutSocketRef, Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn,
-    TcpConnError, TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
+    Port, Remote, SocketDescriptor, SocketId, SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError,
+    TcpHandler, TcpListenError, TcpListener, TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
@@ -204,17 +204,11 @@ impl Node {
         self.tcp.get_socket(socket_id).await
     }
 
-    pub async fn get_socket_mut(&self, socket_id: SocketId) -> Option<MutSocketRef<'_>> {
-        self.tcp.get_socket_mut(socket_id).await
-    }
-
-    pub async fn get_socket_mut_by_descriptor(
+    pub async fn get_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
-    ) -> Option<MutSocketRef<'_>> {
-        self.tcp
-            .get_socket_mut_by_descriptor(socket_descriptor)
-            .await
+    ) -> Option<SocketRef<'_>> {
+        self.tcp.get_socket_by_descriptor(socket_descriptor).await
     }
 
     pub async fn get_socket_descriptor(&self, socket_id: SocketId) -> Option<SocketDescriptor> {

@@ -7,7 +7,7 @@ mod transport;
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::time::Duration;
 use std::usize;
 use std::{net::Ipv4Addr, sync::Arc};
@@ -20,7 +20,7 @@ use socket::Socket;
 pub use socket::{TcpConn, TcpListener};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use self::socket::{SocketStatus, SynReceived, TransportError};
 
@@ -136,7 +136,7 @@ impl Tcp {
         let socket = sockets.add_new_listen_socket(port).map_err(|e| match e {
             AddSocketError::ConnectionExists(sid) => TcpListenError::PortOccupied(sid.local_port()),
         })?;
-        Ok(socket.listen(port).unwrap())
+        Ok(socket.listen(port).await.unwrap())
     }
 
     pub async fn send_on_socket_descriptor(
@@ -144,9 +144,9 @@ impl Tcp {
         socket_descriptor: SocketDescriptor,
         payload: &[u8],
     ) -> Result<(), TcpSendError> {
-        let mut sockets = self.sockets.write().await;
+        let sockets = self.sockets.read().await;
         let socket = sockets
-            .get_mut_socket_by_descriptor(socket_descriptor)
+            .get_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpSendError::NoSocket(socket_descriptor))?;
 
         socket.send_all(payload).await
@@ -157,9 +157,9 @@ impl Tcp {
         socket_descriptor: SocketDescriptor,
         n_bytes: usize,
     ) -> Result<Vec<u8>, TcpReadError> {
-        let mut sockets = self.sockets.write().await;
+        let sockets = self.sockets.read().await;
         let socket = sockets
-            .get_mut_socket_by_descriptor(socket_descriptor)
+            .get_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
 
         let mut out_buf = vec![0; n_bytes];
@@ -177,23 +177,14 @@ impl Tcp {
         })
     }
 
-    pub async fn get_socket_mut(&self, socket_id: SocketId) -> Option<MutSocketRef<'_>> {
-        let mut table = self.sockets.write().await;
-        let socket: *mut Socket = table.socket_map.get_mut(&socket_id)?;
-        Some(MutSocketRef {
-            _guard: table,
-            socket,
-        })
-    }
-
-    pub async fn get_socket_mut_by_descriptor(
+    pub async fn get_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
-    ) -> Option<MutSocketRef<'_>> {
-        let mut table = self.sockets.write().await;
+    ) -> Option<SocketRef<'_>> {
+        let table = self.sockets.read().await;
         let id = *table.socket_id_map.get(&socket_descriptor)?;
-        let socket: *mut Socket = table.socket_map.get_mut(&id)?;
-        Some(MutSocketRef {
+        let socket: *const Socket = table.socket_map.get(&id)?;
+        Some(SocketRef {
             _guard: table,
             socket,
         })
@@ -205,9 +196,9 @@ impl Tcp {
     }
 
     pub async fn close(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
-        let mut table = self.sockets.write().await;
+        let table = self.sockets.read().await;
         let sock = table
-            .get_mut_socket_by_id(socket_id)
+            .get_socket_by_id(socket_id)
             .ok_or(TcpCloseError::NoSocketOnId(socket_id))?;
 
         sock.close().await;
@@ -218,15 +209,16 @@ impl Tcp {
         &self,
         socket_descriptor: SocketDescriptor,
     ) -> Result<(), TcpCloseError> {
-        let mut table = self.sockets.write().await;
+        let table = self.sockets.read().await;
         let sock = table
-            .get_mut_socket_by_descriptor(socket_descriptor)
+            .get_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpCloseError::NoSocketOnDescriptor(socket_descriptor))?;
 
-        if matches!(sock.status(), SocketStatus::Listen) {
+        if matches!(sock.status().await, SocketStatus::Listen) {
             // For listen sockets, delete directly
             let sock_id = sock.id();
-            table.remove_by_id(sock_id);
+            drop(table);
+            self.sockets.write().await.remove_by_id(sock_id);
         } else {
             sock.close().await;
         }
@@ -243,14 +235,16 @@ impl Tcp {
                     .unwrap();
                 let table = self.sockets.read().await;
                 for (_, socket) in table.socket_map.iter() {
-                    f.write_all(format!("{}", socket).as_bytes()).await.unwrap();
+                    f.write_all(socket.as_table_entry_string().await.as_bytes())
+                        .await
+                        .unwrap();
                 }
             }
             None => {
                 println!("id\tstate\t\tlocal window size\tremote window size");
                 let table = self.sockets.read().await;
                 for (_, socket) in table.socket_map.iter() {
-                    println!("{}", socket);
+                    println!("{}", socket.as_table_entry_string().await);
                 }
             }
         }
@@ -272,31 +266,8 @@ impl<'a> Deref for SocketRef<'a> {
     }
 }
 
-pub struct MutSocketRef<'a> {
-    _guard: RwLockWriteGuard<'a, SocketTable>,
-    socket: *mut Socket,
-}
-
-/// SAFETY: its write-guard member is Send
-unsafe impl<'a> Send for MutSocketRef<'a> {}
-
-impl<'a> Deref for MutSocketRef<'a> {
-    type Target = Socket;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: this socket pointer is valid because this struct holds a
-        // write guard to the socket table, where this socket resides.
-        unsafe { &*self.socket }
-    }
-}
-
-impl<'a> DerefMut for MutSocketRef<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: this socket pointer is valid because this struct holds a
-        // write guard to the socket table, where this socket resides.
-        unsafe { &mut *self.socket }
-    }
-}
+// SAFETY: this can be sent across threads because RwLockReadGuard is Send.
+unsafe impl<'a> Send for SocketRef<'a> {}
 
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct SocketId {
@@ -464,22 +435,9 @@ impl SocketTable {
             .and_then(|sock_id| self.socket_map.get(sock_id))
     }
 
-    pub fn get_mut_socket_by_id(&mut self, id: SocketId) -> Option<&mut Socket> {
-        self.socket_map.get_mut(&id)
-    }
-
-    pub fn get_mut_socket_by_descriptor(
-        &mut self,
-        descriptor: SocketDescriptor,
-    ) -> Option<&mut Socket> {
-        self.socket_id_map
-            .get(&descriptor)
-            .and_then(|port| self.socket_map.get_mut(port))
-    }
-
-    pub fn get_mut_listener_socket(&mut self, port: Port) -> Option<&mut Socket> {
+    pub fn get_listener_socket(&self, port: Port) -> Option<&Socket> {
         let id = SocketId::for_listen_socket(port);
-        self.get_mut_socket_by_id(id)
+        self.get_socket_by_id(id)
     }
 
     fn insert(
@@ -592,15 +550,14 @@ impl ProtocolHandler for TcpHandler {
             log::error!("TCP checksum failed");
             // TODO: do not proceed if checksum fails
         } else {
-            let mut sockets = self.tcp.sockets.write().await;
-            let action = match sockets.get_mut_socket_by_id(sock_id) {
+            let sockets = self.tcp.sockets.read().await;
+            let action = match sockets.get_socket_by_id(sock_id) {
                 Some(socket) => {
                     socket
                         .handle_packet(ip_header, &tcp_header, tcp_payload)
                         .await
                 }
-                None => match sockets.get_mut_listener_socket(tcp_header.destination_port().into())
-                {
+                None => match sockets.get_listener_socket(tcp_header.destination_port().into()) {
                     Some(listener_sock) => {
                         listener_sock
                             .handle_packet(ip_header, &tcp_header, payload)
@@ -616,7 +573,11 @@ impl ProtocolHandler for TcpHandler {
             if let Some(action) = action {
                 match action {
                     UpdateAction::NewSynReceivedSocket(syn_recvd) => {
-                        sockets
+                        drop(sockets);
+                        self.tcp
+                            .sockets
+                            .write()
+                            .await
                             .add_new_syn_recvd_socket(
                                 Remote::new(
                                     ip_header.source_addr(),

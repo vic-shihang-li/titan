@@ -7,7 +7,6 @@ use crate::utils::sync::RaceOneShotSender;
 use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
-use std::fmt::Display;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -204,7 +203,6 @@ impl<const N: usize> InnerTcpConn<N> {
                 },
             }
         }
-        eprintln!("Finished filling recv_buff");
         Ok(())
     }
 
@@ -1186,7 +1184,7 @@ pub enum UpdateAction {
 pub struct Socket {
     id: SocketId,
     descriptor: SocketDescriptor,
-    state: Option<TcpState>,
+    state: Mutex<Option<TcpState>>,
 }
 
 impl Socket {
@@ -1194,7 +1192,7 @@ impl Socket {
         Self {
             id,
             descriptor,
-            state: Some(TcpState::new(router)),
+            state: Mutex::new(Some(TcpState::new(router))),
         }
     }
 
@@ -1202,21 +1200,24 @@ impl Socket {
         Self {
             id,
             descriptor,
-            state: Some(state),
+            state: Mutex::new(Some(state)),
         }
     }
 
-    pub fn listen(&mut self, port: Port) -> Result<TcpListener, ListenTransitionError> {
-        let state = self.state.take().unwrap();
+    pub async fn listen(&self, port: Port) -> Result<TcpListener, ListenTransitionError> {
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
+
         match state {
             TcpState::Closed(s) => {
                 let (new_conn_tx, new_conn_rx) = channel(1024);
                 let listener = TcpListener::new(new_conn_rx);
-                self.state = Some(s.listen(port, new_conn_tx).into());
+                let new_state: TcpState = s.listen(port, new_conn_tx).into();
+                *state_guard = Some(new_state);
                 Ok(listener)
             }
             _ => {
-                self.state = Some(state);
+                *state_guard = Some(state);
                 Err(ListenTransitionError::NotFromClosed)
             }
         }
@@ -1246,61 +1247,70 @@ impl Socket {
         (self.remote_ip(), self.remote_port())
     }
 
-    pub fn status(&self) -> SocketStatus {
-        SocketStatus::from(self.state.as_ref().unwrap())
+    pub async fn status(&self) -> SocketStatus {
+        let state_guard = self.state.lock().await;
+        SocketStatus::from((*state_guard).as_ref().unwrap())
     }
 
     pub async fn send_all(&self, payload: &[u8]) -> Result<(), TcpSendError> {
-        match self.state.as_ref().unwrap() {
-            TcpState::Established(s) => s.conn.send_all(payload).await,
-            TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
-                Err(TcpSendError::ConnNotEstablished)
+        let conn = {
+            let state_guard = self.state.lock().await;
+            match (*state_guard).as_ref().unwrap() {
+                TcpState::Established(s) => s.conn.clone(),
+                TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
+                    return Err(TcpSendError::ConnNotEstablished)
+                }
+                _ => return Err(TcpSendError::ConnClosed),
             }
-            _ => Err(TcpSendError::ConnClosed),
-        }
+        };
+        conn.send_all(payload).await
     }
 
     /// Reads N bytes from the connection, where N is `out_buffer`'s size.
     pub async fn read_all(&self, out_buffer: &mut [u8]) -> Result<(), TcpReadError> {
-        match self.state.as_ref().unwrap() {
-            TcpState::Established(s) => s.conn.read_all(out_buffer).await,
-            TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
-                Err(TcpReadError::ConnNotEstablished)
+        let conn = {
+            let state_guard = self.state.lock().await;
+            match (*state_guard).as_ref().unwrap() {
+                TcpState::Established(s) => s.conn.clone(),
+                TcpState::Listen(_) | TcpState::SynSent(_) | TcpState::SynReceived(_) => {
+                    return Err(TcpReadError::ConnNotEstablished)
+                }
+                _ => return Err(TcpReadError::Closed(0)),
             }
-            _ => Err(TcpReadError::Closed(0)),
-        }
+        };
+        conn.read_all(out_buffer).await
     }
 
     pub async fn initiate_connection(
-        &mut self,
+        &self,
     ) -> Result<oneshot::Receiver<Result<TcpConn, TcpConnError>>, TcpConnError> {
-        let state = self.state.take().unwrap();
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
         match state {
             TcpState::Closed(s) => {
                 let (established_rx, syn_sent) = s
                     .connect(self.local_port(), self.remote_ip_port())
                     .await
                     .map_err(TcpConnError::Transport)?;
-                self.state = Some(syn_sent.into());
+                *state_guard = Some(syn_sent.into());
                 Ok(established_rx)
             }
             _ => {
-                self.state = Some(state);
+                *state_guard = Some(state);
                 Err(TcpConnError::ConnectionExists(self.id.remote()))
             }
         }
     }
 
     pub async fn handle_packet<'a>(
-        &mut self,
+        &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) -> Option<UpdateAction> {
-        let state = self
-            .state
-            .take()
-            .expect("A socket should not handle packets concurrently");
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
+
         let (next_state, action) = match state {
             TcpState::Closed(_) => {
                 panic!("Should not receive packet under closed state");
@@ -1340,65 +1350,66 @@ impl Socket {
             TcpState::CloseWait(s) => todo!(),
             TcpState::LastAck(s) => (s.handle_ack().into(), None), //TODO return action that triggers socket table pruning
         };
-        self.state = Some(next_state);
+
+        *state_guard = Some(next_state);
         action
     }
 
-    pub async fn close(&mut self) {
-        let state = self.state.take().unwrap();
+    pub async fn close(&self) {
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
         match state {
             TcpState::Established(s) => {
                 let state = s.active_close().await;
-                self.state = Some(state.into());
+                *state_guard = Some(state.into());
             }
             _ => {
-                self.state = Some(state);
+                *state_guard = Some(state);
                 eprintln!("Should not be able to close a connection that's not established");
             }
         }
     }
 
-    pub async fn close_read(&mut self) {
-        let state = self.state.take().unwrap();
+    pub async fn close_read(&self) {
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
         match state {
             TcpState::Established(s) => {
                 s.close_read().await;
-                self.state = Some(s.into());
+                *state_guard = Some(s.into());
             }
             _ => {
-                self.state = Some(state);
+                *state_guard = Some(state);
                 eprintln!("Should not be able to close a connection that's not established");
             }
         }
     }
 
-    pub async fn close_rw(&mut self) {
-        let state = self.state.take().unwrap();
+    pub async fn close_rw(&self) {
+        let mut state_guard = self.state.lock().await;
+        let state = state_guard.take().expect("State should exist");
         match state {
             TcpState::Established(s) => {
                 s.close_read().await;
                 let state = s.active_close().await;
-                self.state = Some(state.into());
+                *state_guard = Some(state.into());
             }
             _ => {
-                self.state = Some(state);
+                *state_guard = Some(state);
                 eprintln!("Should not be able to close a connection that's not established");
             }
         }
     }
-}
 
-impl Display for Socket {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub async fn as_table_entry_string(&self) -> String {
         let id = self.descriptor.0;
-        let state = SocketStatus::from(self.state.as_ref().unwrap());
+        let state = self.status().await;
 
         // TODO: print actual window sizes
         let local_window_sz = 0;
         let remote_window_sz = 0;
 
-        write!(
-            f,
+        format!(
             "{}\t{:?}\t\t{}\t\t\t{}",
             id, state, local_window_sz, remote_window_sz
         )

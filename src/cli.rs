@@ -343,8 +343,8 @@ impl Cli {
     }
 
     async fn shutdown(&self, descriptor: SocketDescriptor, option: TcpShutdownKind) {
-        match self.node.get_socket_mut_by_descriptor(descriptor).await {
-            Some(mut socket) => match option {
+        match self.node.get_socket_by_descriptor(descriptor).await {
+            Some(socket) => match option {
                 TcpShutdownKind::Read => socket.close_read().await,
                 TcpShutdownKind::Write => socket.close().await,
                 TcpShutdownKind::ReadWrite => socket.close_rw().await,
