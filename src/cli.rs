@@ -11,7 +11,6 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::str::SplitWhitespace;
 use std::sync::Arc;
-use tokio::sync::mpsc::{channel, Sender};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -138,18 +137,12 @@ pub struct IPv4SendCmd {
     payload: String,
 }
 
-pub struct CommandParser {
-    tx: Sender<Command>,
-}
-
-impl CommandParser {
-    fn new(tx: Sender<Command>) -> Self {
-        Self { tx }
-    }
+pub struct Cli {
+    node: Arc<Node>,
 }
 
 #[async_trait]
-impl HandleUserInput for CommandParser {
+impl HandleUserInput for Cli {
     async fn handle(
         &mut self,
         user_input: String,
@@ -157,11 +150,7 @@ impl HandleUserInput for CommandParser {
         match Self::parse_command(user_input) {
             Ok(Command::Quit) => return Err(HandleUserInputError::Terminate),
             Ok(Command::None) => (),
-            Ok(cmd) => self
-                .tx
-                .send(cmd)
-                .await
-                .expect("Command should have a receiver"),
+            Ok(cmd) => self.execute_command(cmd).await,
             Err(e) => {
                 eprintln!("{e}");
             }
@@ -171,36 +160,24 @@ impl HandleUserInput for CommandParser {
     }
 }
 
-impl CommandParser {
+impl Cli {
+    pub fn new(node: Arc<Node>) -> Self {
+        Self { node }
+    }
+
+    pub async fn run(self) {
+        let h = tokio::spawn(async move {
+            Repl::new(self, Some(">> ".into())).serve().await;
+        });
+        h.await.expect("CLI should not panic");
+    }
+
     fn parse_command(line: String) -> Result<Command, ParseError> {
         let mut tokens = line.split_whitespace();
         let c = tokens.next();
         match c {
             Some(cmd) => cmd_arg_handler(cmd, tokens),
             None => Ok(Command::None),
-        }
-    }
-}
-
-pub struct Cli {
-    node: Arc<Node>,
-}
-
-impl Cli {
-    pub fn new(node: Arc<Node>) -> Self {
-        Self { node }
-    }
-
-    pub async fn run(&self) {
-        let (repl_tx, mut repl_rx) = channel(1024);
-        tokio::spawn(async move {
-            Repl::new(CommandParser::new(repl_tx), Some(">> ".into()))
-                .serve()
-                .await;
-        });
-
-        while let Some(cmd) = repl_rx.recv().await {
-            self.execute_command(cmd).await;
         }
     }
 
@@ -867,26 +844,26 @@ mod tests {
     #[test]
     fn parse_connect() {
         assert_eq!(
-            CommandParser::parse_command("c".into()).unwrap_err(),
+            Cli::parse_command("c".into()).unwrap_err(),
             ParseConnectError::NoIp.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("c 1".into()).unwrap_err(),
+            Cli::parse_command("c 1".into()).unwrap_err(),
             ParseConnectError::InvalidIp.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("c 1.2.3.4".into()).unwrap_err(),
+            Cli::parse_command("c 1.2.3.4".into()).unwrap_err(),
             ParseConnectError::NoPort.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("c 1.2.3.4 ss".into()).unwrap_err(),
+            Cli::parse_command("c 1.2.3.4 ss".into()).unwrap_err(),
             ParseConnectError::InvalidPort.into()
         );
 
-        let c = CommandParser::parse_command("c 1.2.3.4 33".into()).unwrap();
+        let c = Cli::parse_command("c 1.2.3.4 33".into()).unwrap();
         let expected = Command::ConnectSocket(Ipv4Addr::new(1, 2, 3, 4), 33u16.into());
         assert_eq!(c, expected);
     }
@@ -894,21 +871,21 @@ mod tests {
     #[test]
     fn parse_tcp_send() {
         assert_eq!(
-            CommandParser::parse_command("s".into()).unwrap_err(),
+            Cli::parse_command("s".into()).unwrap_err(),
             ParseTcpSendError::NoSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("s ssss".into()).unwrap_err(),
+            Cli::parse_command("s ssss".into()).unwrap_err(),
             ParseTcpSendError::InvalidSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("s 33".into()).unwrap_err(),
+            Cli::parse_command("s 33".into()).unwrap_err(),
             ParseTcpSendError::NoPayload.into(),
         );
 
-        let c = CommandParser::parse_command("s 33 heehee".into()).unwrap();
+        let c = Cli::parse_command("s 33 heehee".into()).unwrap();
         let expected = Command::SendTCPPacket(
             SocketDescriptor(33),
             String::from("heehee").as_bytes().into(),
@@ -919,41 +896,41 @@ mod tests {
     #[test]
     fn parse_tcp_read() {
         assert_eq!(
-            CommandParser::parse_command("r".into()).unwrap_err(),
+            Cli::parse_command("r".into()).unwrap_err(),
             ParseTcpReadError::NoSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("r ssss".into()).unwrap_err(),
+            Cli::parse_command("r ssss".into()).unwrap_err(),
             ParseTcpReadError::InvalidSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("r 33".into()).unwrap_err(),
+            Cli::parse_command("r 33".into()).unwrap_err(),
             ParseTcpReadError::NoNumBytesToRead.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("r 33 heehee".into()).unwrap_err(),
+            Cli::parse_command("r 33 heehee".into()).unwrap_err(),
             ParseTcpReadError::InvalidNumBytesToRead.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("r 33 100 n".into()).unwrap_err(),
+            Cli::parse_command("r 33 100 n".into()).unwrap_err(),
             ParseTcpReadError::InvalidBlockingIndicator.into()
         );
 
-        let c = CommandParser::parse_command("r 33 100 y".into()).unwrap();
+        let c = Cli::parse_command("r 33 100 y".into()).unwrap();
         assert_eq!(
             c,
             TcpReadCmd::new_blocking(SocketDescriptor(33), 100).into()
         );
-        let c = CommandParser::parse_command("r 33 100 N".into()).unwrap();
+        let c = Cli::parse_command("r 33 100 N".into()).unwrap();
         assert_eq!(
             c,
             TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
         );
-        let c = CommandParser::parse_command("r 33 100".into()).unwrap();
+        let c = Cli::parse_command("r 33 100".into()).unwrap();
         assert_eq!(
             c,
             TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
@@ -963,51 +940,51 @@ mod tests {
     #[test]
     fn parse_tcp_shutdown() {
         assert_eq!(
-            CommandParser::parse_command("sd".into()).unwrap_err(),
+            Cli::parse_command("sd".into()).unwrap_err(),
             ParseTcpShutdownError::NoSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sd ss".into()).unwrap_err(),
+            Cli::parse_command("sd ss".into()).unwrap_err(),
             ParseTcpShutdownError::InvalidSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sd 3 yes".into()).unwrap_err(),
+            Cli::parse_command("sd 3 yes".into()).unwrap_err(),
             ParseTcpShutdownError::InvalidShutdownType("yes".into()).into(),
         );
 
-        let c = CommandParser::parse_command("sd 3".into()).unwrap();
+        let c = Cli::parse_command("sd 3".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
         );
 
-        let c = CommandParser::parse_command("sd 3 r".into()).unwrap();
+        let c = Cli::parse_command("sd 3 r".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
         );
 
-        let c = CommandParser::parse_command("sd 3 read".into()).unwrap();
+        let c = Cli::parse_command("sd 3 read".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Read)
         );
 
-        let c = CommandParser::parse_command("sd 3 w".into()).unwrap();
+        let c = Cli::parse_command("sd 3 w".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
         );
 
-        let c = CommandParser::parse_command("sd 3 write".into()).unwrap();
+        let c = Cli::parse_command("sd 3 write".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::Write)
         );
 
-        let c = CommandParser::parse_command("sd 3 both".into()).unwrap();
+        let c = Cli::parse_command("sd 3 both".into()).unwrap();
         assert_eq!(
             c,
             Command::Shutdown(SocketDescriptor(3), TcpShutdownKind::ReadWrite)
@@ -1017,47 +994,47 @@ mod tests {
     #[test]
     fn parse_close_socket() {
         assert_eq!(
-            CommandParser::parse_command("cl".into()).unwrap_err(),
+            Cli::parse_command("cl".into()).unwrap_err(),
             ParseTcpShutdownError::NoSocketDescriptor.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("cl xx".into()).unwrap_err(),
+            Cli::parse_command("cl xx".into()).unwrap_err(),
             ParseTcpShutdownError::InvalidSocketDescriptor.into(),
         );
 
-        let c = CommandParser::parse_command("cl 33".into()).unwrap();
+        let c = Cli::parse_command("cl 33".into()).unwrap();
         assert_eq!(c, Command::Close(SocketDescriptor(33)));
     }
 
     #[test]
     fn parse_send_file() {
         assert_eq!(
-            CommandParser::parse_command("sf".into()).unwrap_err(),
+            Cli::parse_command("sf".into()).unwrap_err(),
             ParseSendFileError::NoFile.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sf hello_world".into()).unwrap_err(),
+            Cli::parse_command("sf hello_world".into()).unwrap_err(),
             ParseSendFileError::NoIp.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sf hello_world 121".into()).unwrap_err(),
+            Cli::parse_command("sf hello_world 121".into()).unwrap_err(),
             ParseSendFileError::InvalidIp.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sf hello_world 1.2.3.4".into()).unwrap_err(),
+            Cli::parse_command("sf hello_world 1.2.3.4".into()).unwrap_err(),
             ParseSendFileError::NoPort.into(),
         );
 
         assert_eq!(
-            CommandParser::parse_command("sf hello_world 1.2.3.4 xxx".into()).unwrap_err(),
+            Cli::parse_command("sf hello_world 1.2.3.4 xxx".into()).unwrap_err(),
             ParseSendFileError::InvalidPort.into(),
         );
 
-        let c = CommandParser::parse_command("sf hello 1.2.3.4 3434".into()).unwrap();
+        let c = Cli::parse_command("sf hello 1.2.3.4 3434".into()).unwrap();
         assert_eq!(
             c,
             Command::SendFile(SendFileCmd::new(
@@ -1071,21 +1048,21 @@ mod tests {
     #[test]
     fn parse_recv_file() {
         assert_eq!(
-            CommandParser::parse_command("rf".into()).unwrap_err(),
+            Cli::parse_command("rf".into()).unwrap_err(),
             ParseRecvFileError::NoFile.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("rf hello".into()).unwrap_err(),
+            Cli::parse_command("rf hello".into()).unwrap_err(),
             ParseRecvFileError::NoPort.into()
         );
 
         assert_eq!(
-            CommandParser::parse_command("rf hello xx".into()).unwrap_err(),
+            Cli::parse_command("rf hello xx".into()).unwrap_err(),
             ParseRecvFileError::InvalidPort.into()
         );
 
-        let c = CommandParser::parse_command("rf hello 5000".into()).unwrap();
+        let c = Cli::parse_command("rf hello 5000".into()).unwrap();
         assert_eq!(
             c,
             Command::RecvFile(RecvFileCmd::new(String::from("hello"), Port(5000)))
