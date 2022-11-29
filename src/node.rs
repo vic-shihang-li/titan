@@ -1,6 +1,6 @@
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
-use tokio::fs::{self, File};
-use tokio::io::AsyncWriteExt;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
@@ -250,11 +250,16 @@ impl Node {
     }
 
     pub async fn send_file(&self, cmd: SendFileCmd) -> Result<(), SendFileError> {
-        let input = fs::read_to_string(&cmd.path)
+        let mut f = File::open(&cmd.path)
             .await
             .map_err(SendFileError::OpenFile)?;
 
-        self.connect_and_send_bytes(Remote::new(cmd.dest_ip, cmd.port), input.as_bytes())
+        let mut input = Vec::new();
+        f.read_to_end(&mut input)
+            .await
+            .map_err(SendFileError::ReadFile)?;
+
+        self.connect_and_send_bytes(Remote::new(cmd.dest_ip, cmd.port), &input)
             .await
     }
 

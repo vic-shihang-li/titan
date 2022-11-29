@@ -42,6 +42,7 @@ pub enum TcpShutdownKind {
 #[derive(Debug)]
 pub enum SendFileError {
     OpenFile(std::io::Error),
+    ReadFile(std::io::Error),
     Connect(TcpConnError),
     Send(TcpSendError),
 }
