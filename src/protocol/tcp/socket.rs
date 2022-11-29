@@ -1399,7 +1399,7 @@ impl Display for Socket {
 
         write!(
             f,
-            "{}\t{:?}\t{}\t{}",
+            "{}\t{:?}\t\t{}\t\t\t{}",
             id, state, local_window_sz, remote_window_sz
         )
     }

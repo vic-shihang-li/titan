@@ -239,7 +239,7 @@ impl Tcp {
         match file {
             Some(file) => {
                 let mut f = File::create(file).await.unwrap();
-                f.write_all(b"id\t\tstate\t\tlocal window size\t\tremote window size\n")
+                f.write_all(b"id\tstate\tlocal window size\tremote window size\n")
                     .await
                     .unwrap();
                 let table = self.sockets.read().await;
@@ -248,7 +248,7 @@ impl Tcp {
                 }
             }
             None => {
-                println!("id\t\tstate\t\tlocal window size\t\tremote window size");
+                println!("id\tstate\t\tlocal window size\tremote window size");
                 let table = self.sockets.read().await;
                 for (_, socket) in table.socket_map.iter() {
                     println!("{}", socket);
