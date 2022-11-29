@@ -200,6 +200,11 @@ impl Tcp {
         })
     }
 
+    pub async fn get_socket_descriptor(&self, socket_id: SocketId) -> Option<SocketDescriptor> {
+        let table = self.sockets.read().await;
+        table.socket_map.get(&socket_id).map(|s| s.descriptor())
+    }
+
     pub async fn close(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
         let mut table = self.sockets.write().await;
         let sock = table
@@ -586,10 +591,8 @@ impl ProtocolHandler for TcpHandler {
                 .unwrap()
         {
             log::error!("TCP checksum failed");
-            eprintln!("CHECKSUM FAILED")
             // TODO: do not proceed if checksum fails
         } else {
-            eprintln!("CHECKSUM PASSED");
             let mut sockets = self.tcp.sockets.write().await;
             let action = match sockets.get_mut_socket_by_id(sock_id) {
                 Some(socket) => {

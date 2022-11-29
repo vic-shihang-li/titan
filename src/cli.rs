@@ -360,8 +360,18 @@ impl Cli {
     }
 
     async fn connect(&self, ip: Ipv4Addr, port: Port) {
-        if let Err(e) = self.node.connect(ip, port).await {
-            eprintln!("Failed to connect to {}:{}. Error: {:?}", ip, port.0, e)
+        match self.node.connect(ip, port).await {
+            Ok(conn) => {
+                let socket_descriptor = self
+                    .node
+                    .get_socket_descriptor(conn.socket_id())
+                    .await
+                    .unwrap();
+                eprintln!("Connection established. ID: {}", socket_descriptor.0);
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to {}:{}. Error: {:?}", ip, port.0, e)
+            }
         }
     }
 

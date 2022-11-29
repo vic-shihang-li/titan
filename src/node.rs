@@ -218,6 +218,10 @@ impl Node {
             .await
     }
 
+    pub async fn get_socket_descriptor(&self, socket_id: SocketId) -> Option<SocketDescriptor> {
+        self.tcp.get_socket_descriptor(socket_id).await
+    }
+
     pub async fn run(&self) {
         let mut listener = self.net.listen().await;
         while let Ok(bytes) = listener.recv().await {
