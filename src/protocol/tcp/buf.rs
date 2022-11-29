@@ -513,6 +513,7 @@ impl<const N: usize> InnerSendBuf<N> {
         if seq_no == self.tail {
             return Ok(false);
         }
+        eprintln!("SEQ NO: {}", seq_no);
 
         if seq_no > self.head {
             Err(SetTailError::TooBig)

@@ -204,7 +204,7 @@ impl<const N: usize> InnerTcpConn<N> {
                 },
             }
         }
-
+        eprintln!("Finished filling recv_buff");
         Ok(())
     }
 
@@ -215,7 +215,7 @@ impl<const N: usize> InnerTcpConn<N> {
         payload: &[u8],
     ) {
         assert!(tcp_header.ack());
-
+        eprintln!("within innerTCPConn");
         self.send_buf.set_window_size(tcp_header.window_size());
         self.update_last_acked_byte(tcp_header.acknowledgment_number())
             .await;
@@ -226,6 +226,7 @@ impl<const N: usize> InnerTcpConn<N> {
         }
 
         if self.ack_policy.should_ack() {
+            eprintln!("Acking");
             self.should_ack.send(()).unwrap();
         }
     }
@@ -509,9 +510,9 @@ impl Closed {
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
         header.syn = true;
-
         let payload: &[u8]  = &[];
         let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        println!("SRC_IP: {:?}, DST_IP: {}", src_ip, dst_ip);
         let checksum = header.calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload).unwrap();
         header.checksum = checksum;
         header.write(&mut bytes).unwrap();
@@ -519,7 +520,9 @@ impl Closed {
     }
 
     fn gen_rand_seq_no() -> u32 {
-        thread_rng().gen_range(0..u16::MAX).into()
+        let num = thread_rng().gen_range(0..u16::MAX).into();
+        eprintln!("RANDOM SEQ NUM: {}", num);
+        num
     }
 }
 
@@ -550,7 +553,7 @@ impl Listen {
             self.router.clone(),
             RetransmissionConfig::default(),
             move |_| {
-                // TODO: delete SynReceived socket
+                // TODO: delete SynReceived socketx
             },
         );
 
@@ -744,6 +747,8 @@ impl Established {
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) -> TcpState {
+        eprintln!("an established socket is handling this packet");
+        eprintln!("packet data: {:?}", payload);
         if tcp_header.fin() {
             return self.passive_close(tcp_header).await.into();
         }
@@ -1225,7 +1230,7 @@ impl Socket {
             .state
             .take()
             .expect("A socket should not handle packets concurrently");
-
+        eprintln!("a non-listener socket is handling this packet");
         let (next_state, action) = match state {
             TcpState::Closed(_) => {
                 panic!("Should not receive packet under closed state");

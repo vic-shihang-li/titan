@@ -324,10 +324,13 @@ impl Cli {
             }
         } else {
             let node = self.node.clone();
+            eprintln!("NON-BLOCKING READ");
             tokio::spawn(async move {
+                eprintln!("SPAWNING THREAD TO READ");
                 match node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
                     Ok(bytes) => {
-                        println!("{}", String::from_utf8_lossy(&bytes))
+                        println!("FINISHED READING");
+                        println!("{}", String::from_utf8_lossy(&bytes));
                     }
                     Err(e) => {
                         eprintln!("Failed to read: {:?}", e);
