@@ -339,8 +339,11 @@ impl Cli {
     }
 
     async fn open_listen_socket_on(&self, port: Port) {
-        if let Err(e) = self.node.listen(port).await {
-            eprintln!("Failed to listen on port {}. Error: {:?}", port.0, e)
+        match self.node.listen(port).await {
+            Ok(_) => eprintln!("Listen socket opened on port {}", port.0),
+            Err(e) => {
+                eprintln!("Failed to listen on port {}. Error: {:?}", port.0, e)
+            }
         }
     }
 
