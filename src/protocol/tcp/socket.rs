@@ -828,7 +828,7 @@ impl Established {
         let remote = Remote::new(self.remote_ip, self.remote_port);
         let fin_seq_no_clone = fin_seq_no.clone();
         tokio::spawn(async move {
-            let fin_seq_no = conn.drain_content_on_close().await + 1;
+            let fin_seq_no = conn.drain_content_on_close().await;
             let fin_packet = Self::make_shutdown_fin_packet(
                 fin_seq_no,
                 local_port,
