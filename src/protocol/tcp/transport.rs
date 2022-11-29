@@ -230,7 +230,6 @@ impl<const N: usize> TcpTransport<N> {
         let window_sz = self.recv_buf.window_size().await.try_into().unwrap();
 
         let mut header = TcpHeader::new(src_port, dst_port, seq_no, window_sz);
-        header.syn = true;
         header.ack = true;
         header.acknowledgment_number = self.recv_buf.head().await.try_into().unwrap();
         header
