@@ -283,8 +283,7 @@ impl<const N: usize> InnerTcpConn<N> {
 
 impl<const N: usize> Drop for InnerTcpConn<N> {
     fn drop(&mut self) {
-        // TODO: notify transport worker for shutdown
-        // self.transport_worker.abort();
+        self.transport_worker.abort();
     }
 }
 

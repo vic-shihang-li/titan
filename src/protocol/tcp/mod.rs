@@ -1,4 +1,3 @@
-// TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
 #[allow(dead_code, unused_variables)]
