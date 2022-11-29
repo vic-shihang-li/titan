@@ -10,8 +10,8 @@ use ip::Args;
 use cli::Cli;
 use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};
 
-const RIP_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
-const ROUTING_ENTRY_MAX_AGE: Duration = Duration::from_secs(2);
+const RIP_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
+const ROUTING_ENTRY_MAX_AGE: Duration = Duration::from_secs(12);
 
 #[tokio::main]
 async fn main() {

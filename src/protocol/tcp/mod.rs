@@ -163,6 +163,7 @@ impl Tcp {
             .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
 
         let mut out_buf = vec![0; n_bytes];
+        eprintln!("Reading tcp socket");
         socket.read_all(&mut out_buf).await?;
 
         Ok(out_buf)
@@ -659,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_file() {
-        let test_file_size = 50_000_000;
+        let test_file_size = 1_000_000;
 
         for _ in 0..NUM_REPEATS {
             let f = test_send_file(make_in_mem_test_file(test_file_size), 0);
