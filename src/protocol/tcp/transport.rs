@@ -5,7 +5,11 @@ use std::{
 };
 
 use etherparse::TcpHeader;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{
+    broadcast,
+    broadcast::error::RecvError::{Closed, Lagged},
+    oneshot,
+};
 
 use crate::{
     protocol::Protocol,
@@ -98,8 +102,15 @@ impl<const N: usize> TcpTransport<N> {
                 _ = transmit_ack_interval.tick() => {
                     self.check_and_retransmit_ack().await;
                 }
-                _ = self.send_ack_request.recv() => {
-                    self.send_ack().await.ok();
+                o = self.send_ack_request.recv() => {
+                    match o {
+                        Ok(_) | Err(Lagged(_)) => {
+                            self.send_ack().await.ok();
+                        },
+                        Err(Closed) => {
+                            break; // connection closed
+                        }
+                    }
                 }
                 _ = retrans_interval.tick() => {
                     self.check_retransmission(&mut segment).await;
