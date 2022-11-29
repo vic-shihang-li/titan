@@ -103,6 +103,10 @@ impl TcpConn {
         self.inner.close_read().await.ok();
     }
 
+    pub fn is_read_closed(&self) -> bool {
+        self.inner.is_read_closed()
+    }
+
     async fn handle_packet<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
@@ -212,6 +216,10 @@ impl<const N: usize> InnerTcpConn<N> {
             }
         }
         Ok(())
+    }
+
+    fn is_read_closed(&self) -> bool {
+        self.recv_buf.closed()
     }
 
     async fn handle_packet<'a>(
@@ -483,6 +491,22 @@ impl TcpState {
             TcpState::TimeWait(s) => TCP_DEFAULT_WINDOW_SZ,
             TcpState::CloseWait(s) => s.conn.remote_window_sz().await,
             TcpState::LastAck(_) => TCP_DEFAULT_WINDOW_SZ,
+        }
+    }
+
+    fn is_read_closed(&self) -> Option<bool> {
+        match self {
+            TcpState::Closed(_) => None,
+            TcpState::SynSent(_) => None,
+            TcpState::SynReceived(_) => None,
+            TcpState::Established(s) => s.conn.is_read_closed().into(),
+            TcpState::Listen(_) => Some(true),
+            TcpState::FinWait1(s) => s.conn.is_read_closed().into(),
+            TcpState::FinWait2(s) => s.conn.is_read_closed().into(),
+            TcpState::Closing(s) => Some(true),
+            TcpState::TimeWait(s) => Some(true),
+            TcpState::CloseWait(s) => s.conn.is_read_closed().into(),
+            TcpState::LastAck(_) => None,
         }
     }
 }
@@ -1463,6 +1487,15 @@ impl Socket {
                 eprintln!("Should not be able to close a connection that's not established");
             }
         }
+    }
+
+    pub async fn is_read_closed(&self) -> Option<bool> {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .expect("State should exist")
+            .is_read_closed()
     }
 
     pub async fn as_table_entry_string(&self) -> String {

@@ -633,27 +633,33 @@ impl<const N: usize> RecvBuf<N> {
     ///
     /// Filling the buffer simultaneously advances the buffer tail: bytes, once
     /// consumed, are discarded from RecvBuf.
-    pub async fn try_fill<'a>(&'a self, dest: &'a mut [u8]) -> &'a [u8] {
+    pub async fn try_fill<'a>(&'a self, dest: &'a mut [u8]) -> Result<&'a [u8], RecvBufClosed> {
+        if self.closed() {
+            return Err(RecvBufClosed);
+        }
         let consumed = self.inner.lock().await.try_fill(dest);
         if !consumed.is_empty() {
             self.read.notify_all();
         }
-        consumed
+        Ok(consumed)
     }
 
     /// Try to write some bytes into the `dest` buffer, returning the number of
     /// bytes written.
     ///
     /// Blocks until at least one byte is written into `dest`.
-    pub async fn try_fill_some<'a>(&'a self, dest: &'a mut [u8]) -> usize {
+    pub async fn try_fill_some<'a>(&'a self, dest: &'a mut [u8]) -> Result<usize, RecvBufClosed> {
         assert!(!dest.is_empty());
 
         loop {
+            if self.closed() {
+                return Err(RecvBufClosed);
+            }
             let mut recv_buf = self.inner.lock().await;
             let consumed = recv_buf.try_fill(dest);
             if !consumed.is_empty() {
                 self.read.notify_all();
-                return consumed.len();
+                return Ok(consumed.len());
             }
             let written = self.written.notified();
             drop(recv_buf);
@@ -742,10 +748,6 @@ impl<const N: usize> RecvBuf<N> {
                 }
             }
         }
-    }
-
-    pub fn get_open_status(&self) -> Arc<AtomicBool> {
-        self.open.clone()
     }
 }
 
