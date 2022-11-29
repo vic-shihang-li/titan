@@ -712,7 +712,7 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(2)).await;
             {
                 let sock_ref = node.get_socket(socket_id).await.unwrap();
-                assert_eq!(sock_ref.status(), SocketStatus::FinWait2);
+                assert_eq!(sock_ref.status().await, SocketStatus::FinWait2);
             }
             close_barr.wait().await;
 
@@ -739,7 +739,7 @@ mod tests {
             // Remote should be in passvie close
             {
                 let sock_ref = node.get_socket(socket_id).await.unwrap();
-                assert_eq!(sock_ref.status(), SocketStatus::CloseWait);
+                assert_eq!(sock_ref.status().await, SocketStatus::CloseWait);
             }
             conn.send_all(&payload_clone).await.unwrap();
         });
