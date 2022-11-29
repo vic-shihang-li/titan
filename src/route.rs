@@ -324,15 +324,13 @@ impl Router {
         PacketDecision::Forward
     }
 
-    pub async fn find_src_vip_with_dest(&self, dest: Ipv4Addr) -> Option<[u8;4]> {
+    pub async fn find_src_vip_with_dest(&self, dest: Ipv4Addr) -> Option<[u8; 4]> {
         let rt = self.routes.read().await;
         if let Some(entry) = rt.find_entry_for(dest) {
-            match self.net.find_link_to(entry.next_hop).await {
-                Some(link) => {
-                    Some(link.source().octets())
-                }
-                None => None
-            }
+            self.net
+                .find_link_to(entry.next_hop)
+                .await
+                .map(|link| link.source().octets())
         } else {
             log::warn!("No route to {}, dropping packet", dest);
             None
