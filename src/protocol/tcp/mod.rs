@@ -163,7 +163,6 @@ impl Tcp {
             .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
 
         let mut out_buf = vec![0; n_bytes];
-        eprintln!("Reading tcp socket");
         socket.read_all(&mut out_buf).await?;
 
         Ok(out_buf)

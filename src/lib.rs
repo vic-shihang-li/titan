@@ -7,6 +7,7 @@ mod fixture;
 pub mod net;
 pub mod node;
 pub mod protocol;
+mod repl;
 pub mod route;
 mod utils;
 

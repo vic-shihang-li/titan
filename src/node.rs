@@ -195,7 +195,6 @@ impl Node {
         socket_descriptor: SocketDescriptor,
         n_bytes: usize,
     ) -> Result<Vec<u8>, TcpReadError> {
-        eprintln!("Reading off socket");
         self.tcp
             .read_on_socket_descriptor(socket_descriptor, n_bytes)
             .await
