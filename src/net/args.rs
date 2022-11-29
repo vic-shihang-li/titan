@@ -14,6 +14,7 @@ pub struct Args {
     pub host_port: u16,
     /// A list of the router's interfaces, ordered by their interface ID number.
     pub links: Vec<LinkDefinition>,
+    pub lossy: bool,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,7 @@ impl Args {
         Ok(Args {
             host_port: port,
             links,
+            lossy: false,
         })
     }
 
@@ -108,7 +110,13 @@ impl TryFrom<std::env::Args> for Args {
         let br =
             BufReader::new(File::open(link_file_path).map_err(ParseArgsError::OpenLinkFileError)?);
 
-        Args::try_parse(br)
+        let mut parsed_args = Args::try_parse(br)?;
+
+        if args.next().is_some() {
+            parsed_args.lossy = true;
+        }
+
+        Ok(parsed_args)
     }
 }
 
@@ -135,6 +143,7 @@ mod tests {
         assert_eq!(
             args,
             Args {
+                lossy: false,
                 host_port: 5001,
                 links: vec![
                     LinkDefinition {

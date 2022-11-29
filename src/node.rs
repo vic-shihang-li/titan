@@ -29,13 +29,15 @@ pub struct NodeBuilder<'a> {
 
 impl<'a> NodeBuilder<'a> {
     pub fn new(args: &'a Args) -> Self {
+        let drop_factor = if args.lossy { 5 } else { 0 };
+
         Self {
             args,
             built: false,
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
             entry_max_age: Duration::from_secs(12),
-            drop_factor: 0,
+            drop_factor,
             protocol_handlers: HashMap::new(),
         }
     }
