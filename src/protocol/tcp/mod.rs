@@ -1,4 +1,3 @@
-// TODO: remove this once the rest of TCP is implemented
 #[allow(dead_code)]
 mod buf;
 #[allow(dead_code, unused_variables)]
@@ -161,6 +160,14 @@ impl Tcp {
         let socket = sockets
             .get_socket_by_descriptor(socket_descriptor)
             .ok_or(TcpReadError::NoSocket(socket_descriptor))?;
+
+        if socket
+            .is_read_closed()
+            .await
+            .ok_or(TcpReadError::ConnNotEstablished)?
+        {
+            return Err(TcpReadError::Closed(0));
+        }
 
         let mut out_buf = vec![0; n_bytes];
         socket.read_all(&mut out_buf).await?;

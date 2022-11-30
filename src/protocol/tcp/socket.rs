@@ -87,6 +87,14 @@ impl TcpConn {
         self.socket_id
     }
 
+    pub fn remote(&self) -> &Remote {
+        &self.inner.remote
+    }
+
+    pub fn local_port(&self) -> Port {
+        self.inner.local_port
+    }
+
     /// Close the write-end of the socket.
     async fn close(&self) {
         self.inner.close().await.ok();
@@ -94,6 +102,10 @@ impl TcpConn {
 
     async fn close_read(&self) {
         self.inner.close_read().await.ok();
+    }
+
+    pub fn is_read_closed(&self) -> bool {
+        self.inner.is_read_closed()
     }
 
     async fn handle_packet<'a>(
@@ -107,16 +119,16 @@ impl TcpConn {
             .await
     }
 
-    pub fn remote(&self) -> &Remote {
-        &self.inner.remote
-    }
-
-    pub fn local_port(&self) -> Port {
-        self.inner.local_port
-    }
-
     async fn drain_content_on_close(&self) -> usize {
         self.inner.drain_content_on_close().await
+    }
+
+    async fn local_window_sz(&self) -> usize {
+        self.inner.local_window_sz().await
+    }
+
+    async fn remote_window_sz(&self) -> usize {
+        self.inner.remote_window_sz().await
     }
 }
 
@@ -207,6 +219,10 @@ impl<const N: usize> InnerTcpConn<N> {
         Ok(())
     }
 
+    fn is_read_closed(&self) -> bool {
+        self.recv_buf.closed()
+    }
+
     async fn handle_packet<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
@@ -264,12 +280,19 @@ impl<const N: usize> InnerTcpConn<N> {
     async fn drain_content_on_close(&self) -> usize {
         self.send_buf.wait_for_empty().await
     }
+
+    async fn local_window_sz(&self) -> usize {
+        self.recv_buf.window_size().await
+    }
+
+    async fn remote_window_sz(&self) -> usize {
+        self.send_buf.window_size().into()
+    }
 }
 
 impl<const N: usize> Drop for InnerTcpConn<N> {
     fn drop(&mut self) {
-        // TODO: notify transport worker for shutdown
-        // self.transport_worker.abort();
+        self.transport_worker.abort();
     }
 }
 
@@ -436,6 +459,56 @@ impl From<CloseWait> for TcpState {
 impl From<LastAck> for TcpState {
     fn from(s: LastAck) -> Self {
         Self::LastAck(s)
+    }
+}
+
+impl TcpState {
+    async fn local_window_sz(&self) -> usize {
+        match self {
+            TcpState::Closed(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::SynSent(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::SynReceived(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::Established(s) => s.conn.local_window_sz().await,
+            TcpState::Listen(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::FinWait1(s) => s.conn.local_window_sz().await,
+            TcpState::FinWait2(s) => s.conn.local_window_sz().await,
+            TcpState::Closing(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::TimeWait(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::CloseWait(s) => s.conn.local_window_sz().await,
+            TcpState::LastAck(_) => TCP_DEFAULT_WINDOW_SZ,
+        }
+    }
+
+    async fn remote_window_sz(&self) -> usize {
+        match self {
+            TcpState::Closed(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::SynSent(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::SynReceived(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::Established(s) => s.conn.remote_window_sz().await,
+            TcpState::Listen(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::FinWait1(s) => s.conn.remote_window_sz().await,
+            TcpState::FinWait2(s) => s.conn.remote_window_sz().await,
+            TcpState::Closing(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::TimeWait(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::CloseWait(s) => s.conn.remote_window_sz().await,
+            TcpState::LastAck(_) => TCP_DEFAULT_WINDOW_SZ,
+        }
+    }
+
+    fn is_read_closed(&self) -> Option<bool> {
+        match self {
+            TcpState::Closed(_) => None,
+            TcpState::SynSent(_) => None,
+            TcpState::SynReceived(_) => None,
+            TcpState::Established(s) => s.conn.is_read_closed().into(),
+            TcpState::Listen(_) => Some(true),
+            TcpState::FinWait1(s) => s.conn.is_read_closed().into(),
+            TcpState::FinWait2(s) => s.conn.is_read_closed().into(),
+            TcpState::Closing(s) => Some(true),
+            TcpState::TimeWait(s) => Some(true),
+            TcpState::CloseWait(s) => s.conn.is_read_closed().into(),
+            TcpState::LastAck(_) => None,
+        }
     }
 }
 
@@ -1434,17 +1507,47 @@ impl Socket {
         }
     }
 
+    pub async fn is_read_closed(&self) -> Option<bool> {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .expect("State should exist")
+            .is_read_closed()
+    }
+
     pub async fn as_table_entry_string(&self) -> String {
         let id = self.descriptor.0;
         let state = self.status().await;
 
-        // TODO: print actual window sizes
-        let local_window_sz = 0;
-        let remote_window_sz = 0;
+        let local_window_sz = self.local_window_sz().await;
+        let remote_window_sz = self.remote_window_sz().await;
 
         format!(
             "{}\t{:?}\t\t{}\t\t\t{}",
             id, state, local_window_sz, remote_window_sz
         )
+    }
+}
+
+impl Socket {
+    async fn local_window_sz(&self) -> usize {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .expect("State should exist")
+            .local_window_sz()
+            .await
+    }
+
+    async fn remote_window_sz(&self) -> usize {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .expect("State should exist")
+            .remote_window_sz()
+            .await
     }
 }
