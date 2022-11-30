@@ -548,7 +548,6 @@ impl ProtocolHandler for TcpHandler {
                 .unwrap()
         {
             log::error!("TCP checksum failed");
-            // TODO: do not proceed if checksum fails
         } else {
             let sockets = self.tcp.sockets.read().await;
             let action = match sockets.get_socket_by_id(sock_id) {
@@ -587,6 +586,10 @@ impl ProtocolHandler for TcpHandler {
                                 syn_recvd,
                             )
                             .unwrap();
+                    },
+                    UpdateAction::CloseSocket(id) => {
+                        drop(sockets);
+                        self.tcp.sockets.write().await.remove_by_id(id);
                     }
                 }
             }

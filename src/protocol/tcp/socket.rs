@@ -10,6 +10,7 @@ use std::cmp::min;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -1115,7 +1116,11 @@ impl Closing {
     }
 }
 
-struct TimeWait {}
+struct TimeWait {
+}
+
+impl TimeWait {
+}
 
 struct CloseWait {
     local_port: Port,
@@ -1128,7 +1133,7 @@ struct CloseWait {
 }
 
 impl CloseWait {
-    async fn close(&mut self, id: SocketId, local_port: Port) -> LastAck {
+    async fn close(&self, id: SocketId, local_port: Port) -> LastAck {
         let fin_packet = self
             .make_fin_packet(local_port, id.remote_port(), id.remote_ip())
             .await;
@@ -1162,6 +1167,7 @@ impl CloseWait {
             self.last_seq + 1,
             TCP_DEFAULT_WINDOW_SZ.try_into().unwrap(),
         );
+        header.ack = false;
         header.fin = true;
 
         let payload: &[u8] = &[];
@@ -1194,6 +1200,7 @@ pub enum ListenTransitionError {
 
 pub enum UpdateAction {
     NewSynReceivedSocket(SynReceived),
+    CloseSocket(SocketId)
 }
 
 pub struct Socket {
@@ -1353,7 +1360,14 @@ impl Socket {
                 (s.handle_packet(ip_header, tcp_header, payload).await, None)
             }
             TcpState::FinWait1(s) => (s.handle_packet(ip_header, tcp_header, payload).await, None),
-            TcpState::FinWait2(s) => (s.handle_packet(ip_header, tcp_header, payload).await, None),
+            TcpState::FinWait2(s) => {
+                let new_state = s.handle_packet(ip_header, tcp_header, payload).await;
+                match new_state {
+                    TcpState::TimeWait(state) => (state.into(), Some(UpdateAction::CloseSocket(self.id))),
+                    TcpState::FinWait2(state) => (state.into(), None),
+                    _ => (new_state, None),
+                }
+            },
             TcpState::Closing(s) => {
                 if tcp_header.ack() {
                     (s.handle_ack().into(), None)
@@ -1376,6 +1390,10 @@ impl Socket {
         match state {
             TcpState::Established(s) => {
                 let state = s.active_close().await;
+                *state_guard = Some(state.into());
+            }
+            TcpState::CloseWait(s) => {
+                let state = s.close(self.id, self.local_port()).await;
                 *state_guard = Some(state.into());
             }
             _ => {
