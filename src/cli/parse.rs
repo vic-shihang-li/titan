@@ -321,6 +321,9 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
             for token in tokens {
                 payload.push_str(token);
             }
+            if payload.is_empty() {
+                return Err(ParseSendError::NoPayload.into());
+            }
 
             let virtual_ip = virtual_ip.parse().map_err(|_| ParseSendError::InvalidIp)?;
             let protocol =
