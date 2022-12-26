@@ -230,6 +230,12 @@ impl From<ParseTcpShutdownError> for ParseError {
     }
 }
 
+impl From<ParseCloseError> for ParseError {
+    fn from(v: ParseCloseError) -> Self {
+        ParseError::TcpClose(v)
+    }
+}
+
 impl From<ParseSendFileError> for ParseError {
     fn from(v: ParseSendFileError) -> Self {
         ParseError::SendFile(v)
@@ -408,12 +414,10 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
             Ok(Command::Shutdown(sid, opt))
         }
         "cl" => {
-            let sid = tokens
-                .next()
-                .ok_or(ParseTcpShutdownError::NoSocketDescriptor)?;
+            let sid = tokens.next().ok_or(ParseCloseError::NoSocketDescriptor)?;
             let sid = SocketDescriptor(
                 sid.parse()
-                    .map_err(|_| ParseTcpShutdownError::InvalidSocketDescriptor)?,
+                    .map_err(|_| ParseCloseError::InvalidSocketDescriptor)?,
             );
 
             Ok(Command::Close(sid))
@@ -610,12 +614,12 @@ mod tests {
     fn parse_close_socket() {
         assert_eq!(
             parse_command("cl".into()).unwrap_err(),
-            ParseTcpShutdownError::NoSocketDescriptor.into(),
+            ParseCloseError::NoSocketDescriptor.into(),
         );
 
         assert_eq!(
             parse_command("cl xx".into()).unwrap_err(),
-            ParseTcpShutdownError::InvalidSocketDescriptor.into(),
+            ParseCloseError::InvalidSocketDescriptor.into(),
         );
 
         let c = parse_command("cl 33".into()).unwrap();
