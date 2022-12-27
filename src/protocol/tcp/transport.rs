@@ -1,5 +1,6 @@
 use std::{
-    cmp::min,
+    cmp::{min, Reverse},
+    collections::BinaryHeap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -21,6 +22,27 @@ use super::{
     Port, Remote, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ,
 };
 
+const TCP_DEFAULT_RETRANS_TICK_INTERVAL: Duration = Duration::from_millis(5);
+const TCP_DEFAULT_INITIAL_RTO: Duration = Duration::from_millis(10);
+
+#[derive(PartialEq, Eq)]
+struct RtxRequest {
+    deadline: Instant,
+    seq_no: usize,
+}
+
+impl PartialOrd for RtxRequest {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.deadline.partial_cmp(&other.deadline)
+    }
+}
+
+impl Ord for RtxRequest {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.deadline.cmp(&other.deadline)
+    }
+}
+
 pub struct TcpTransport<const N: usize> {
     send_buf: SendBuf<N>,
     recv_buf: RecvBuf<N>,
@@ -30,9 +52,11 @@ pub struct TcpTransport<const N: usize> {
     seq_no: usize,
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
-    retrans_interval: Duration,
+    // retransmission timeout
+    rto: Duration,
     zero_window_probe_interval: Duration,
     send_ack_request: broadcast::Receiver<()>,
+    rtx_timers: BinaryHeap<Reverse<RtxRequest>>,
     last_ack_transmitted: usize,
     remaining_window_sz: usize,
 }
@@ -61,10 +85,11 @@ impl<const N: usize> TcpTransport<N> {
             seq_no,
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
-            retrans_interval: Duration::from_millis(1),
+            rto: TCP_DEFAULT_INITIAL_RTO,
             zero_window_probe_interval: Duration::from_millis(1),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
+            rtx_timers: Default::default(),
             remaining_window_sz: TCP_DEFAULT_WINDOW_SZ,
         }
     }
@@ -76,7 +101,7 @@ impl<const N: usize> TcpTransport<N> {
         // Set upper bound on how long before acks are sent back to sender.
         let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
         let mut zero_window_probe_interval = tokio::time::interval(self.zero_window_probe_interval);
-        let mut retrans_interval = tokio::time::interval(self.retrans_interval);
+        let mut rtx_tick = tokio::time::interval(TCP_DEFAULT_RETRANS_TICK_INTERVAL);
         let mut window_sz_update = self.send_buf.window_size_update();
 
         loop {
@@ -112,7 +137,7 @@ impl<const N: usize> TcpTransport<N> {
                         }
                     }
                 }
-                _ = retrans_interval.tick() => {
+                _ = rtx_tick.tick() => {
                     self.check_retransmission(&mut segment).await;
                 }
             }
@@ -169,32 +194,41 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn check_retransmission(&mut self, segment_buf: &mut [u8]) {
-        let (tail, last_ack_update_time) = self.send_buf.get_tail_and_age().await;
-
-        if last_ack_update_time > self.retrans_interval {
-            match self.send_buf.try_slice(tail, segment_buf).await {
+        loop {
+            let Some(rtx_req) = self.rtx_timers.peek() else {
+                break;
+            };
+            if rtx_req.0.deadline > Instant::now() {
+                break;
+            }
+            let req = self.rtx_timers.pop().unwrap().0;
+            match self.send_buf.try_slice(req.seq_no, segment_buf).await {
                 Ok(_) => {
-                    self.send(tail, segment_buf).await.ok();
+                    // TODO: handle failure
+                    self.send(req.seq_no, segment_buf).await.unwrap();
                 }
                 Err(e) => match e {
                     SliceError::OutOfRange(remaining_sz) => {
+                        // not enough data to fill `segment_buf`.
                         if remaining_sz == 0 {
                             return;
                         }
                         // Drain all unacked bytes.
                         // Here, if try_slice() errs, the bytes trying to be
-                        // sliced must have been acked.
+                        // retransmitted must have been acked concurrently.
                         if self
                             .send_buf
-                            .try_slice(tail, &mut segment_buf[..remaining_sz])
+                            .try_slice(req.seq_no, &mut segment_buf[..remaining_sz])
                             .await
                             .is_ok()
                         {
-                            self.send(tail, &segment_buf[..remaining_sz]).await.ok();
+                            self.send(req.seq_no, &segment_buf[..remaining_sz])
+                                .await
+                                .ok();
                         }
                     }
                     SliceError::StartSeqTooLow(_) => {
-                        // OK. The segment to retransmit was just acked.
+                        // OK: data was acked
                     }
                 },
             }
@@ -222,7 +256,7 @@ impl<const N: usize> TcpTransport<N> {
             .router
             .find_src_vip_with_dest(self.remote.ip())
             .await
-            .unwrap();
+            .expect("Cannot find remote in the IP layer");
         let checksum = tcp_header
             .calc_checksum_ipv4_raw(src_ip, self.remote.ip().octets(), payload)
             .unwrap();
@@ -236,6 +270,12 @@ impl<const N: usize> TcpTransport<N> {
             .map(|_| {
                 self.last_transmitted = Instant::now();
                 self.last_ack_transmitted = ack.try_into().unwrap();
+                // TODO: make rto dynamic
+                let rto = self.last_transmitted + self.rto;
+                self.rtx_timers.push(Reverse(RtxRequest {
+                    deadline: rto,
+                    seq_no,
+                }));
             })
     }
 

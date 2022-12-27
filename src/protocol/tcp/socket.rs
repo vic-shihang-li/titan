@@ -133,7 +133,7 @@ impl TcpConn {
     }
 }
 
-const ACK_BATCH_SZ: usize = 10;
+const ACK_BATCH_SZ: usize = 0;
 
 #[derive(Debug)]
 struct InnerTcpConn<const N: usize> {
@@ -334,7 +334,7 @@ struct AckBatchPolicy<const LAG: usize> {
 
 impl<const LAG: usize> AckBatchPolicy<LAG> {
     fn should_ack(&self) -> bool {
-        self.count.fetch_add(1, Ordering::AcqRel) % LAG == 0
+        LAG == 0 || self.count.fetch_add(1, Ordering::AcqRel) % LAG == 0
     }
 }
 
