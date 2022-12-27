@@ -28,6 +28,7 @@ const TCP_DEFAULT_INITIAL_RTO: Duration = Duration::from_millis(10);
 #[derive(PartialEq, Eq)]
 struct RtxRequest {
     deadline: Instant,
+    tx_time: Instant,
     seq_no: usize,
 }
 
@@ -194,6 +195,9 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn check_retransmission(&mut self, segment_buf: &mut [u8]) {
+        let mut last_acked_tx_time = None;
+        let start_time = Instant::now();
+
         loop {
             let Some(rtx_req) = self.rtx_timers.peek() else {
                 break;
@@ -225,13 +229,22 @@ impl<const N: usize> TcpTransport<N> {
                             self.send(req.seq_no, &segment_buf[..remaining_sz])
                                 .await
                                 .ok();
+                        } else {
+                            // OK: data was acked
+                            last_acked_tx_time = Some(req.tx_time);
                         }
                     }
                     SliceError::StartSeqTooLow(_) => {
                         // OK: data was acked
+                        last_acked_tx_time = Some(req.tx_time);
                     }
                 },
             }
+        }
+
+        if let Some(last_acked_tx_time) = last_acked_tx_time {
+            let rtt = start_time - last_acked_tx_time;
+            // TODO: update RTO
         }
     }
 
@@ -273,6 +286,7 @@ impl<const N: usize> TcpTransport<N> {
                 // TODO: make rto dynamic
                 let rto = self.last_transmitted + self.rto;
                 self.rtx_timers.push(Reverse(RtxRequest {
+                    tx_time: self.last_transmitted,
                     deadline: rto,
                     seq_no,
                 }));
