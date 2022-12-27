@@ -1,6 +1,7 @@
 use crate::protocol::tcp::buf::{FillError, SetTailError, WriteRangeError};
+use crate::protocol::tcp::prelude::SocketIdBuilder;
 use crate::protocol::tcp::transport::RetransmissionConfig;
-use crate::protocol::tcp::{SocketIdBuilder, TcpAcceptError, TcpReadError, TcpSendError};
+use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::route::Router;
 use crate::utils::sync::RaceOneShotSender;
@@ -1189,11 +1190,9 @@ impl Closing {
     }
 }
 
-struct TimeWait {
-}
+struct TimeWait {}
 
-impl TimeWait {
-}
+impl TimeWait {}
 
 struct CloseWait {
     local_port: Port,
@@ -1273,7 +1272,7 @@ pub enum ListenTransitionError {
 
 pub enum UpdateAction {
     NewSynReceivedSocket(SynReceived),
-    CloseSocket(SocketId)
+    CloseSocket(SocketId),
 }
 
 pub struct Socket {
@@ -1436,11 +1435,13 @@ impl Socket {
             TcpState::FinWait2(s) => {
                 let new_state = s.handle_packet(ip_header, tcp_header, payload).await;
                 match new_state {
-                    TcpState::TimeWait(state) => (state.into(), Some(UpdateAction::CloseSocket(self.id))),
+                    TcpState::TimeWait(state) => {
+                        (state.into(), Some(UpdateAction::CloseSocket(self.id)))
+                    }
                     TcpState::FinWait2(state) => (state.into(), None),
                     _ => (new_state, None),
                 }
-            },
+            }
             TcpState::Closing(s) => {
                 if tcp_header.ack() {
                     (s.handle_ack().into(), None)

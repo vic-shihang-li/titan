@@ -1,9 +1,8 @@
 mod parse;
 
 use crate::node::Node;
-use crate::protocol::tcp::{
-    Port, SocketDescriptor, TcpAcceptError, TcpConnError, TcpListenError, TcpSendError,
-};
+use crate::protocol::tcp::prelude::{Port, SocketDescriptor};
+use crate::protocol::tcp::{TcpAcceptError, TcpConnError, TcpListenError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::repl::{HandleUserInput, HandleUserInputError, Repl};
 use async_trait::async_trait;

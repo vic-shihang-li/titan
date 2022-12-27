@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::SplitWhitespace};
 
 use crate::protocol::{
-    tcp::{Port, SocketDescriptor},
+    tcp::prelude::{Port, SocketDescriptor},
     Protocol,
 };
 
