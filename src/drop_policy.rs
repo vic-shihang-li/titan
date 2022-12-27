@@ -12,6 +12,7 @@ pub trait DropPolicy {
 pub struct NeverDrop;
 
 impl DropPolicy for NeverDrop {
+    #[inline]
     fn should_drop(&self, _ip_header: &Ipv4HeaderSlice<'_>) -> bool {
         false
     }
@@ -23,7 +24,9 @@ pub struct DropFactor {
     count: AtomicUsize,
 }
 
+#[allow(dead_code)]
 impl DropFactor {
+    /// Configure the router to drop 1 packet every `drop_factor` packets.
     pub fn new(drop_factor: usize) -> Self {
         Self {
             never_drop: drop_factor == 0,
@@ -31,9 +34,22 @@ impl DropFactor {
             count: AtomicUsize::new(0),
         }
     }
+
+    pub fn drop_20_pc() -> Self {
+        DropFactor::new(5)
+    }
+
+    pub fn drop_10_pc() -> Self {
+        DropFactor::new(10)
+    }
+
+    pub fn drop_50_pc() -> Self {
+        DropFactor::new(2)
+    }
 }
 
 impl DropPolicy for DropFactor {
+    #[inline]
     fn should_drop(&self, _ip_header: &Ipv4HeaderSlice<'_>) -> bool {
         if self.never_drop {
             return false;
