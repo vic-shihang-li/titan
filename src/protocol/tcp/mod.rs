@@ -1,7 +1,6 @@
 #[allow(dead_code)]
 mod buf;
 pub mod prelude;
-#[allow(dead_code, unused_variables)]
 mod socket;
 mod transport;
 

@@ -226,7 +226,7 @@ impl<const N: usize> InnerTcpConn<N> {
 
     async fn handle_packet<'a>(
         &self,
-        ip_header: &Ipv4HeaderSlice<'a>,
+        _ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
     ) {
@@ -473,8 +473,8 @@ impl TcpState {
             TcpState::Listen(_) => TCP_DEFAULT_WINDOW_SZ,
             TcpState::FinWait1(s) => s.conn.local_window_sz().await,
             TcpState::FinWait2(s) => s.conn.local_window_sz().await,
-            TcpState::Closing(s) => TCP_DEFAULT_WINDOW_SZ,
-            TcpState::TimeWait(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::Closing(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::TimeWait(_) => TCP_DEFAULT_WINDOW_SZ,
             TcpState::CloseWait(s) => s.conn.local_window_sz().await,
             TcpState::LastAck(_) => TCP_DEFAULT_WINDOW_SZ,
         }
@@ -489,8 +489,8 @@ impl TcpState {
             TcpState::Listen(_) => TCP_DEFAULT_WINDOW_SZ,
             TcpState::FinWait1(s) => s.conn.remote_window_sz().await,
             TcpState::FinWait2(s) => s.conn.remote_window_sz().await,
-            TcpState::Closing(s) => TCP_DEFAULT_WINDOW_SZ,
-            TcpState::TimeWait(s) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::Closing(_) => TCP_DEFAULT_WINDOW_SZ,
+            TcpState::TimeWait(_) => TCP_DEFAULT_WINDOW_SZ,
             TcpState::CloseWait(s) => s.conn.remote_window_sz().await,
             TcpState::LastAck(_) => TCP_DEFAULT_WINDOW_SZ,
         }
@@ -505,8 +505,8 @@ impl TcpState {
             TcpState::Listen(_) => Some(true),
             TcpState::FinWait1(s) => s.conn.is_read_closed().into(),
             TcpState::FinWait2(s) => s.conn.is_read_closed().into(),
-            TcpState::Closing(s) => Some(true),
-            TcpState::TimeWait(s) => Some(true),
+            TcpState::Closing(_) => Some(true),
+            TcpState::TimeWait(_) => Some(true),
             TcpState::CloseWait(s) => s.conn.is_read_closed().into(),
             TcpState::LastAck(_) => None,
         }
@@ -691,7 +691,6 @@ impl SynSent {
         self.syn_packet_rtx_handle.acked();
 
         let ack_pkt = self.make_ack_packet(syn_ack_packet, self.dest_ip).await;
-        let ack_no = syn_ack_packet.acknowledgment_number() + 1;
 
         self.router
             .send(&ack_pkt, Protocol::Tcp, self.dest_ip)
@@ -726,7 +725,6 @@ impl SynSent {
             remote_port: self.dest_port,
             conn,
             router: self.router,
-            last_ack: ack_no,
             last_seq: self.seq_no + 1,
         })
     }
@@ -800,7 +798,6 @@ impl SynReceived {
             remote_port: self.remote_port,
             conn,
             router: self.router,
-            last_ack: ack_packet.acknowledgment_number(),
             last_seq: self.seq_no,
         }
     }
@@ -815,7 +812,6 @@ struct Established {
     remote_ip: Ipv4Addr,
     remote_port: Port,
     conn: TcpConn,
-    last_ack: u32,
     last_seq: u32,
     router: Arc<Router>,
 }
@@ -853,10 +849,6 @@ impl Established {
         CloseWait {
             conn: self.conn,
             last_seq: self.last_seq,
-            last_ack: self.last_ack,
-            local_port: self.local_port,
-            remote_ip: self.remote_ip,
-            remote_port: self.remote_port,
             router: self.router,
         }
     }
@@ -1195,18 +1187,15 @@ struct TimeWait {}
 impl TimeWait {}
 
 struct CloseWait {
-    local_port: Port,
-    remote_ip: Ipv4Addr,
-    remote_port: Port,
     conn: TcpConn,
-    last_ack: u32,
     last_seq: u32,
     router: Arc<Router>,
 }
 
 impl CloseWait {
     async fn close(&self, id: SocketId, local_port: Port) -> LastAck {
-        let fin_packet = self
+        // FIXME: send this packet?
+        let _fin_packet = self
             .make_fin_packet(local_port, id.remote_port(), id.remote_ip())
             .await;
         self.conn.close().await;
