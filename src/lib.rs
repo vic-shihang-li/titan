@@ -8,7 +8,7 @@ pub mod net;
 pub mod node;
 pub mod protocol;
 mod repl;
-pub mod route;
+mod route;
 mod utils;
 
 pub use net::Args;
