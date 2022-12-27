@@ -9,13 +9,13 @@ use etherparse::{Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::{self, channel};
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
+use super::ack_policy::{self, AckPolicy};
 use super::buf::{RecvBuf, SendBuf};
 use super::transport::{transport_single_message, AckHandle, TcpTransport};
 use super::{
@@ -24,7 +24,7 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct TcpConn {
-    inner: Arc<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ>>,
+    inner: Arc<InnerTcpConn<TCP_DEFAULT_WINDOW_SZ, ack_policy::AlwaysAck>>,
     socket_id: SocketId,
 }
 
@@ -133,20 +133,18 @@ impl TcpConn {
     }
 }
 
-const ACK_BATCH_SZ: usize = 0;
-
 #[derive(Debug)]
-struct InnerTcpConn<const N: usize> {
+struct InnerTcpConn<const N: usize, A: AckPolicy> {
     send_buf: SendBuf<N>,
     recv_buf: RecvBuf<N>,
     remote: Remote,
     local_port: Port,
     transport_worker: JoinHandle<()>,
     should_ack: broadcast::Sender<()>,
-    ack_policy: AckBatchPolicy<ACK_BATCH_SZ>,
+    ack_policy: A,
 }
 
-impl<const N: usize> InnerTcpConn<N> {
+impl<const N: usize, A: AckPolicy + Default> InnerTcpConn<N, A> {
     fn new(
         remote: Remote,
         local_port: Port,
@@ -174,7 +172,7 @@ impl<const N: usize> InnerTcpConn<N> {
             local_port,
             transport_worker,
             should_ack: should_ack_tx,
-            ack_policy: AckBatchPolicy::<ACK_BATCH_SZ>::default(),
+            ack_policy: A::default(),
         }
     }
 
@@ -240,13 +238,13 @@ impl<const N: usize> InnerTcpConn<N> {
                 .await;
         }
 
-        if self.ack_policy.should_ack() {
+        if self.ack_policy.should_ack(tcp_header) {
             self.should_ack.send(()).unwrap();
         }
     }
 }
 
-impl<const N: usize> InnerTcpConn<N> {
+impl<const N: usize, A: AckPolicy> InnerTcpConn<N, A> {
     async fn update_last_acked_byte(&self, ack: u32) {
         if let Err(e) = self.send_buf.set_tail(ack.try_into().unwrap()).await {
             match e {
@@ -291,7 +289,7 @@ impl<const N: usize> InnerTcpConn<N> {
     }
 }
 
-impl<const N: usize> Drop for InnerTcpConn<N> {
+impl<const N: usize, A: AckPolicy> Drop for InnerTcpConn<N, A> {
     fn drop(&mut self) {
         self.transport_worker.abort();
     }
@@ -323,18 +321,6 @@ impl TcpListener {
             .recv()
             .await
             .ok_or(TcpAcceptError::ListenSocketClosed)
-    }
-}
-
-/// Utility that that allows a TcpConn to batch up to LAG Ack packets.
-#[derive(Default, Debug)]
-struct AckBatchPolicy<const LAG: usize> {
-    count: AtomicUsize,
-}
-
-impl<const LAG: usize> AckBatchPolicy<LAG> {
-    fn should_ack(&self) -> bool {
-        LAG == 0 || self.count.fetch_add(1, Ordering::AcqRel) % LAG == 0
     }
 }
 
