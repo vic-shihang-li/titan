@@ -4,7 +4,7 @@ pub mod cli;
 mod drop_policy;
 #[cfg(test)]
 mod fixture;
-pub mod net;
+mod net;
 pub mod node;
 pub mod protocol;
 mod repl;
