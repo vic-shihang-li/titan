@@ -493,8 +493,7 @@ impl<const N: usize> InnerSendBuf<N> {
     }
 
     /// Gets the slice of unconsumed bytes in the buffer.
-    #[allow(clippy::needless_lifetimes)]
-    pub fn unconsumed<'a>(&'a self) -> ByteSlice<'a> {
+    pub fn unconsumed(&self) -> ByteSlice<'_> {
         let start = self.tail % self.size();
         let end = self.head % self.size();
 

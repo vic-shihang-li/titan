@@ -109,73 +109,63 @@ impl Display for ParseError {
             ParseError::Unknown => write!(f, "Unknown command"),
             ParseError::Down(e) => write!(
                 f,
-                "Invalid down command. Usage: down <integer>. Error: {:?}",
-                e
+                "Invalid down command. Usage: down <integer>. Error: {e:?}"
             ),
             ParseError::Up(e) => {
-                write!(f, "Invalid up command. Usage: up <integer>. Error: {:?}", e)
+                write!(f, "Invalid up command. Usage: up <integer>. Error: {e:?}")
             }
             ParseError::Send(e) => {
                 write!(
                     f,
-                    "Invalid send command. Usage: send <vip> <proto> <string>. Error: {:?}",
-                    e
+                    "Invalid send command. Usage: send <vip> <proto> <string>. Error: {e:?}"
                 )
             }
             ParseError::OpenListenSocket(e) => {
                 write!(
                     f,
-                    "Invalid open socket command. Usage: a <port>. Error: {:?}",
-                    e
+                    "Invalid open socket command. Usage: a <port>. Error: {e:?}"
                 )
             }
             ParseError::Connect(e) => {
                 write!(
                     f,
-                    "Invalid connect command. Usage: c <ip> <port>. Error: {:?}",
-                    e
+                    "Invalid connect command. Usage: c <ip> <port>. Error: {e:?}"
                 )
             }
             ParseError::TcpSend(e) => {
                 write!(
                     f,
-                    "Invalid send command. Usage: s <socket_id> <data>. Error: {:?}",
-                    e
+                    "Invalid send command. Usage: s <socket_id> <data>. Error: {e:?}"
                 )
             }
             ParseError::TcpRead(e) => {
                 write!(
                     f,
-                    "Invalid read command. Usage: r <socket ID> <numbytes> <y|N>. Error: {:?}",
-                    e
+                    "Invalid read command. Usage: r <socket ID> <numbytes> <y|N>. Error: {e:?}"
                 )
             }
             ParseError::TcpShutdown(e) => {
                 write!(
                     f,
-                    "Invalid shutdown command. Usage: sd <socket ID> <read|write|both>. Error: {:?}",
-                    e
+                    "Invalid shutdown command. Usage: sd <socket ID> <read|write|both>. Error: {e:?}"
                 )
             }
             ParseError::TcpClose(e) => {
                 write!(
                     f,
-                    "Invalid close command. Usage: cl <socket ID>. Error: {:?}",
-                    e
+                    "Invalid close command. Usage: cl <socket ID>. Error: {e:?}"
                 )
             }
             ParseError::SendFile(e) => {
                 write!(
                     f,
-                    "Invalid send file command. Usage: sf <filename> <ip> <port>. Error: {:?}",
-                    e
+                    "Invalid send file command. Usage: sf <filename> <ip> <port>. Error: {e:?}"
                 )
             }
             ParseError::RecvFile(e) => {
                 write!(
                     f,
-                    "Invalid receive file command. Usage: rf <filename> <port>. Error: {:?}",
-                    e
+                    "Invalid receive file command. Usage: rf <filename> <port>. Error: {e:?}"
                 )
             }
         }

@@ -151,13 +151,11 @@ impl VtLinkNet {
         self.links.as_ref()
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn get_forwarding_table_mut<'a>(&'a self) -> RwLockWriteGuard<'a, ForwardingTable> {
+    pub async fn get_forwarding_table_mut(&self) -> RwLockWriteGuard<'_, ForwardingTable> {
         self.routes.write().await
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn get_forwarding_table<'a>(&'a self) -> RwLockReadGuard<'a, ForwardingTable> {
+    pub async fn get_forwarding_table(&self) -> RwLockReadGuard<'_, ForwardingTable> {
         self.routes.read().await
     }
 
@@ -183,7 +181,7 @@ impl VtLinkNet {
         handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
     ) {
         match SlicedPacket::from_ip(bytes) {
-            Err(value) => eprintln!("Err {:?}", value),
+            Err(value) => eprintln!("Err {value:?}"),
             Ok(packet) => {
                 if packet.ip.is_none() {
                     eprintln!("Packet has no IP fields");
@@ -228,7 +226,7 @@ impl VtLinkNet {
                 Some(handler) => {
                     handler.handle_packet(header, payload, self).await;
                 }
-                None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
+                None => eprintln!("Warning: no protocol handler for protocol {protocol:?}"),
             },
             Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
         }
@@ -345,8 +343,7 @@ async fn periodic_rip_update(
     .await;
 }
 
-#[allow(clippy::needless_lifetimes)]
-fn verify_header_checksum<'a>(header: &Ipv4HeaderSlice<'a>) -> bool {
+fn verify_header_checksum(header: &Ipv4HeaderSlice<'_>) -> bool {
     let owned_header = header.to_header();
     match owned_header.calc_header_checksum() {
         Ok(expected_checksum) => expected_checksum == header.header_checksum(),

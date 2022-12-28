@@ -122,13 +122,11 @@ pub struct Node {
 }
 
 impl Node {
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn find_link_to<'a>(&'a self, next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_to(&self, next_hop: Ipv4Addr) -> Option<LinkRef<'_>> {
         self.net.links().find_link_to(next_hop).await
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_with_interface_ip(&self, ip: Ipv4Addr) -> Option<LinkRef<'_>> {
         self.net.links().find_link_with_interface_ip(ip).await
     }
 
@@ -149,8 +147,7 @@ impl Node {
     /// Iterate all links (both active and inactive) for this host.
     ///
     /// This is useful for sending out periodic RIP messages to all links.
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
+    pub async fn iter_links(&self) -> LinkIter<'_> {
         self.net.links().iter_links().await
     }
 

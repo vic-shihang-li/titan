@@ -46,7 +46,7 @@ pub struct LinkIter<'a> {
 impl<'a> Deref for LinkIter<'a> {
     type Target = Vec<Link>;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
@@ -143,18 +143,15 @@ impl VtLinkLayer {
         Ok(())
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
+    pub async fn iter_links(&self) -> LinkIter<'_> {
         self.links.iter().await
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn find_link_to<'a>(&'a self, dest: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_to(&self, dest: Ipv4Addr) -> Option<LinkRef<'_>> {
         self.links.find(|link| link.dest() == dest).await
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
+    pub async fn find_link_with_interface_ip(&self, ip: Ipv4Addr) -> Option<LinkRef<'_>> {
         self.links.find(|link| link.source() == ip).await
     }
 
@@ -204,8 +201,7 @@ impl Links {
         Links(RwLock::new(links))
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    async fn get<'a>(&'a self, link_no: u16) -> Option<LinkRef<'a>> {
+    async fn get(&self, link_no: u16) -> Option<LinkRef<'_>> {
         let links = self.0.read().await;
         let link_no = link_no as usize;
         if link_no >= links.len() {
@@ -218,8 +214,7 @@ impl Links {
         }
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    async fn get_mut<'a>(&'a self, link_no: u16) -> Option<LinkMutRef<'a>> {
+    async fn get_mut(&self, link_no: u16) -> Option<LinkMutRef<'_>> {
         let links = self.0.write().await;
         let link_no = link_no as usize;
         if link_no >= links.len() {
@@ -232,8 +227,7 @@ impl Links {
         }
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    async fn find<'a>(&'a self, pred: impl Fn(&Link) -> bool) -> Option<LinkRef<'a>> {
+    async fn find(&self, pred: impl Fn(&Link) -> bool) -> Option<LinkRef<'_>> {
         let links = self.0.read().await;
         let mut idx = 0;
 
@@ -252,8 +246,7 @@ impl Links {
     }
 
     #[allow(unused)]
-    #[allow(clippy::needless_lifetimes)]
-    async fn find_mut<'a>(&'a self, pred: impl Fn(&Link) -> bool) -> Option<LinkMutRef<'a>> {
+    async fn find_mut(&self, pred: impl Fn(&Link) -> bool) -> Option<LinkMutRef<'_>> {
         let links = self.0.write().await;
         let mut idx = 0;
 
@@ -271,8 +264,7 @@ impl Links {
         }
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    async fn iter<'a>(&'a self) -> LinkIter<'a> {
+    async fn iter(&self) -> LinkIter<'_> {
         LinkIter {
             inner: self.0.read().await,
         }

@@ -20,7 +20,7 @@ async fn main() {
     let args = match Args::try_from(std::env::args()) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("Error: {:?}", e);
+            eprintln!("Error: {e:?}");
             eprintln!("Usage: ./node <lnx-file>");
             std::process::exit(1);
         }

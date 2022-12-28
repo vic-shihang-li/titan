@@ -185,15 +185,15 @@ impl Cli {
                 self.print_sockets(op).await;
             }
             Command::InterfaceDown(interface) => {
-                eprintln!("Turning down interface {}", interface);
+                eprintln!("Turning down interface {interface}");
                 if let Err(e) = self.node.deactivate(interface).await {
-                    eprintln!("Failed to turn interface {} down: {:?}", interface, e);
+                    eprintln!("Failed to turn interface {interface} down: {e:?}");
                 }
             }
             Command::InterfaceUp(interface) => {
-                eprintln!("Turning up interface {}", interface);
+                eprintln!("Turning up interface {interface}");
                 if let Err(e) = self.node.activate(interface).await {
-                    eprintln!("Failed to turn interface {} up: {:?}", interface, e);
+                    eprintln!("Failed to turn interface {interface} up: {e:?}");
                 }
             }
             Command::SendIPv4Packet(cmd) => {
@@ -206,7 +206,7 @@ impl Cli {
                     .send(cmd.payload.as_bytes(), cmd.protocol, cmd.virtual_ip)
                     .await
                 {
-                    eprintln!("Failed to send packet: {:?}", e);
+                    eprintln!("Failed to send packet: {e:?}");
                 }
             }
             Command::SendTCPPacket(socket_descriptor, payload) => {
@@ -244,7 +244,7 @@ impl Cli {
                 let mut f = File::create(file).unwrap();
                 f.write_all(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
                 for link in &*self.node.iter_links().await {
-                    f.write_all(format!("{}\t{}\n", id, link).as_bytes())
+                    f.write_all(format!("{id}\t{link}\n").as_bytes())
                         .unwrap();
                     id += 1;
                 }
@@ -252,7 +252,7 @@ impl Cli {
             None => {
                 println!("id\tstate\tlocal\t\tremote\t        port");
                 for link in &*self.node.iter_links().await {
-                    println!("{}\t{}", id, link);
+                    println!("{id}\t{link}");
                     id += 1;
                 }
             }
@@ -283,7 +283,7 @@ impl Cli {
                     println!("{}", String::from_utf8_lossy(&bytes))
                 }
                 Err(e) => {
-                    eprintln!("Failed to read: {:?}", e);
+                    eprintln!("Failed to read: {e:?}");
                 }
             }
         } else {
@@ -294,7 +294,7 @@ impl Cli {
                         println!("{}", String::from_utf8_lossy(&bytes));
                     }
                     Err(e) => {
-                        eprintln!("Failed to read: {:?}", e);
+                        eprintln!("Failed to read: {e:?}");
                     }
                 }
             });
@@ -347,7 +347,7 @@ impl Cli {
                     eprintln!("Send file complete.");
                 }
                 Err(e) => {
-                    eprintln!("Failed to send file. Error: {:?}", e)
+                    eprintln!("Failed to send file. Error: {e:?}")
                 }
             }
         });
@@ -361,7 +361,7 @@ impl Cli {
                     eprintln!("Receive file complete");
                 }
                 Err(e) => {
-                    eprintln!("Failed to receive file. Error: {:?}", e)
+                    eprintln!("Failed to receive file. Error: {e:?}")
                 }
             }
         });

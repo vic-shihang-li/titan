@@ -27,7 +27,7 @@ impl<H: HandleUserInput + Send> Repl<H> {
         let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
         loop {
             if let Some(p) = &self.prompt {
-                print!("{}", p);
+                print!("{p}");
             }
             std::io::Write::flush(&mut std::io::stdout()).expect("Failed to write REPL prompt.");
             if let Some(l) = lines.next_line().await.expect("Failed to get next line") {

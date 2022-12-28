@@ -59,7 +59,7 @@ impl ProtocolHandler for TestHandler {
         _net: &VtLinkNet,
     ) {
         let message = TestMessage::from_packet(_header, payload);
-        print!("{}", message);
+        print!("{message}");
     }
 }
 

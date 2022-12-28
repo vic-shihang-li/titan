@@ -626,9 +626,9 @@ impl<N: Net> Listen<N> {
         Ok(syn_recvd)
     }
 
-    fn make_syn_ack_packet<'a>(
+    fn make_syn_ack_packet(
         &self,
-        syn_packet: &TcpHeaderSlice<'a>,
+        syn_packet: &TcpHeaderSlice<'_>,
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
     ) -> Vec<u8> {
@@ -1061,9 +1061,9 @@ impl<N: Net> FinWait1<N> {
         self.into()
     }
 
-    fn make_ack_packet<'a>(
+    fn make_ack_packet(
         &self,
-        tcp_header: &TcpHeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'_>,
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
     ) -> Vec<u8> {
@@ -1129,9 +1129,9 @@ impl<N: Net> FinWait2<N> {
         TimeWait {}
     }
 
-    fn make_ack_packet<'a>(
+    fn make_ack_packet(
         &self,
-        tcp_header: &TcpHeaderSlice<'a>,
+        tcp_header: &TcpHeaderSlice<'_>,
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
     ) -> Vec<u8> {
@@ -1496,10 +1496,7 @@ impl<N: Net> Socket<N> {
         let local_window_sz = self.local_window_sz().await;
         let remote_window_sz = self.remote_window_sz().await;
 
-        format!(
-            "{}\t{:?}\t\t{}\t\t\t{}",
-            id, state, local_window_sz, remote_window_sz
-        )
+        format!("{id}\t{state:?}\t\t{local_window_sz}\t\t\t{remote_window_sz}")
     }
 }
 
