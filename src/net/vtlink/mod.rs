@@ -1,3 +1,5 @@
+mod fwd;
+
 use crate::drop_policy::{DropFactor, DropPolicy};
 use crate::link::{Ipv4PacketBuilder, VtLinkLayer};
 use crate::protocol::rip::RipMessage;
@@ -6,197 +8,16 @@ use crate::utils::loop_with_interval;
 use crate::{Args, Message};
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
-use std::fmt;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{net::Ipv4Addr, time::Instant};
 use tokio::task::JoinHandle;
 
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-#[derive(Default)]
-pub struct ForwardingTable {
-    entries: Vec<Entry>,
-}
+pub use self::fwd::{Entry, ForwardingTable};
 
-impl ForwardingTable {
-    pub fn with_entries(entries: Vec<Entry>) -> Self {
-        Self { entries }
-    }
-
-    pub fn has_entry_for(&self, addr: Ipv4Addr) -> bool {
-        self.entries.iter().any(|e| e.destination == addr)
-    }
-
-    pub fn find_mut_entry_for(&mut self, addr: Ipv4Addr) -> Option<&mut Entry> {
-        self.entries.iter_mut().find(|e| e.destination == addr)
-    }
-
-    pub fn find_entry_for(&self, addr: Ipv4Addr) -> Option<&Entry> {
-        self.entries.iter().find(|e| e.destination == addr)
-    }
-
-    pub fn delete_mut_entry_for(&mut self, addr: Ipv4Addr) {
-        self.entries.retain(|e| e.destination != addr)
-    }
-
-    pub fn add_entry(&mut self, entry: Entry) {
-        self.entries.push(entry);
-    }
-
-    pub fn entries(&self) -> &[Entry] {
-        self.entries.as_slice()
-    }
-
-    pub fn prune(&mut self, max_age: Duration) {
-        for (i, entry) in self.entries().iter().enumerate() {
-            if !entry.is_local() && entry.last_updated.elapsed() > max_age {
-                log::warn!(
-                    "Deleting entry {i}, {:?}, age: {:?}",
-                    entry,
-                    entry.last_updated.elapsed()
-                );
-            }
-        }
-
-        let num_deleted = {
-            let len_before = self.entries.len();
-            self.entries
-                .retain(|e| e.is_local() || e.last_updated.elapsed() < max_age);
-            let len_after = self.entries().len();
-            len_before - len_after
-        };
-        if num_deleted > 0 {
-            log::info!("Table pruned, {num_deleted} entries deleted");
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct Entry {
-    destination: Ipv4Addr,
-    next_hop: Ipv4Addr,
-    cost: u32,
-    is_local: bool,
-    pub last_updated: Instant,
-}
-
-impl Entry {
-    pub fn new(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
-        Self {
-            destination,
-            next_hop,
-            cost,
-            is_local: false,
-            last_updated: Instant::now(),
-        }
-    }
-
-    pub fn new_local(destination: Ipv4Addr, next_hop: Ipv4Addr, cost: u32) -> Self {
-        Self {
-            destination,
-            next_hop,
-            cost,
-            is_local: true,
-            last_updated: Instant::now(),
-        }
-    }
-
-    pub fn destination(&self) -> Ipv4Addr {
-        self.destination
-    }
-
-    pub fn cost(&self) -> u32 {
-        self.cost
-    }
-
-    pub fn is_unreachable(&self) -> bool {
-        self.cost >= Entry::max_cost()
-    }
-
-    pub fn next_hop(&self) -> Ipv4Addr {
-        self.next_hop
-    }
-
-    /// Whether this is an entry for one of the router's own IPs
-    pub fn is_local(&self) -> bool {
-        self.is_local
-    }
-
-    pub fn update(&mut self, next_hop: Ipv4Addr, cost: u32) {
-        log::info!(
-            "Update routing entry: old: {}, new next hop: {}, new cost: {}",
-            self,
-            next_hop,
-            cost
-        );
-        self.next_hop = next_hop;
-        self.cost = cost;
-        self.restart_delete_timer();
-    }
-
-    pub fn mark_unreachable(&mut self) {
-        self.update(self.next_hop, Entry::max_cost());
-    }
-
-    pub fn update_cost(&mut self, cost: u32) {
-        self.update(self.next_hop, cost);
-    }
-
-    pub fn restart_delete_timer(&mut self) {
-        log::info!("resetting timer for entry: {}", self);
-        self.last_updated = Instant::now();
-    }
-
-    pub fn max_cost() -> u32 {
-        16
-    }
-}
-
-impl fmt::Display for Entry {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}\t{}\t{}", self.destination, self.next_hop, self.cost)
-    }
-}
-
-async fn prune_routing_table(
-    table: Arc<RwLock<ForwardingTable>>,
-    prune_interval: Duration,
-    max_age: Duration,
-) {
-    loop_with_interval(prune_interval, || async {
-        log::debug!("Pruning table");
-        let mut table = table.write().await;
-        table.prune(max_age);
-    })
-    .await;
-}
-
-async fn periodic_rip_update(
-    table: Arc<RwLock<ForwardingTable>>,
-    links: Arc<VtLinkLayer>,
-    interval: Duration,
-) {
-    loop_with_interval(interval, || async {
-        for link in &*links.iter_links().await {
-            log::info!("Sending periodic update to {}", link.dest());
-            let rip_msg = RipMessage::from_entries_with_poisoned_reverse(
-                table.read().await.entries(),
-                link.dest(),
-            );
-            let rip_msg_bytes = rip_msg.into_bytes();
-            let packet = Ipv4PacketBuilder::default()
-                .with_payload(&rip_msg_bytes)
-                .with_protocol(Protocol::Rip)
-                .with_src(link.source())
-                .with_dst(link.dest())
-                .build()
-                .unwrap();
-            link.send(&packet).await.ok();
-        }
-    })
-    .await;
-}
+use super::{Net, SendError};
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum PacketDecision {
@@ -205,22 +26,14 @@ pub enum PacketDecision {
     Consume,
 }
 
-#[derive(Debug)]
-pub enum SendError {
-    NoForwardingEntry,
-    Unreachable,
-    NoLink,
-    Transport(crate::link::Error),
-}
-
-pub struct RouterConfig {
+pub struct VtLinkNetConfig {
     pub prune_interval: Duration,
     pub rip_update_interval: Duration,
     pub entry_max_age: Duration,
     pub drop_factor: usize,
 }
 
-impl Default for RouterConfig {
+impl Default for VtLinkNetConfig {
     fn default() -> Self {
         Self {
             prune_interval: Duration::from_secs(1),
@@ -230,19 +43,6 @@ impl Default for RouterConfig {
         }
     }
 }
-
-#[async_trait]
-pub trait Net: 'static + Send + Sync {
-    async fn get_outbound_ip(&self, dest: Ipv4Addr) -> Option<[u8; 4]>;
-
-    async fn send<P: Into<u8> + Send>(
-        &self,
-        payload: &[u8],
-        protocol: P,
-        dest: Ipv4Addr,
-    ) -> Result<(), SendError>;
-}
-
 pub struct VtLinkNet {
     links: Arc<VtLinkLayer>,
     my_addrs: Vec<Ipv4Addr>,
@@ -258,7 +58,7 @@ impl Net for VtLinkNet {
         let rt = self.routes.read().await;
         if let Some(forward_rule) = rt.find_entry_for(dest) {
             self.links
-                .find_link_to(forward_rule.next_hop)
+                .find_link_to(forward_rule.next_hop())
                 .await
                 .map(|link| link.source().octets())
         } else {
@@ -306,7 +106,7 @@ impl Net for VtLinkNet {
 }
 
 impl VtLinkNet {
-    pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: RouterConfig) -> Self {
+    pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: VtLinkNetConfig) -> Self {
         let my_addrs = program_args.get_my_interface_ips();
 
         let entries = program_args
@@ -395,7 +195,7 @@ impl VtLinkNet {
         let rt = self.routes.read().await;
 
         if let Some(entry) = rt.find_entry_for(dest) {
-            match self.links.find_link_to(entry.next_hop).await {
+            match self.links.find_link_to(entry.next_hop()).await {
                 Some(link) => {
                     let packet = Ipv4PacketBuilder::default()
                         .with_src(header.source_addr())
@@ -411,7 +211,7 @@ impl VtLinkNet {
                     }
                 }
                 None => {
-                    log::warn!("No link to next hop {}, dropping packet", entry.next_hop);
+                    log::warn!("No link to next hop {}, dropping packet", entry.next_hop());
                 }
             }
         } else {
@@ -425,6 +225,45 @@ impl Drop for VtLinkNet {
         self.pruner.abort();
         self.rip_updater.abort();
     }
+}
+
+async fn prune_routing_table(
+    table: Arc<RwLock<ForwardingTable>>,
+    prune_interval: Duration,
+    max_age: Duration,
+) {
+    loop_with_interval(prune_interval, || async {
+        log::debug!("Pruning table");
+        let mut table = table.write().await;
+        table.prune(max_age);
+    })
+    .await;
+}
+
+async fn periodic_rip_update(
+    table: Arc<RwLock<ForwardingTable>>,
+    links: Arc<VtLinkLayer>,
+    interval: Duration,
+) {
+    loop_with_interval(interval, || async {
+        for link in &*links.iter_links().await {
+            log::info!("Sending periodic update to {}", link.dest());
+            let rip_msg = RipMessage::from_entries_with_poisoned_reverse(
+                table.read().await.entries(),
+                link.dest(),
+            );
+            let rip_msg_bytes = rip_msg.into_bytes();
+            let packet = Ipv4PacketBuilder::default()
+                .with_payload(&rip_msg_bytes)
+                .with_protocol(Protocol::Rip)
+                .with_src(link.source())
+                .with_dst(link.dest())
+                .build()
+                .unwrap();
+            link.send(&packet).await.ok();
+        }
+    })
+    .await;
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -561,7 +400,7 @@ mod tests {
 
     async fn make_mock_router_with_args(args: Args) -> VtLinkNet {
         let links = Arc::new(VtLinkLayer::new(&args).await);
-        let router = VtLinkNet::new(links, &args, RouterConfig::default());
+        let router = VtLinkNet::new(links, &args, VtLinkNetConfig::default());
         router
     }
 }

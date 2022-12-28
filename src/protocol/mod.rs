@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
-use crate::{link::VtLinkLayer, net::VtLinkNet};
+use crate::{link::VtLinkLayer, net::vtlink::VtLinkNet};
 
 pub mod rip;
 pub mod tcp;

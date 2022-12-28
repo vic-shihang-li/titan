@@ -3,7 +3,7 @@ use etherparse::Ipv4HeaderSlice;
 
 use crate::{
     link::{Ipv4PacketBuilder, Link, VtLinkLayer},
-    net::{Entry as RoutingEntry, ForwardingTable, VtLinkNet},
+    net::vtlink::{Entry as RoutingEntry, ForwardingTable, VtLinkNet},
     protocol::Protocol,
 };
 
@@ -203,10 +203,8 @@ impl ProtocolHandler for RipHandler {
 
         log::info!("Received RIP packet from {}", header.source_addr());
 
-        let mut rt = net.get_forwarding_table_mut().await;
-        let updates = self
-            .update_route_table(&mut rt, message, header.source_addr())
-            .await;
+        let mut ft = net.get_forwarding_table_mut().await;
+        let updates = self.update_forwarding_table(&mut ft, message, header.source_addr());
         if !updates.is_empty() {
             for link in &*links.iter_links().await {
                 self.send_triggered_update(&updates, link).await;
@@ -218,9 +216,9 @@ impl ProtocolHandler for RipHandler {
 impl RipHandler {
     // RIP protocol implementation.
     // Reference: http://intronetworks.cs.luc.edu/current2/html/routing.html#distance-vector-update-rules
-    async fn update_route_table(
+    fn update_forwarding_table(
         &self,
-        rt: &mut ForwardingTable,
+        table: &mut ForwardingTable,
         message: RipMessage,
         sender: Ipv4Addr,
     ) -> Vec<RoutingEntry> {
@@ -228,7 +226,7 @@ impl RipHandler {
 
         for entry in &message.entries {
             let entry_cost = cmp::min(entry.cost + 1, RoutingEntry::max_cost());
-            match rt.find_mut_entry_for(entry.address) {
+            match table.find_mut_entry_for(entry.address) {
                 Some(local_entry) => {
                     match entry_cost.cmp(&local_entry.cost()) {
                         Ordering::Less => {
@@ -265,7 +263,7 @@ impl RipHandler {
                     log::info!("Adding new entry: {:?}", entry);
                     let dest = entry.address;
                     let entry = RoutingEntry::new(dest, sender, entry_cost);
-                    rt.add_entry(entry);
+                    table.add_entry(entry);
                     updates.push(entry);
                 }
             }

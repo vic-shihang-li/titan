@@ -259,23 +259,8 @@ impl Cli {
         }
     }
 
-    async fn print_routes(&self, file: Option<String>) {
-        let rt = self.node.get_forwarding_table().await;
-        match file {
-            Some(file) => {
-                let mut f = File::create(file).unwrap();
-                f.write_all(b"dest\t\tnext\t\tcost\n").unwrap();
-                for route in rt.entries() {
-                    f.write_all(format!("{}\n", route).as_bytes()).unwrap();
-                }
-            }
-            None => {
-                println!("dest\t\tnext\t\tcost");
-                for route in rt.entries() {
-                    println!("{}", route)
-                }
-            }
-        }
+    async fn print_routes(&self, _file: Option<String>) {
+        todo!()
     }
 
     async fn print_sockets(&self, file: Option<String>) {

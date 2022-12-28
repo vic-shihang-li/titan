@@ -13,7 +13,7 @@ use std::usize;
 
 use crate::net::Net;
 use crate::protocol::tcp::socket::UpdateAction;
-use crate::{link::VtLinkLayer, net::VtLinkNet, protocol::ProtocolHandler};
+use crate::{link::VtLinkLayer, net::vtlink::VtLinkNet, protocol::ProtocolHandler};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;

@@ -1,18 +1,18 @@
 use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::link::{self, LinkIter, LinkRef, VtLinkLayer};
-use crate::net::{self, ForwardingTable, Net, PacketDecision, RouterConfig, VtLinkNet};
+use crate::net::vtlink::{PacketDecision, VtLinkNet, VtLinkNetConfig};
+use crate::net::Net;
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
 use crate::protocol::tcp::{
     SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
     TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
-use crate::Args;
+use crate::{net, Args};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -93,7 +93,7 @@ impl<'a> NodeBuilder<'a> {
         let router = Arc::new(VtLinkNet::new(
             links.clone(),
             self.args,
-            RouterConfig {
+            VtLinkNetConfig {
                 prune_interval: self.prune_interval,
                 rip_update_interval: self.rip_update_interval,
                 entry_max_age: self.entry_max_age,
@@ -112,7 +112,7 @@ impl<'a> NodeBuilder<'a> {
         Node {
             links,
             tcp,
-            router,
+            net: router,
             protocol_handlers,
         }
     }
@@ -121,7 +121,7 @@ impl<'a> NodeBuilder<'a> {
 pub struct Node {
     links: Arc<VtLinkLayer>,
     tcp: Arc<Tcp<VtLinkNet>>,
-    router: Arc<VtLinkNet>,
+    net: Arc<VtLinkNet>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
@@ -147,7 +147,7 @@ impl Node {
     }
 
     pub async fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
-        self.router.is_my_addr(addr)
+        self.net.is_my_addr(addr)
     }
 
     /// Iterate all links (both active and inactive) for this host.
@@ -178,7 +178,7 @@ impl Node {
         protocol: P,
         dest_vip: Ipv4Addr,
     ) -> Result<(), net::SendError> {
-        self.router.send(payload, protocol, dest_vip).await
+        self.net.send(payload, protocol, dest_vip).await
     }
 
     /// Send bytes over a TCP connection.
@@ -228,16 +228,6 @@ impl Node {
 
             self.handle_packet_bytes(&bytes).await;
         }
-    }
-
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn get_forwarding_table_mut<'a>(&'a self) -> RwLockWriteGuard<'a, ForwardingTable> {
-        self.router.get_forwarding_table_mut().await
-    }
-
-    #[allow(clippy::needless_lifetimes)]
-    pub async fn get_forwarding_table<'a>(&'a self) -> RwLockReadGuard<'a, ForwardingTable> {
-        self.router.get_forwarding_table().await
     }
 
     pub async fn connect(
@@ -330,10 +320,10 @@ impl Node {
     }
 
     async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match self.router.decide_packet(header).await {
+        match self.net.decide_packet(header).await {
             PacketDecision::Drop => {}
             PacketDecision::Consume => self.consume_packet(header, payload).await,
-            PacketDecision::Forward => self.router.forward_packet(header, payload).await,
+            PacketDecision::Forward => self.net.forward_packet(header, payload).await,
         }
     }
 
@@ -342,7 +332,7 @@ impl Node {
             Ok(protocol) => match self.protocol_handlers.get(&protocol) {
                 Some(handler) => {
                     handler
-                        .handle_packet(header, payload, &self.router, &self.links)
+                        .handle_packet(header, payload, &self.net, &self.links)
                         .await;
                 }
                 None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
