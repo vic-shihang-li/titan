@@ -22,7 +22,7 @@ use super::{
     Port, Remote, MAX_SEGMENT_SZ, TCP_DEFAULT_WINDOW_SZ,
 };
 
-const TCP_DEFAULT_RETRANS_TICK_INTERVAL: Duration = Duration::from_millis(5);
+const TCP_DEFAULT_RTX_TICK_INTERVAL: Duration = Duration::from_millis(5);
 const TCP_DEFAULT_INITIAL_RTO: Duration = Duration::from_millis(10);
 
 #[derive(PartialEq, Eq)]
@@ -34,17 +34,20 @@ struct RtxRequest {
 
 impl PartialOrd for RtxRequest {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.deadline.partial_cmp(&other.deadline)
+        self.seq_no.partial_cmp(&other.seq_no)
     }
 }
 
 impl Ord for RtxRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.deadline.cmp(&other.deadline)
+        self.seq_no.cmp(&other.seq_no)
     }
 }
 
-struct RtxTimer {
+/// Dynamically updated retransmission timeout, based on RFC6298:
+///
+/// https://www.rfc-editor.org/rfc/rfc6298.html.
+struct DynamicRto {
     /// smoothed round-trip time
     srtt: Option<Duration>,
     /// round-trip time variation
@@ -59,13 +62,26 @@ struct RtxTimer {
     beta: f64,
 }
 
-impl RtxTimer {
+impl DynamicRto {
+    fn new(tick_interval: Duration, initial_rto: Duration) -> Self {
+        Self {
+            srtt: None,
+            rtt_var: None,
+            rto: initial_rto,
+            tick: tick_interval,
+            alpha: 0.125,
+            beta: 0.24,
+        }
+    }
+
     fn update(&mut self, rtt: Duration) {
+        const K: u32 = 4;
+
         match (self.srtt, self.rtt_var) {
             (None, None) => {
                 self.srtt = Some(rtt);
                 self.rtt_var = Some(rtt / 2);
-                self.rto = std::cmp::max(self.tick, 4 * self.rtt_var.unwrap());
+                self.rto = std::cmp::max(self.tick, K * self.rtt_var.unwrap());
             }
             (Some(srtt), Some(rtt_var)) => {
                 let (alpha, beta) = (self.alpha, self.beta);
@@ -86,13 +102,16 @@ impl RtxTimer {
 
                 self.srtt = Some(srtt);
                 self.rtt_var = Some(rtt_var);
+
+                // RTO <- SRTT + max (G, K*RTTVAR)
+                self.rto = srtt + std::cmp::max(self.tick, K * rtt_var);
             }
             _ => unreachable!(),
         }
     }
 
-    fn rto(&self) -> Duration {
-        self.rto
+    fn rto(&self) -> Instant {
+        Instant::now() + self.rto
     }
 }
 
@@ -105,8 +124,7 @@ pub struct TcpTransport<const N: usize> {
     seq_no: usize,
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
-    // retransmission timeout
-    rto: Duration,
+    dyn_rto: DynamicRto,
     zero_window_probe_interval: Duration,
     send_ack_request: broadcast::Receiver<()>,
     rtx_timers: BinaryHeap<Reverse<RtxRequest>>,
@@ -138,7 +156,7 @@ impl<const N: usize> TcpTransport<N> {
             seq_no,
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
-            rto: TCP_DEFAULT_INITIAL_RTO,
+            dyn_rto: DynamicRto::new(TCP_DEFAULT_RTX_TICK_INTERVAL, TCP_DEFAULT_INITIAL_RTO),
             zero_window_probe_interval: Duration::from_millis(1),
             send_ack_request: should_ack,
             last_ack_transmitted: 0,
@@ -154,8 +172,9 @@ impl<const N: usize> TcpTransport<N> {
         // Set upper bound on how long before acks are sent back to sender.
         let mut transmit_ack_interval = tokio::time::interval(self.ack_batch_timeout);
         let mut zero_window_probe_interval = tokio::time::interval(self.zero_window_probe_interval);
-        let mut rtx_tick = tokio::time::interval(TCP_DEFAULT_RETRANS_TICK_INTERVAL);
+        let mut rtx_tick = tokio::time::interval(TCP_DEFAULT_RTX_TICK_INTERVAL);
         let mut window_sz_update = self.send_buf.window_size_update();
+        let mut last_acked_update = self.send_buf.tail_update();
 
         loop {
             tokio::select! {
@@ -173,6 +192,9 @@ impl<const N: usize> TcpTransport<N> {
                 }
                 Ok(window_sz) = window_sz_update.recv() => {
                     self.remaining_window_sz = window_sz.into();
+                }
+                Ok(next_expected_seq_no) = last_acked_update.recv() => {
+                    self.on_last_byte_acked_updated(next_expected_seq_no);
                 }
                 _ = zero_window_probe_interval.tick() => {
                     self.check_and_zero_window_probe().await;
@@ -247,9 +269,6 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn check_retransmission(&mut self, segment_buf: &mut [u8]) {
-        let mut last_acked_tx_time = None;
-        let start_time = Instant::now();
-
         loop {
             let Some(rtx_req) = self.rtx_timers.peek() else {
                 break;
@@ -281,22 +300,38 @@ impl<const N: usize> TcpTransport<N> {
                             self.send(req.seq_no, &segment_buf[..remaining_sz])
                                 .await
                                 .ok();
-                        } else {
-                            // OK: data was acked
-                            last_acked_tx_time = Some(req.tx_time);
                         }
                     }
                     SliceError::StartSeqTooLow(_) => {
                         // OK: data was acked
-                        last_acked_tx_time = Some(req.tx_time);
                     }
                 },
             }
         }
+    }
+
+    fn on_last_byte_acked_updated(&mut self, next_expected_seq_no: usize) {
+        let mut last_acked_tx_time = None;
+        let start_time = Instant::now();
+
+        loop {
+            let Some(rtx_req) = self.rtx_timers.peek() else {
+                break;
+            };
+            if rtx_req.0.seq_no > next_expected_seq_no {
+                break;
+            }
+            let rtx_req = self
+                .rtx_timers
+                .pop()
+                .expect("should exist at least 1 rtx timer")
+                .0;
+            last_acked_tx_time = Some(rtx_req.tx_time);
+        }
 
         if let Some(last_acked_tx_time) = last_acked_tx_time {
             let rtt = start_time - last_acked_tx_time;
-            // TODO: update RTO
+            self.dyn_rto.update(rtt);
         }
     }
 
@@ -335,11 +370,9 @@ impl<const N: usize> TcpTransport<N> {
             .map(|_| {
                 self.last_transmitted = Instant::now();
                 self.last_ack_transmitted = ack.try_into().unwrap();
-                // TODO: make rto dynamic
-                let rto = self.last_transmitted + self.rto;
                 self.rtx_timers.push(Reverse(RtxRequest {
                     tx_time: self.last_transmitted,
-                    deadline: rto,
+                    deadline: self.dyn_rto.rto(),
                     seq_no,
                 }));
             })

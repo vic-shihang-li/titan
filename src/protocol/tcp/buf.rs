@@ -23,6 +23,8 @@ pub struct SendBuf<const N: usize> {
     window_size: Arc<AtomicU16>,
     window_size_tx: broadcast::Sender<u16>,
     window_size_rx: Arc<broadcast::Receiver<u16>>,
+    tail_update_tx: broadcast::Sender<usize>,
+    tail_update_rx: Arc<broadcast::Receiver<usize>>,
     not_full: Notifier,
     empty: Notifier,
     written: Notifier,
@@ -35,11 +37,15 @@ impl<const N: usize> SendBuf<N> {
     pub fn new(initial_seq_no: usize) -> Self {
         let (window_size_tx, window_size_rx) = broadcast::channel(48);
         let window_size_rx = Arc::new(window_size_rx);
+        let (tail_update_tx, tail_update_rx) = broadcast::channel(48);
+        let tail_update_rx = Arc::new(tail_update_rx);
         Self {
             inner: Arc::new(Mutex::new(InnerSendBuf::new(initial_seq_no))),
             window_size: Arc::new(AtomicU16::new(N.try_into().unwrap())),
             window_size_tx,
             window_size_rx,
+            tail_update_tx,
+            tail_update_rx,
             not_full: Notifier::new(),
             empty: Notifier::new(),
             written: Notifier::new(),
@@ -151,6 +157,9 @@ impl<const N: usize> SendBuf<N> {
     pub async fn set_tail(&self, seq_no: usize) -> Result<(), SetTailError> {
         let mut buf = self.inner.lock().await;
         buf.set_tail(seq_no).map(|updated| {
+            self.tail_update_tx
+                .send(seq_no)
+                .expect("there should at least 1 subscriber");
             if updated {
                 self.not_full.notify_all();
                 if buf.read_remaining_size() == 0 {
@@ -158,6 +167,11 @@ impl<const N: usize> SendBuf<N> {
                 }
             }
         })
+    }
+
+    /// Get notified when the buffer tail (last acked byte) is updated.
+    pub fn tail_update(&self) -> broadcast::Receiver<usize> {
+        self.tail_update_tx.subscribe()
     }
 
     /// Fills the passed-in buffer with unconsumed content from the head of the
