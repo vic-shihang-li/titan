@@ -80,12 +80,12 @@ impl<'a> DerefMut for LinkMutRef<'a> {
     }
 }
 
-pub struct Net {
+pub struct VtLinkLayer {
     links: Links,
     listener_sub: Mutex<Option<Sender<Vec<u8>>>>,
 }
 
-impl Net {
+impl VtLinkLayer {
     pub async fn new(args: &Args) -> Self {
         let udp_socket = Arc::new(
             UdpSocket::bind(localhost_with_port(args.host_port))

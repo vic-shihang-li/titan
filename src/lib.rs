@@ -4,14 +4,14 @@ pub mod cli;
 mod drop_policy;
 #[cfg(test)]
 mod fixture;
-mod net;
+mod link;
 pub mod node;
 pub mod protocol;
 mod repl;
 mod route;
 mod utils;
 
-pub use net::Args;
+pub use link::Args;
 
 /// Trait to be implemented by payload to be sent over the network.
 trait Message {

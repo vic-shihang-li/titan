@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use async_trait::async_trait;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
-use crate::net::Net;
+use crate::link::VtLinkLayer;
 use crate::protocol::ProtocolHandler;
 use crate::route::Router;
 use crate::Message;
@@ -58,7 +58,7 @@ impl ProtocolHandler for TestHandler {
         _header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         _router: &Router,
-        _net: &Net,
+        _links: &VtLinkLayer,
     ) {
         let message = TestMessage::from_packet(_header, payload);
         print!("{}", message);

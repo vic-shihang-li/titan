@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::usize;
 
 use crate::protocol::tcp::socket::UpdateAction;
-use crate::{net::Net, protocol::ProtocolHandler, route::Router};
+use crate::{link::VtLinkLayer, protocol::ProtocolHandler, route::Router};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
@@ -416,7 +416,7 @@ impl ProtocolHandler for TcpHandler {
         ip_header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         _router: &Router,
-        _net: &Net,
+        _links: &VtLinkLayer,
     ) {
         // Step 1: validate checksum
         let tcp_header = TcpHeaderSlice::from_slice(payload).expect("Failed to parse TCP Header");

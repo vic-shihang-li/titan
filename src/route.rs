@@ -1,5 +1,5 @@
 use crate::drop_policy::{DropFactor, DropPolicy};
-use crate::net::{Ipv4PacketBuilder, Net};
+use crate::link::{Ipv4PacketBuilder, VtLinkLayer};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::utils::loop_with_interval;
@@ -173,11 +173,11 @@ async fn prune_routing_table(
 
 async fn periodic_rip_update(
     table: Arc<RwLock<ForwardingTable>>,
-    net: Arc<Net>,
+    links: Arc<VtLinkLayer>,
     interval: Duration,
 ) {
     loop_with_interval(interval, || async {
-        for link in &*net.iter_links().await {
+        for link in &*links.iter_links().await {
             log::info!("Sending periodic update to {}", link.dest());
             let rip_msg = RipMessage::from_entries_with_poisoned_reverse(
                 table.read().await.entries(),
@@ -209,7 +209,7 @@ pub enum SendError {
     NoForwardingEntry,
     Unreachable,
     NoLink,
-    Transport(crate::net::Error),
+    Transport(crate::link::Error),
 }
 
 pub struct RouterConfig {
@@ -231,7 +231,7 @@ impl Default for RouterConfig {
 }
 
 pub struct Router {
-    net: Arc<Net>,
+    links: Arc<VtLinkLayer>,
     my_addrs: Vec<Ipv4Addr>,
     routes: Arc<RwLock<ForwardingTable>>,
     pruner: JoinHandle<()>,
@@ -240,7 +240,7 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(net: Arc<Net>, program_args: &Args, config: RouterConfig) -> Self {
+    pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: RouterConfig) -> Self {
         let my_addrs = program_args.get_my_interface_ips();
 
         let entries = program_args
@@ -260,13 +260,13 @@ impl Router {
         });
 
         let rip_updater_routes = routes.clone();
-        let rip_updater_net = net.clone();
+        let rip_updater_links = links.clone();
         let rip_updater = tokio::spawn(async move {
-            periodic_rip_update(rip_updater_routes, rip_updater_net, rip_update_interval).await;
+            periodic_rip_update(rip_updater_routes, rip_updater_links, rip_update_interval).await;
         });
 
         Self {
-            net,
+            links,
             my_addrs,
             routes,
             pruner,
@@ -296,7 +296,7 @@ impl Router {
         }
 
         let sender = header.source_addr();
-        match self.net.find_link_to(sender).await {
+        match self.links.find_link_to(sender).await {
             Some(link) => {
                 if link.is_disabled() {
                     log::info!("Ignoring RIP packet from {}, link disabled", sender);
@@ -327,7 +327,7 @@ impl Router {
     pub async fn find_src_vip_with_dest(&self, dest: Ipv4Addr) -> Option<[u8; 4]> {
         let rt = self.routes.read().await;
         if let Some(entry) = rt.find_entry_for(dest) {
-            self.net
+            self.links
                 .find_link_to(entry.next_hop)
                 .await
                 .map(|link| link.source().octets())
@@ -342,7 +342,7 @@ impl Router {
         let rt = self.routes.read().await;
 
         if let Some(entry) = rt.find_entry_for(dest) {
-            match self.net.find_link_to(entry.next_hop).await {
+            match self.links.find_link_to(entry.next_hop).await {
                 Some(link) => {
                     let packet = Ipv4PacketBuilder::default()
                         .with_src(header.source_addr())
@@ -383,7 +383,7 @@ impl Router {
         }
 
         let link = self
-            .net
+            .links
             .find_link_to(entry.next_hop())
             .await
             .ok_or_else(|| {
@@ -545,8 +545,8 @@ mod tests {
     }
 
     async fn make_mock_router_with_args(args: Args) -> Router {
-        let net = Arc::new(Net::new(&args).await);
-        let router = Router::new(net, &args, RouterConfig::default());
+        let links = Arc::new(VtLinkLayer::new(&args).await);
+        let router = Router::new(links, &args, RouterConfig::default());
         router
     }
 }

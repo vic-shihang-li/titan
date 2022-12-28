@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
-use crate::net::{self, LinkIter, LinkRef, Net};
+use crate::link::{self, LinkIter, LinkRef, VtLinkLayer};
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
 use crate::protocol::tcp::{
     SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
@@ -89,9 +89,9 @@ impl<'a> NodeBuilder<'a> {
         }
         self.built = true;
 
-        let net = Arc::new(Net::new(self.args).await);
+        let links = Arc::new(VtLinkLayer::new(self.args).await);
         let router = Arc::new(Router::new(
-            net.clone(),
+            links.clone(),
             self.args,
             RouterConfig {
                 prune_interval: self.prune_interval,
@@ -110,7 +110,7 @@ impl<'a> NodeBuilder<'a> {
         });
 
         Node {
-            net,
+            links,
             tcp,
             router,
             protocol_handlers,
@@ -119,7 +119,7 @@ impl<'a> NodeBuilder<'a> {
 }
 
 pub struct Node {
-    net: Arc<Net>,
+    links: Arc<VtLinkLayer>,
     tcp: Arc<Tcp>,
     router: Arc<Router>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
@@ -128,22 +128,22 @@ pub struct Node {
 impl Node {
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_to<'a>(&'a self, next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
-        self.net.find_link_to(next_hop).await
+        self.links.find_link_to(next_hop).await
     }
 
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
-        self.net.find_link_with_interface_ip(ip).await
+        self.links.find_link_with_interface_ip(ip).await
     }
 
     /// Turns on a link interface.
-    pub async fn activate(&self, link_no: u16) -> Result<(), net::Error> {
-        self.net.activate_link(link_no).await
+    pub async fn activate(&self, link_no: u16) -> Result<(), link::Error> {
+        self.links.activate_link(link_no).await
     }
 
     /// Turns off a link interface.
-    pub async fn deactivate(&self, link_no: u16) -> Result<(), net::Error> {
-        self.net.deactivate_link(link_no).await
+    pub async fn deactivate(&self, link_no: u16) -> Result<(), link::Error> {
+        self.links.deactivate_link(link_no).await
     }
 
     pub async fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
@@ -155,7 +155,7 @@ impl Node {
     /// This is useful for sending out periodic RIP messages to all links.
     #[allow(clippy::needless_lifetimes)]
     pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
-        self.net.iter_links().await
+        self.links.iter_links().await
     }
 
     pub async fn close_socket(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
@@ -219,7 +219,7 @@ impl Node {
     }
 
     pub async fn run(&self) {
-        let mut listener = self.net.listen().await;
+        let mut listener = self.links.listen().await;
         while let Ok(bytes) = listener.recv().await {
             // 0. parse bytes to packet
             // 1. drop if packet is not valid or TTL = 0
@@ -342,7 +342,7 @@ impl Node {
             Ok(protocol) => match self.protocol_handlers.get(&protocol) {
                 Some(handler) => {
                     handler
-                        .handle_packet(header, payload, &self.router, &self.net)
+                        .handle_packet(header, payload, &self.router, &self.links)
                         .await;
                 }
                 None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),

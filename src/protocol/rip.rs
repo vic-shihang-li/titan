@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    net::{Ipv4PacketBuilder, Link, Net},
+    link::{Ipv4PacketBuilder, Link, VtLinkLayer},
     protocol::Protocol,
     route::{Entry as RoutingEntry, ForwardingTable, Router},
 };
@@ -197,7 +197,7 @@ impl ProtocolHandler for RipHandler {
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         router: &Router,
-        net: &Net,
+        links: &VtLinkLayer,
     ) {
         let message = RipMessage::from_bytes(payload);
 
@@ -208,7 +208,7 @@ impl ProtocolHandler for RipHandler {
             .update_route_table(&mut rt, message, header.source_addr())
             .await;
         if !updates.is_empty() {
-            for link in &*net.iter_links().await {
+            for link in &*links.iter_links().await {
                 self.send_triggered_update(&updates, link).await;
             }
         }
