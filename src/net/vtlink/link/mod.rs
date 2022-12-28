@@ -344,7 +344,7 @@ pub enum SendError {
 
 impl Link {
     /// On this link, send a message conforming to one of the supported protocols.
-    pub async fn send(&self, payload: &[u8]) -> Result<(), SendError> {
+    pub async fn send(&self, payload: &[u8]) -> std::result::Result<(), SendError> {
         if !self.activated {
             return Err(SendError::LinkInactive);
         }

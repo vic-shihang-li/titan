@@ -5,7 +5,7 @@ use std::{
     net::Ipv4Addr,
 };
 
-use super::{link::ParseLinkError, LinkDefinition};
+use super::{LinkDefinition, ParseLinkError};
 
 /// Input to a router; used to establish a router's interfaces.
 #[derive(Debug, PartialEq, Eq, Clone)]
