@@ -13,7 +13,7 @@ use tokio::sync::{
 };
 
 use crate::{
-    net::{Router, SendError},
+    net::{Net, SendError},
     protocol::Protocol,
 };
 
@@ -115,12 +115,12 @@ impl DynamicRto {
     }
 }
 
-pub struct TcpTransport<const N: usize> {
-    send_buf: SendBuf<N>,
-    recv_buf: RecvBuf<N>,
+pub struct TcpTransport<const BUF_SZ: usize, N: Net> {
+    send_buf: SendBuf<BUF_SZ>,
+    recv_buf: RecvBuf<BUF_SZ>,
     remote: Remote,
     local_port: Port,
-    router: Arc<Router>,
+    net: Arc<N>,
     seq_no: usize,
     last_transmitted: Instant,
     ack_batch_timeout: Duration,
@@ -137,13 +137,13 @@ enum NextSendDecision {
     SendBufClosed,
 }
 
-impl<const N: usize> TcpTransport<N> {
+impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
     pub async fn init(
-        send_buf: SendBuf<N>,
-        recv_buf: RecvBuf<N>,
+        send_buf: SendBuf<BUF_SZ>,
+        recv_buf: RecvBuf<BUF_SZ>,
         remote: Remote,
         local_port: Port,
-        router: Arc<Router>,
+        net: Arc<N>,
         should_ack: broadcast::Receiver<()>,
     ) -> Self {
         let seq_no = send_buf.tail().await;
@@ -152,7 +152,7 @@ impl<const N: usize> TcpTransport<N> {
             recv_buf,
             remote,
             local_port,
-            router,
+            net,
             seq_no,
             last_transmitted: Instant::now(),
             ack_batch_timeout: Duration::from_millis(1),
@@ -366,8 +366,8 @@ impl<const N: usize> TcpTransport<N> {
         let mut tcp_header = self.prepare_tcp_packet(seq_no).await;
 
         let src_ip = self
-            .router
-            .find_src_vip_with_dest(self.remote.ip())
+            .net
+            .get_outbound_ip(self.remote.ip())
             .await
             .expect("Cannot find remote in the IP layer");
         let checksum = tcp_header
@@ -377,7 +377,7 @@ impl<const N: usize> TcpTransport<N> {
         let ack = tcp_header.acknowledgment_number;
         tcp_header.write(&mut bytes).unwrap();
         bytes.extend_from_slice(payload);
-        self.router
+        self.net
             .send(&bytes, Protocol::Tcp, self.remote.ip())
             .await
             .map(|_| {
@@ -422,10 +422,10 @@ impl Default for RetransmissionConfig {
     }
 }
 
-pub fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'static>(
+pub fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'static, N: Net>(
     payload: Vec<u8>,
     remote: Remote,
-    router: Arc<Router>,
+    router: Arc<N>,
     cfg: RetransmissionConfig,
     on_err: F,
 ) -> AckHandle {
@@ -435,7 +435,7 @@ pub fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'st
         let transporter = SingleMessageTransport {
             payload,
             remote,
-            router,
+            net: router,
             retransmission_cfg: cfg,
             acked_rx,
             on_err,
@@ -479,16 +479,16 @@ pub enum TransmissionError {
 }
 
 /// TCP Transporter that ensures delivery of only one packet.
-struct SingleMessageTransport<F: FnOnce(TransmissionError) + Send> {
+struct SingleMessageTransport<F: FnOnce(TransmissionError) + Send, N: Net> {
     payload: Vec<u8>,
     remote: Remote,
-    router: Arc<Router>,
+    net: Arc<N>,
     retransmission_cfg: RetransmissionConfig,
     acked_rx: oneshot::Receiver<()>,
     on_err: F,
 }
 
-impl<F: FnOnce(TransmissionError) + Send> SingleMessageTransport<F> {
+impl<F: FnOnce(TransmissionError) + Send, N: Net> SingleMessageTransport<F, N> {
     pub async fn run(mut self) {
         match tokio::time::timeout(self.retransmission_cfg.timeout, self.transmission_loop()).await
         {
@@ -531,7 +531,7 @@ impl<F: FnOnce(TransmissionError) + Send> SingleMessageTransport<F> {
     /// Errs when failed over the max retry limit. Otherwise, forward the send
     /// result to the caller.
     async fn send(&self) -> Result<(), SendError> {
-        self.router
+        self.net
             .send(&self.payload, Protocol::Tcp, self.remote.ip())
             .await
     }

@@ -4,6 +4,7 @@ use crate::protocol::rip::RipMessage;
 use crate::protocol::Protocol;
 use crate::utils::loop_with_interval;
 use crate::{Args, Message};
+use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 use std::fmt;
 use std::sync::Arc;
@@ -230,7 +231,19 @@ impl Default for RouterConfig {
     }
 }
 
-pub struct Router {
+#[async_trait]
+pub trait Net: 'static + Send + Sync {
+    async fn get_outbound_ip(&self, dest: Ipv4Addr) -> Option<[u8; 4]>;
+
+    async fn send<P: Into<u8> + Send>(
+        &self,
+        payload: &[u8],
+        protocol: P,
+        dest: Ipv4Addr,
+    ) -> Result<(), SendError>;
+}
+
+pub struct VtLinkNet {
     links: Arc<VtLinkLayer>,
     my_addrs: Vec<Ipv4Addr>,
     routes: Arc<RwLock<ForwardingTable>>,
@@ -239,7 +252,60 @@ pub struct Router {
     drop_policy: DropFactor,
 }
 
-impl Router {
+#[async_trait]
+impl Net for VtLinkNet {
+    async fn get_outbound_ip(&self, dest: Ipv4Addr) -> Option<[u8; 4]> {
+        let rt = self.routes.read().await;
+        if let Some(forward_rule) = rt.find_entry_for(dest) {
+            self.links
+                .find_link_to(forward_rule.next_hop)
+                .await
+                .map(|link| link.source().octets())
+        } else {
+            None
+        }
+    }
+
+    async fn send<P: Into<u8> + Send>(
+        &self,
+        payload: &[u8],
+        protocol: P,
+        dest_vip: Ipv4Addr,
+    ) -> Result<(), SendError> {
+        let table = self.routes.read().await;
+
+        let entry = table
+            .find_entry_for(dest_vip)
+            .ok_or(SendError::NoForwardingEntry)?;
+
+        if entry.is_unreachable() {
+            return Err(SendError::Unreachable);
+        }
+
+        let link = self
+            .links
+            .find_link_to(entry.next_hop())
+            .await
+            .ok_or_else(|| {
+                log::warn!("No link found for next hop {}", entry.next_hop());
+                SendError::NoLink
+            })?;
+
+        let packet = Ipv4PacketBuilder::default()
+            .with_src(link.source())
+            .with_dst(dest_vip)
+            .with_payload(payload)
+            .with_protocol(protocol)
+            .build()
+            .unwrap();
+
+        link.send(&packet)
+            .await
+            .map_err(|e| SendError::Transport(e.into()))
+    }
+}
+
+impl VtLinkNet {
     pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: RouterConfig) -> Self {
         let my_addrs = program_args.get_my_interface_ips();
 
@@ -324,19 +390,6 @@ impl Router {
         PacketDecision::Forward
     }
 
-    pub async fn find_src_vip_with_dest(&self, dest: Ipv4Addr) -> Option<[u8; 4]> {
-        let rt = self.routes.read().await;
-        if let Some(entry) = rt.find_entry_for(dest) {
-            self.links
-                .find_link_to(entry.next_hop)
-                .await
-                .map(|link| link.source().octets())
-        } else {
-            log::warn!("No route to {}, dropping packet", dest);
-            None
-        }
-    }
-
     pub async fn forward_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
         let dest = header.destination_addr();
         let rt = self.routes.read().await;
@@ -365,47 +418,9 @@ impl Router {
             log::warn!("No route to {}, dropping packet", dest);
         }
     }
-
-    pub async fn send<P: Into<u8>>(
-        &self,
-        payload: &[u8],
-        protocol: P,
-        dest_vip: Ipv4Addr,
-    ) -> Result<(), SendError> {
-        let table = self.routes.read().await;
-
-        let entry = table
-            .find_entry_for(dest_vip)
-            .ok_or(SendError::NoForwardingEntry)?;
-
-        if entry.is_unreachable() {
-            return Err(SendError::Unreachable);
-        }
-
-        let link = self
-            .links
-            .find_link_to(entry.next_hop())
-            .await
-            .ok_or_else(|| {
-                log::warn!("No link found for next hop {}", entry.next_hop());
-                SendError::NoLink
-            })?;
-
-        let packet = Ipv4PacketBuilder::default()
-            .with_src(link.source())
-            .with_dst(dest_vip)
-            .with_payload(payload)
-            .with_protocol(protocol)
-            .build()
-            .unwrap();
-
-        link.send(&packet)
-            .await
-            .map_err(|e| SendError::Transport(e.into()))
-    }
 }
 
-impl Drop for Router {
+impl Drop for VtLinkNet {
     fn drop(&mut self) {
         self.pruner.abort();
         self.rip_updater.abort();
@@ -539,14 +554,14 @@ mod tests {
         (header, payload)
     }
 
-    async fn make_mock_router() -> Router {
+    async fn make_mock_router() -> VtLinkNet {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         make_mock_router_with_args(abc_net.a).await
     }
 
-    async fn make_mock_router_with_args(args: Args) -> Router {
+    async fn make_mock_router_with_args(args: Args) -> VtLinkNet {
         let links = Arc::new(VtLinkLayer::new(&args).await);
-        let router = Router::new(links, &args, RouterConfig::default());
+        let router = VtLinkNet::new(links, &args, RouterConfig::default());
         router
     }
 }

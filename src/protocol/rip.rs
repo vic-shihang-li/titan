@@ -3,7 +3,7 @@ use etherparse::Ipv4HeaderSlice;
 
 use crate::{
     link::{Ipv4PacketBuilder, Link, VtLinkLayer},
-    net::{Entry as RoutingEntry, ForwardingTable, Router},
+    net::{Entry as RoutingEntry, ForwardingTable, VtLinkNet},
     protocol::Protocol,
 };
 
@@ -196,14 +196,14 @@ impl ProtocolHandler for RipHandler {
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        router: &Router,
+        net: &VtLinkNet,
         links: &VtLinkLayer,
     ) {
         let message = RipMessage::from_bytes(payload);
 
         log::info!("Received RIP packet from {}", header.source_addr());
 
-        let mut rt = router.get_forwarding_table_mut().await;
+        let mut rt = net.get_forwarding_table_mut().await;
         let updates = self
             .update_route_table(&mut rt, message, header.source_addr())
             .await;

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
 use crate::link::VtLinkLayer;
-use crate::net::Router;
+use crate::net::VtLinkNet;
 use crate::protocol::ProtocolHandler;
 use crate::Message;
 
@@ -57,7 +57,7 @@ impl ProtocolHandler for TestHandler {
         &self,
         _header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        _router: &Router,
+        _net: &VtLinkNet,
         _links: &VtLinkLayer,
     ) {
         let message = TestMessage::from_packet(_header, payload);

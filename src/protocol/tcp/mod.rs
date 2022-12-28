@@ -11,8 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
 
+use crate::net::Net;
 use crate::protocol::tcp::socket::UpdateAction;
-use crate::{link::VtLinkLayer, net::Router, protocol::ProtocolHandler};
+use crate::{link::VtLinkLayer, net::VtLinkNet, protocol::ProtocolHandler};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
@@ -76,13 +77,13 @@ pub enum TcpCloseError {
 }
 
 /// A TCP stack.
-pub struct Tcp {
-    sockets: RwLock<SocketTable>,
+pub struct Tcp<N: Net + 'static> {
+    sockets: RwLock<SocketTable<N>>,
 }
 
-impl Tcp {
-    pub fn new(router: Arc<Router>) -> Self {
-        let sockets = RwLock::new(SocketTable::new(router));
+impl<N: Net> Tcp<N> {
+    pub fn new(net: Arc<N>) -> Self {
+        let sockets = RwLock::new(SocketTable::new(net));
         Tcp { sockets }
     }
 
@@ -158,9 +159,9 @@ impl Tcp {
         Ok(out_buf)
     }
 
-    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_, N>> {
         let table = self.sockets.read().await;
-        let socket: *const Socket = table.socket_map.get(&socket_id)?;
+        let socket: *const Socket<N> = table.socket_map.get(&socket_id)?;
         Some(SocketRef {
             _guard: table,
             socket,
@@ -170,10 +171,10 @@ impl Tcp {
     pub async fn get_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
-    ) -> Option<SocketRef<'_>> {
+    ) -> Option<SocketRef<'_, N>> {
         let table = self.sockets.read().await;
         let id = *table.socket_id_map.get(&socket_descriptor)?;
-        let socket: *const Socket = table.socket_map.get(&id)?;
+        let socket: *const Socket<N> = table.socket_map.get(&id)?;
         Some(SocketRef {
             _guard: table,
             socket,
@@ -241,13 +242,13 @@ impl Tcp {
     }
 }
 
-pub struct SocketRef<'a> {
-    _guard: RwLockReadGuard<'a, SocketTable>,
-    socket: *const Socket,
+pub struct SocketRef<'a, N: Net + 'static> {
+    _guard: RwLockReadGuard<'a, SocketTable<N>>,
+    socket: *const Socket<N>,
 }
 
-impl<'a> Deref for SocketRef<'a> {
-    type Target = Socket;
+impl<'a, N: Net + 'static> Deref for SocketRef<'a, N> {
+    type Target = Socket<N>;
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: this socket pointer is valid because this struct holds a
@@ -257,29 +258,29 @@ impl<'a> Deref for SocketRef<'a> {
 }
 
 // SAFETY: this can be sent across threads because RwLockReadGuard is Send.
-unsafe impl<'a> Send for SocketRef<'a> {}
+unsafe impl<'a, N: Net> Send for SocketRef<'a, N> {}
 
 #[derive(Debug)]
 pub enum AddSocketError {
     ConnectionExists(SocketId),
 }
 
-pub struct SocketTable {
+pub struct SocketTable<N: Net + 'static> {
     socket_id_map: HashMap<SocketDescriptor, SocketId>,
-    socket_map: HashMap<SocketId, Socket>,
-    socket_builder: SocketBuilder,
+    socket_map: HashMap<SocketId, Socket<N>>,
+    socket_builder: SocketBuilder<N>,
 }
 
-impl SocketTable {
-    pub fn new(router: Arc<Router>) -> Self {
+impl<N: Net> SocketTable<N> {
+    pub fn new(net: Arc<N>) -> Self {
         Self {
-            socket_builder: SocketBuilder::new(router),
+            socket_builder: SocketBuilder::new(net),
             socket_id_map: HashMap::new(),
             socket_map: HashMap::new(),
         }
     }
 
-    pub fn add_new_socket(&mut self, remote: Remote) -> Result<&mut Socket, AddSocketError> {
+    pub fn add_new_socket(&mut self, remote: Remote) -> Result<&mut Socket<N>, AddSocketError> {
         let sock_id = self.socket_builder.make_socket_id(remote);
         let (descriptor, socket) = self.socket_builder.build_with_id(sock_id);
 
@@ -289,7 +290,7 @@ impl SocketTable {
     pub fn add_new_listen_socket(
         &mut self,
         local_port: Port,
-    ) -> Result<&mut Socket, AddSocketError> {
+    ) -> Result<&mut Socket<N>, AddSocketError> {
         let (descriptor, socket) = self
             .socket_builder
             .build_with_id(SocketId::for_listen_socket(local_port));
@@ -301,8 +302,8 @@ impl SocketTable {
         &mut self,
         remote: Remote,
         local_port: Port,
-        syn_recvd_state: SynReceived,
-    ) -> Result<&mut Socket, AddSocketError> {
+        syn_recvd_state: SynReceived<N>,
+    ) -> Result<&mut Socket<N>, AddSocketError> {
         let sock_id = SocketId::build()
             .with_remote_ip(remote.ip())
             .with_remote_port(remote.port())
@@ -321,17 +322,17 @@ impl SocketTable {
         self.socket_map.remove(&id);
     }
 
-    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket> {
+    pub fn get_socket_by_id(&self, id: SocketId) -> Option<&Socket<N>> {
         self.socket_map.get(&id)
     }
 
-    pub fn get_socket_by_descriptor(&self, descriptor: SocketDescriptor) -> Option<&Socket> {
+    pub fn get_socket_by_descriptor(&self, descriptor: SocketDescriptor) -> Option<&Socket<N>> {
         self.socket_id_map
             .get(&descriptor)
             .and_then(|sock_id| self.socket_map.get(sock_id))
     }
 
-    pub fn get_listener_socket(&self, port: Port) -> Option<&Socket> {
+    pub fn get_listener_socket(&self, port: Port) -> Option<&Socket<N>> {
         let id = SocketId::for_listen_socket(port);
         self.get_socket_by_id(id)
     }
@@ -339,8 +340,8 @@ impl SocketTable {
     fn insert(
         &mut self,
         descriptor: SocketDescriptor,
-        socket: Socket,
-    ) -> Result<&mut Socket, AddSocketError> {
+        socket: Socket<N>,
+    ) -> Result<&mut Socket<N>, AddSocketError> {
         let socket_id = socket.id();
 
         let sock_ref = self
@@ -356,24 +357,24 @@ impl SocketTable {
     }
 }
 
-struct SocketBuilder {
+struct SocketBuilder<N> {
     next_socket_descriptor: usize,
     next_port: u16,
-    router: Arc<Router>,
+    net: Arc<N>,
 }
 
-impl SocketBuilder {
-    fn new(router: Arc<Router>) -> Self {
+impl<N: Net> SocketBuilder<N> {
+    fn new(net: Arc<N>) -> Self {
         Self {
-            router,
+            net,
             next_port: 1024,
             next_socket_descriptor: 0,
         }
     }
 
-    fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket) {
+    fn build_with_id(&mut self, socket_id: SocketId) -> (SocketDescriptor, Socket<N>) {
         let descriptor = self.allocate_socket_descriptor();
-        let sock = Socket::new(socket_id, descriptor, self.router.clone());
+        let sock = Socket::new(socket_id, descriptor, self.net.clone());
         (descriptor, sock)
     }
 
@@ -399,23 +400,23 @@ impl SocketBuilder {
     }
 }
 
-pub struct TcpHandler {
-    tcp: Arc<Tcp>,
+pub struct TcpHandler<N: Net + 'static> {
+    tcp: Arc<Tcp<N>>,
 }
 
-impl TcpHandler {
-    pub fn new(tcp: Arc<Tcp>) -> Self {
+impl<N: Net> TcpHandler<N> {
+    pub fn new(tcp: Arc<Tcp<N>>) -> Self {
         Self { tcp }
     }
 }
 
 #[async_trait]
-impl ProtocolHandler for TcpHandler {
+impl<N: Net + Send + Sync> ProtocolHandler for TcpHandler<N> {
     async fn handle_packet<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        _router: &Router,
+        _net: &VtLinkNet,
         _links: &VtLinkLayer,
     ) {
         // Step 1: validate checksum

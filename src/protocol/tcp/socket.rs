@@ -1,4 +1,4 @@
-use crate::net::Router;
+use crate::net::Net;
 use crate::protocol::tcp::buf::{FillError, SetTailError, WriteRangeError};
 use crate::protocol::tcp::prelude::SocketIdBuilder;
 use crate::protocol::tcp::transport::RetransmissionConfig;
@@ -29,13 +29,13 @@ pub struct TcpConn {
 }
 
 impl TcpConn {
-    fn new(
+    fn new<N: Net + Send + Sync>(
         socket_id: SocketId,
         remote: Remote,
         local_port: Port,
         start_seq_no: usize,
         start_ack_no: usize,
-        router: Arc<Router>,
+        net: Arc<N>,
     ) -> Self {
         Self {
             socket_id,
@@ -44,7 +44,7 @@ impl TcpConn {
                 local_port,
                 start_seq_no,
                 start_ack_no,
-                router,
+                net,
             )),
         }
     }
@@ -134,9 +134,9 @@ impl TcpConn {
 }
 
 #[derive(Debug)]
-struct InnerTcpConn<const N: usize, A: AckPolicy> {
-    send_buf: SendBuf<N>,
-    recv_buf: RecvBuf<N>,
+struct InnerTcpConn<const BUF_SZ: usize, A: AckPolicy> {
+    send_buf: SendBuf<BUF_SZ>,
+    recv_buf: RecvBuf<BUF_SZ>,
     remote: Remote,
     local_port: Port,
     transport_worker: JoinHandle<()>,
@@ -144,13 +144,13 @@ struct InnerTcpConn<const N: usize, A: AckPolicy> {
     ack_policy: A,
 }
 
-impl<const N: usize, A: AckPolicy + Default> InnerTcpConn<N, A> {
-    fn new(
+impl<const BUF_SZ: usize, A: AckPolicy + Default> InnerTcpConn<BUF_SZ, A> {
+    fn new<N: Net + Send + Sync>(
         remote: Remote,
         local_port: Port,
         start_seq_no: usize,
         start_ack_no: usize,
-        router: Arc<Router>,
+        net: Arc<N>,
     ) -> Self {
         let send_buf = SendBuf::new(start_seq_no);
         let recv_buf = RecvBuf::new(start_ack_no);
@@ -159,7 +159,7 @@ impl<const N: usize, A: AckPolicy + Default> InnerTcpConn<N, A> {
         let sb = send_buf.clone();
         let rb = recv_buf.clone();
         let transport_worker = tokio::spawn(async move {
-            TcpTransport::init(sb, rb, remote, local_port, router, should_ack_rx)
+            TcpTransport::init(sb, rb, remote, local_port, net, should_ack_rx)
                 .await
                 .run()
                 .await;
@@ -345,8 +345,8 @@ pub enum SocketStatus {
     LastAck,
 }
 
-impl From<&TcpState> for SocketStatus {
-    fn from(s: &TcpState) -> Self {
+impl<N: Net> From<&TcpState<N>> for SocketStatus {
+    fn from(s: &TcpState<N>) -> Self {
         match s {
             TcpState::Closed(_) => SocketStatus::Closed,
             TcpState::SynSent(_) => SocketStatus::SynSent,
@@ -363,93 +363,93 @@ impl From<&TcpState> for SocketStatus {
     }
 }
 
-enum TcpState {
-    Closed(Closed),
-    SynSent(SynSent),
-    SynReceived(SynReceived),
-    Established(Established),
-    Listen(Listen),
-    FinWait1(FinWait1),
-    FinWait2(FinWait2),
+enum TcpState<N: Net> {
+    Closed(Closed<N>),
+    SynSent(SynSent<N>),
+    SynReceived(SynReceived<N>),
+    Established(Established<N>),
+    Listen(Listen<N>),
+    FinWait1(FinWait1<N>),
+    FinWait2(FinWait2<N>),
     Closing(Closing),
     TimeWait(TimeWait),
-    CloseWait(CloseWait),
-    LastAck(LastAck),
+    CloseWait(CloseWait<N>),
+    LastAck(LastAck<N>),
 }
 
-impl TcpState {
-    fn new(router: Arc<Router>) -> Self {
-        Self::Closed(Closed::new(router))
+impl<N: Net> TcpState<N> {
+    fn new(net: Arc<N>) -> Self {
+        Self::Closed(Closed::new(net))
     }
 }
 
-impl From<Closed> for TcpState {
-    fn from(s: Closed) -> Self {
+impl<N: Net> From<Closed<N>> for TcpState<N> {
+    fn from(s: Closed<N>) -> Self {
         Self::Closed(s)
     }
 }
 
-impl From<SynSent> for TcpState {
-    fn from(s: SynSent) -> Self {
+impl<N: Net> From<SynSent<N>> for TcpState<N> {
+    fn from(s: SynSent<N>) -> Self {
         Self::SynSent(s)
     }
 }
 
-impl From<SynReceived> for TcpState {
-    fn from(s: SynReceived) -> Self {
+impl<N: Net> From<SynReceived<N>> for TcpState<N> {
+    fn from(s: SynReceived<N>) -> Self {
         Self::SynReceived(s)
     }
 }
 
-impl From<Established> for TcpState {
-    fn from(s: Established) -> Self {
+impl<N: Net> From<Established<N>> for TcpState<N> {
+    fn from(s: Established<N>) -> Self {
         Self::Established(s)
     }
 }
 
-impl From<Listen> for TcpState {
-    fn from(s: Listen) -> Self {
+impl<N: Net> From<Listen<N>> for TcpState<N> {
+    fn from(s: Listen<N>) -> Self {
         Self::Listen(s)
     }
 }
 
-impl From<FinWait1> for TcpState {
-    fn from(s: FinWait1) -> Self {
+impl<N: Net> From<FinWait1<N>> for TcpState<N> {
+    fn from(s: FinWait1<N>) -> Self {
         Self::FinWait1(s)
     }
 }
 
-impl From<FinWait2> for TcpState {
-    fn from(s: FinWait2) -> Self {
+impl<N: Net> From<FinWait2<N>> for TcpState<N> {
+    fn from(s: FinWait2<N>) -> Self {
         Self::FinWait2(s)
     }
 }
 
-impl From<Closing> for TcpState {
+impl<N: Net> From<Closing> for TcpState<N> {
     fn from(s: Closing) -> Self {
         Self::Closing(s)
     }
 }
 
-impl From<TimeWait> for TcpState {
+impl<N: Net> From<TimeWait> for TcpState<N> {
     fn from(s: TimeWait) -> Self {
         Self::TimeWait(s)
     }
 }
 
-impl From<CloseWait> for TcpState {
-    fn from(s: CloseWait) -> Self {
+impl<N: Net> From<CloseWait<N>> for TcpState<N> {
+    fn from(s: CloseWait<N>) -> Self {
         Self::CloseWait(s)
     }
 }
 
-impl From<LastAck> for TcpState {
-    fn from(s: LastAck) -> Self {
+impl<N: Net> From<LastAck<N>> for TcpState<N> {
+    fn from(s: LastAck<N>) -> Self {
         Self::LastAck(s)
     }
 }
 
-impl TcpState {
+impl<N: Net> TcpState<N> {
     async fn local_window_sz(&self) -> usize {
         match self {
             TcpState::Closed(_) => TCP_DEFAULT_WINDOW_SZ,
@@ -499,15 +499,15 @@ impl TcpState {
     }
 }
 
-struct Closed {
+struct Closed<N: Net> {
     seq_no: u32,
-    router: Arc<Router>,
+    net: Arc<N>,
 }
 
-impl Closed {
-    pub fn new(router: Arc<Router>) -> Self {
+impl<N: Net> Closed<N> {
+    pub fn new(net: Arc<N>) -> Self {
         Self {
-            router,
+            net,
             seq_no: Self::gen_rand_seq_no(),
         }
     }
@@ -516,7 +516,8 @@ impl Closed {
         self,
         src_port: Port,
         dest: (Ipv4Addr, Port),
-    ) -> Result<(oneshot::Receiver<Result<TcpConn, TcpConnError>>, SynSent), TransportError> {
+    ) -> Result<(oneshot::Receiver<Result<TcpConn, TcpConnError>>, SynSent<N>), TransportError>
+    {
         let (established_tx, established_rx) = oneshot::channel();
         let (dest_ip, dest_port) = dest;
 
@@ -528,7 +529,7 @@ impl Closed {
         let ack_handle = transport_single_message(
             syn_pkt,
             Remote::new(dest_ip, dest_port),
-            self.router.clone(),
+            self.net.clone(),
             RetransmissionConfig::default(),
             move |_| {
                 established.send(Err(TcpConnError::Timeout)).ok();
@@ -541,17 +542,17 @@ impl Closed {
             dest_ip,
             syn_packet_rtx_handle: ack_handle,
             established_tx,
-            router: self.router,
+            net: self.net,
             seq_no: self.seq_no + 1,
         };
         Ok((established_rx, syn_sent))
     }
 
-    pub fn listen(self, port: Port, tx: mpsc::Sender<TcpConn>) -> Listen {
+    pub fn listen(self, port: Port, tx: mpsc::Sender<TcpConn>) -> Listen<N> {
         Listen {
             port,
             seq_no: self.seq_no,
-            router: self.router,
+            net: self.net,
             new_conn_tx: tx,
         }
     }
@@ -567,7 +568,7 @@ impl Closed {
         );
         header.syn = true;
         let payload: &[u8] = &[];
-        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        let src_ip = self.net.get_outbound_ip(dst_ip).await.unwrap();
         let checksum = header
             .calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload)
             .unwrap();
@@ -581,21 +582,21 @@ impl Closed {
     }
 }
 
-struct Listen {
+struct Listen<N: Net> {
     port: Port,
     seq_no: u32,
-    router: Arc<Router>,
+    net: Arc<N>,
     // Notifies when new connections are established with a new TcpConn.
     // The TcpListener has the receiving end of this channel.
     new_conn_tx: mpsc::Sender<TcpConn>,
 }
 
-impl Listen {
+impl<N: Net> Listen<N> {
     pub async fn syn_received<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         syn_packet: &TcpHeaderSlice<'a>,
-    ) -> Result<SynReceived, TransportError> {
+    ) -> Result<SynReceived<N>, TransportError> {
         assert!(syn_packet.syn());
 
         let src_ip = ip_header.destination_addr();
@@ -605,7 +606,7 @@ impl Listen {
         let ack_handle = transport_single_message(
             syn_ack_pkt,
             Remote::new(ip_header.source_addr(), syn_packet.source_port().into()),
-            self.router.clone(),
+            self.net.clone(),
             RetransmissionConfig::default(),
             move |_| {
                 // TODO: delete SynReceived socketx
@@ -618,7 +619,7 @@ impl Listen {
             synack_ack_handle: ack_handle,
             remote_ip: ip_header.source_addr(),
             remote_port: Port(syn_packet.source_port()),
-            router: self.router.clone(),
+            net: self.net.clone(),
             new_conn_tx: self.new_conn_tx.clone(),
         };
 
@@ -655,21 +656,21 @@ impl Listen {
     }
 }
 
-struct SynSent {
+struct SynSent<N: Net> {
     seq_no: u32,
     src_port: Port,
     dest_ip: Ipv4Addr,
     dest_port: Port,
     syn_packet_rtx_handle: AckHandle,
-    router: Arc<Router>,
+    net: Arc<N>,
     established_tx: RaceOneShotSender<Result<TcpConn, TcpConnError>>,
 }
 
-impl SynSent {
+impl<N: Net> SynSent<N> {
     pub async fn establish<'a>(
         mut self,
         syn_ack_packet: &TcpHeaderSlice<'a>,
-    ) -> Result<Established, TransportError> {
+    ) -> Result<Established<N>, TransportError> {
         assert!(syn_ack_packet.syn());
         assert!(syn_ack_packet.ack());
         assert_eq!(syn_ack_packet.acknowledgment_number(), self.seq_no);
@@ -678,7 +679,7 @@ impl SynSent {
 
         let ack_pkt = self.make_ack_packet(syn_ack_packet, self.dest_ip).await;
 
-        self.router
+        self.net
             .send(&ack_pkt, Protocol::Tcp, self.dest_ip)
             .await
             .map_err(|_| TransportError::DestUnreachable(self.dest_ip))?;
@@ -699,7 +700,7 @@ impl SynSent {
             self.src_port,
             send_buf_start,
             recv_buf_start,
-            self.router.clone(),
+            self.net.clone(),
         );
         self.established_tx
             .send(Ok(conn.clone()))
@@ -710,7 +711,7 @@ impl SynSent {
             remote_ip: self.dest_ip,
             remote_port: self.dest_port,
             conn,
-            router: self.router,
+            net: self.net,
             last_seq: self.seq_no + 1,
         })
     }
@@ -731,7 +732,7 @@ impl SynSent {
         header.ack = true;
         header.acknowledgment_number = syn_ack_packet.sequence_number() + 1;
         let payload: &[u8] = &[];
-        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        let src_ip = self.net.get_outbound_ip(dst_ip).await.unwrap();
         let checksum = header
             .calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload)
             .unwrap();
@@ -742,18 +743,18 @@ impl SynSent {
     }
 }
 
-pub struct SynReceived {
+pub struct SynReceived<N: Net> {
     seq_no: u32,
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
-    router: Arc<Router>,
+    net: Arc<N>,
     synack_ack_handle: AckHandle,
     new_conn_tx: mpsc::Sender<TcpConn>,
 }
 
-impl SynReceived {
-    async fn establish<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> Established {
+impl<N: Net> SynReceived<N> {
+    async fn establish<'a>(mut self, ack_packet: &TcpHeaderSlice<'a>) -> Established<N> {
         assert!(ack_packet.ack());
         self.synack_ack_handle.acked();
 
@@ -773,7 +774,7 @@ impl SynReceived {
             self.local_port,
             send_buf_start,
             recv_buf_start,
-            self.router.clone(),
+            self.net.clone(),
         );
 
         self.new_conn_tx.send(conn.clone()).await.ok();
@@ -783,32 +784,32 @@ impl SynReceived {
             remote_ip: self.remote_ip,
             remote_port: self.remote_port,
             conn,
-            router: self.router,
+            net: self.net,
             last_seq: self.seq_no,
         }
     }
 
-    pub fn into_socket(self, socket_id: SocketId, descriptor: SocketDescriptor) -> Socket {
+    pub fn into_socket(self, socket_id: SocketId, descriptor: SocketDescriptor) -> Socket<N> {
         Socket::with_state(socket_id, descriptor, self.into())
     }
 }
 
-struct Established {
+struct Established<N: Net> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
     conn: TcpConn,
     last_seq: u32,
-    router: Arc<Router>,
+    net: Arc<N>,
 }
 
-impl Established {
+impl<N: Net> Established<N> {
     async fn handle_packet<'a>(
         self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> TcpState {
+    ) -> TcpState<N> {
         if tcp_header.fin() {
             return self.passive_close(tcp_header).await.into();
         }
@@ -820,11 +821,11 @@ impl Established {
 
     /// Perform transition from Established to CloseWait upon receiving a FIN
     /// packet.
-    async fn passive_close<'a>(self, tcp_header: &TcpHeaderSlice<'a>) -> CloseWait {
+    async fn passive_close<'a>(self, tcp_header: &TcpHeaderSlice<'a>) -> CloseWait<N> {
         let ack_packet = self
             .make_handshake_ack_packet(tcp_header, self.remote_ip)
             .await;
-        self.router
+        self.net
             .send(&ack_packet, Protocol::Tcp, self.remote_ip)
             .await
             .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
@@ -835,12 +836,12 @@ impl Established {
         CloseWait {
             conn: self.conn,
             last_seq: self.last_seq,
-            router: self.router,
+            net: self.net,
         }
     }
 
     /// Perform transition from Established -> FinWait1 in a close() syscall.
-    async fn active_close(self) -> FinWait1 {
+    async fn active_close(self) -> FinWait1<N> {
         // Below are the stages of transition from Established -> FinWait1 -> Finwait2.
         //
         // 1. Mark the write-side of TcpConn as closed. This stops new data from
@@ -871,12 +872,8 @@ impl Established {
         let (fin_acked_tx, fin_acked_rx) = oneshot::channel();
         let fin_seq_no: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
 
-        let router_clone = self.router.clone();
-        let src_ip = self
-            .router
-            .find_src_vip_with_dest(self.remote_ip)
-            .await
-            .unwrap();
+        let net = self.net.clone();
+        let src_ip = self.net.get_outbound_ip(self.remote_ip).await.unwrap();
         let local_port = self.local_port;
         let remote = Remote::new(self.remote_ip, self.remote_port);
         let fin_seq_no_clone = fin_seq_no.clone();
@@ -893,7 +890,7 @@ impl Established {
             let mut ack_handle = transport_single_message(
                 fin_packet,
                 remote,
-                router_clone,
+                net,
                 RetransmissionConfig::default(),
                 |_| {},
             );
@@ -915,7 +912,7 @@ impl Established {
             conn: self.conn,
             fin_acked_tx,
             fin_seq_no,
-            router: self.router,
+            net: self.net,
         }
     }
 
@@ -965,7 +962,7 @@ impl Established {
         header.ack = true;
         header.acknowledgment_number = fin_ack_header.sequence_number() + 1;
         let payload: &[u8] = &[];
-        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        let src_ip = self.net.get_outbound_ip(dst_ip).await.unwrap();
         let checksum = header
             .calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload)
             .unwrap();
@@ -975,23 +972,23 @@ impl Established {
     }
 }
 
-struct FinWait1 {
+struct FinWait1<N: Net> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
     conn: TcpConn,
-    router: Arc<Router>,
+    net: Arc<N>,
     fin_seq_no: Arc<Mutex<Option<usize>>>,
     fin_acked_tx: oneshot::Sender<()>,
 }
 
-impl FinWait1 {
+impl<N: Net> FinWait1<N> {
     async fn handle_packet<'a>(
         self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> TcpState {
+    ) -> TcpState<N> {
         let ack = tcp_header.ack();
         let fin = tcp_header.fin();
 
@@ -1004,7 +1001,7 @@ impl FinWait1 {
                 ip_header.destination_addr(),
                 ip_header.destination_addr(),
             );
-            self.router
+            self.net
                 .send(&ack_packet, Protocol::Tcp, self.remote_ip)
                 .await
                 .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
@@ -1028,7 +1025,7 @@ impl FinWait1 {
                 ip_header.destination_addr(),
                 ip_header.destination_addr(),
             );
-            self.router
+            self.net
                 .send(ack_packet.as_slice(), Protocol::Tcp, self.remote_ip)
                 .await
                 .map_err(|_| TransportError::DestUnreachable(self.remote_ip))
@@ -1050,7 +1047,7 @@ impl FinWait1 {
                         local_port: self.local_port,
                         remote_ip: self.remote_ip,
                         remote_port: self.remote_port,
-                        router: self.router,
+                        net: self.net,
                     };
                     return state.into();
                 }
@@ -1090,21 +1087,21 @@ impl FinWait1 {
     }
 }
 
-struct FinWait2 {
+struct FinWait2<N: Net> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
     conn: TcpConn,
-    router: Arc<Router>,
+    net: Arc<N>,
 }
 
-impl FinWait2 {
+impl<N: Net> FinWait2<N> {
     async fn handle_packet<'a>(
         self,
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> TcpState {
+    ) -> TcpState<N> {
         if tcp_header.fin() {
             self.handle_fin(ip_header, tcp_header).await.into()
         } else {
@@ -1125,7 +1122,7 @@ impl FinWait2 {
             ip_header.destination_addr(),
             ip_header.source_addr(),
         );
-        self.router
+        self.net
             .send(&ack_packet, Protocol::Tcp, self.remote_ip)
             .await
             .unwrap();
@@ -1172,21 +1169,21 @@ struct TimeWait {}
 
 impl TimeWait {}
 
-struct CloseWait {
+struct CloseWait<N: Net> {
     conn: TcpConn,
     last_seq: u32,
-    router: Arc<Router>,
+    net: Arc<N>,
 }
 
-impl CloseWait {
-    async fn close(&self, id: SocketId, local_port: Port) -> LastAck {
+impl<N: Net> CloseWait<N> {
+    async fn close(&self, id: SocketId, local_port: Port) -> LastAck<N> {
         // FIXME: send this packet?
         let _fin_packet = self
             .make_fin_packet(local_port, id.remote_port(), id.remote_ip())
             .await;
         self.conn.close().await;
         LastAck {
-            router: self.router.clone(),
+            net: self.net.clone(),
         }
     }
 
@@ -1195,7 +1192,7 @@ impl CloseWait {
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> TcpState {
+    ) -> TcpState<N> {
         if !payload.is_empty() {
             log::warn!(
                 "Got payload when the remote has already closed their end of the connection"
@@ -1218,7 +1215,7 @@ impl CloseWait {
         header.fin = true;
 
         let payload: &[u8] = &[];
-        let src_ip = self.router.find_src_vip_with_dest(dst_ip).await.unwrap();
+        let src_ip = self.net.get_outbound_ip(dst_ip).await.unwrap();
         let checksum = header
             .calc_checksum_ipv4_raw(src_ip, dst_ip.octets(), payload)
             .unwrap();
@@ -1228,13 +1225,13 @@ impl CloseWait {
     }
 }
 
-struct LastAck {
-    router: Arc<Router>,
+struct LastAck<N: Net> {
+    net: Arc<N>,
 }
 
-impl LastAck {
-    fn handle_ack(self) -> Closed {
-        Closed::new(self.router)
+impl<N: Net> LastAck<N> {
+    fn handle_ack(self) -> Closed<N> {
+        Closed::new(self.net)
     }
 }
 
@@ -1245,27 +1242,27 @@ pub enum ListenTransitionError {
     NotFromClosed,
 }
 
-pub enum UpdateAction {
-    NewSynReceivedSocket(SynReceived),
+pub enum UpdateAction<N: Net> {
+    NewSynReceivedSocket(SynReceived<N>),
     CloseSocket(SocketId),
 }
 
-pub struct Socket {
+pub struct Socket<N: Net> {
     id: SocketId,
     descriptor: SocketDescriptor,
-    state: Mutex<Option<TcpState>>,
+    state: Mutex<Option<TcpState<N>>>,
 }
 
-impl Socket {
-    pub fn new(id: SocketId, descriptor: SocketDescriptor, router: Arc<Router>) -> Self {
+impl<N: Net> Socket<N> {
+    pub fn new(id: SocketId, descriptor: SocketDescriptor, net: Arc<N>) -> Self {
         Self {
             id,
             descriptor,
-            state: Mutex::new(Some(TcpState::new(router))),
+            state: Mutex::new(Some(TcpState::new(net))),
         }
     }
 
-    fn with_state(id: SocketId, descriptor: SocketDescriptor, state: TcpState) -> Self {
+    fn with_state(id: SocketId, descriptor: SocketDescriptor, state: TcpState<N>) -> Self {
         Self {
             id,
             descriptor,
@@ -1281,7 +1278,7 @@ impl Socket {
             TcpState::Closed(s) => {
                 let (new_conn_tx, new_conn_rx) = channel(1024);
                 let listener = TcpListener::new(new_conn_rx);
-                let new_state: TcpState = s.listen(port, new_conn_tx).into();
+                let new_state: TcpState<N> = s.listen(port, new_conn_tx).into();
                 *state_guard = Some(new_state);
                 Ok(listener)
             }
@@ -1376,7 +1373,7 @@ impl Socket {
         ip_header: &Ipv4HeaderSlice<'a>,
         tcp_header: &TcpHeaderSlice<'a>,
         payload: &[u8],
-    ) -> Option<UpdateAction> {
+    ) -> Option<UpdateAction<N>> {
         let mut state_guard = self.state.lock().await;
         let state = state_guard.take().expect("State should exist");
 
@@ -1506,7 +1503,7 @@ impl Socket {
     }
 }
 
-impl Socket {
+impl<N: Net> Socket<N> {
     async fn local_window_sz(&self) -> usize {
         self.state
             .lock()

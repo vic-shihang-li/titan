@@ -5,7 +5,7 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::link::{self, LinkIter, LinkRef, VtLinkLayer};
-use crate::net::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
+use crate::net::{self, ForwardingTable, Net, PacketDecision, RouterConfig, VtLinkNet};
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
 use crate::protocol::tcp::{
     SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
@@ -90,7 +90,7 @@ impl<'a> NodeBuilder<'a> {
         self.built = true;
 
         let links = Arc::new(VtLinkLayer::new(self.args).await);
-        let router = Arc::new(Router::new(
+        let router = Arc::new(VtLinkNet::new(
             links.clone(),
             self.args,
             RouterConfig {
@@ -120,8 +120,8 @@ impl<'a> NodeBuilder<'a> {
 
 pub struct Node {
     links: Arc<VtLinkLayer>,
-    tcp: Arc<Tcp>,
-    router: Arc<Router>,
+    tcp: Arc<Tcp<VtLinkNet>>,
+    router: Arc<VtLinkNet>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
 }
 
@@ -172,7 +172,7 @@ impl Node {
     /// Send bytes to a destination.
     ///
     /// The destination is typically the next-hop address for a packet.
-    pub async fn send<P: Into<u8>>(
+    pub async fn send<P: Into<u8> + Send>(
         &self,
         payload: &[u8],
         protocol: P,
@@ -203,14 +203,14 @@ impl Node {
             .await
     }
 
-    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_>> {
+    pub async fn get_socket(&self, socket_id: SocketId) -> Option<SocketRef<'_, VtLinkNet>> {
         self.tcp.get_socket(socket_id).await
     }
 
     pub async fn get_socket_by_descriptor(
         &self,
         socket_descriptor: SocketDescriptor,
-    ) -> Option<SocketRef<'_>> {
+    ) -> Option<SocketRef<'_, VtLinkNet>> {
         self.tcp.get_socket_by_descriptor(socket_descriptor).await
     }
 
