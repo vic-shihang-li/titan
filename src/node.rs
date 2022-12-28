@@ -1,10 +1,8 @@
-use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
-use crate::link::{self, LinkIter, LinkRef, VtLinkLayer};
-use crate::net::vtlink::{PacketDecision, VtLinkNet, VtLinkNetConfig};
+use crate::net::vtlink::{self, LinkIter, LinkRef, VtLinkLayer, VtLinkNet, VtLinkNetConfig};
 use crate::net::Net;
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
 use crate::protocol::tcp::{
@@ -90,8 +88,8 @@ impl<'a> NodeBuilder<'a> {
         self.built = true;
 
         let links = Arc::new(VtLinkLayer::new(self.args).await);
-        let router = Arc::new(VtLinkNet::new(
-            links.clone(),
+        let net = Arc::new(VtLinkNet::new(
+            links,
             self.args,
             VtLinkNetConfig {
                 prune_interval: self.prune_interval,
@@ -100,7 +98,7 @@ impl<'a> NodeBuilder<'a> {
                 drop_factor: self.drop_factor,
             },
         ));
-        let tcp = Arc::new(Tcp::new(router.clone()));
+        let tcp = Arc::new(Tcp::new(net.clone()));
 
         self.with_protocol_handler(Protocol::Tcp, TcpHandler::new(tcp.clone()));
 
@@ -110,16 +108,14 @@ impl<'a> NodeBuilder<'a> {
         });
 
         Node {
-            links,
             tcp,
-            net: router,
+            net,
             protocol_handlers,
         }
     }
 }
 
 pub struct Node {
-    links: Arc<VtLinkLayer>,
     tcp: Arc<Tcp<VtLinkNet>>,
     net: Arc<VtLinkNet>,
     protocol_handlers: HashMap<Protocol, Box<dyn ProtocolHandler>>,
@@ -128,22 +124,22 @@ pub struct Node {
 impl Node {
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_to<'a>(&'a self, next_hop: Ipv4Addr) -> Option<LinkRef<'a>> {
-        self.links.find_link_to(next_hop).await
+        self.net.links().find_link_to(next_hop).await
     }
 
     #[allow(clippy::needless_lifetimes)]
     pub async fn find_link_with_interface_ip<'a>(&'a self, ip: Ipv4Addr) -> Option<LinkRef<'a>> {
-        self.links.find_link_with_interface_ip(ip).await
+        self.net.links().find_link_with_interface_ip(ip).await
     }
 
     /// Turns on a link interface.
-    pub async fn activate(&self, link_no: u16) -> Result<(), link::Error> {
-        self.links.activate_link(link_no).await
+    pub async fn activate(&self, link_no: u16) -> Result<(), vtlink::Error> {
+        self.net.links().activate_link(link_no).await
     }
 
     /// Turns off a link interface.
-    pub async fn deactivate(&self, link_no: u16) -> Result<(), link::Error> {
-        self.links.deactivate_link(link_no).await
+    pub async fn deactivate(&self, link_no: u16) -> Result<(), vtlink::Error> {
+        self.net.links().deactivate_link(link_no).await
     }
 
     pub async fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
@@ -155,7 +151,7 @@ impl Node {
     /// This is useful for sending out periodic RIP messages to all links.
     #[allow(clippy::needless_lifetimes)]
     pub async fn iter_links<'a>(&'a self) -> LinkIter<'a> {
-        self.links.iter_links().await
+        self.net.links().iter_links().await
     }
 
     pub async fn close_socket(&self, socket_id: SocketId) -> Result<(), TcpCloseError> {
@@ -219,15 +215,7 @@ impl Node {
     }
 
     pub async fn run(&self) {
-        let mut listener = self.links.listen().await;
-        while let Ok(bytes) = listener.recv().await {
-            // 0. parse bytes to packet
-            // 1. drop if packet is not valid or TTL = 0
-            // 2. if packet is for "me", pass packet to the correct protocol handler
-            // 3. if forwarding table has rule for packet, send to the next-hop interface
-
-            self.handle_packet_bytes(&bytes).await;
-        }
+        self.net.run(&self.protocol_handlers).await;
     }
 
     pub async fn connect(
@@ -292,52 +280,5 @@ impl Node {
 
     pub async fn print_sockets(&self, file: Option<String>) {
         self.tcp.print_sockets(file).await
-    }
-}
-
-impl Node {
-    async fn handle_packet_bytes(&self, bytes: &[u8]) {
-        match SlicedPacket::from_ip(bytes) {
-            Err(value) => eprintln!("Err {:?}", value),
-            Ok(packet) => {
-                if packet.ip.is_none() {
-                    eprintln!("Packet has no IP fields");
-                    return;
-                }
-
-                let ip = packet.ip.unwrap();
-
-                match ip {
-                    InternetSlice::Ipv4(header, _) => {
-                        let ipv4_header_len = 20;
-                        let payload = &bytes[ipv4_header_len..];
-                        self.handle_packet(&header, payload).await;
-                    }
-                    InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
-                };
-            }
-        }
-    }
-
-    async fn handle_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match self.net.decide_packet(header).await {
-            PacketDecision::Drop => {}
-            PacketDecision::Consume => self.consume_packet(header, payload).await,
-            PacketDecision::Forward => self.net.forward_packet(header, payload).await,
-        }
-    }
-
-    async fn consume_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>, payload: &[u8]) {
-        match header.protocol().try_into() {
-            Ok(protocol) => match self.protocol_handlers.get(&protocol) {
-                Some(handler) => {
-                    handler
-                        .handle_packet(header, payload, &self.net, &self.links)
-                        .await;
-                }
-                None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
-            },
-            Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
-        }
     }
 }

@@ -1,15 +1,13 @@
 mod args;
 mod link;
-mod utils;
 
 pub use args::Args;
-pub use link::{Link, LinkDefinition};
+pub use link::Link;
+pub use link::LinkDefinition;
 use std::{
     ops::{Deref, DerefMut},
     usize,
 };
-use utils::localhost_with_port;
-pub use utils::Ipv4PacketBuilder;
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -20,6 +18,8 @@ use tokio::{
         Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
     },
 };
+
+use crate::utils::net::localhost_with_port;
 
 use self::link::SendError;
 

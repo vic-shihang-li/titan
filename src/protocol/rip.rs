@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
-    link::{Ipv4PacketBuilder, Link, VtLinkLayer},
-    net::vtlink::{Entry as RoutingEntry, ForwardingTable, VtLinkNet},
+    net::vtlink::{Entry as RoutingEntry, ForwardingTable, Link, VtLinkNet},
     protocol::Protocol,
+    utils::net::Ipv4PacketBuilder,
 };
 
 use std::{cmp, cmp::Ordering, net::Ipv4Addr};
@@ -197,7 +197,6 @@ impl ProtocolHandler for RipHandler {
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         net: &VtLinkNet,
-        links: &VtLinkLayer,
     ) {
         let message = RipMessage::from_bytes(payload);
 
@@ -206,7 +205,7 @@ impl ProtocolHandler for RipHandler {
         let mut ft = net.get_forwarding_table_mut().await;
         let updates = self.update_forwarding_table(&mut ft, message, header.source_addr());
         if !updates.is_empty() {
-            for link in &*links.iter_links().await {
+            for link in &*net.links().iter_links().await {
                 self.send_triggered_update(&updates, link).await;
             }
         }

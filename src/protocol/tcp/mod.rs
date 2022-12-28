@@ -13,7 +13,7 @@ use std::usize;
 
 use crate::net::Net;
 use crate::protocol::tcp::socket::UpdateAction;
-use crate::{link::VtLinkLayer, net::vtlink::VtLinkNet, protocol::ProtocolHandler};
+use crate::{net::vtlink::VtLinkNet, protocol::ProtocolHandler};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;
@@ -417,7 +417,6 @@ impl<N: Net + Send + Sync> ProtocolHandler for TcpHandler<N> {
         ip_header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         _net: &VtLinkNet,
-        _links: &VtLinkLayer,
     ) {
         // Step 1: validate checksum
         let tcp_header = TcpHeaderSlice::from_slice(payload).expect("Failed to parse TCP Header");

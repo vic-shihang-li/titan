@@ -9,7 +9,7 @@ pub enum SendError {
     NoForwardingEntry,
     Unreachable,
     NoLink,
-    Transport(crate::link::Error),
+    Transport(vtlink::Error),
 }
 
 #[async_trait]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::net::UdpSocket;
 
-use super::utils::localhost_with_port;
+use crate::utils::net::localhost_with_port;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LinkDefinition {

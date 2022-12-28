@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
-use crate::{link::VtLinkLayer, net::vtlink::VtLinkNet};
+use crate::net::vtlink::VtLinkNet;
 
 pub mod rip;
 pub mod tcp;
@@ -14,7 +14,6 @@ pub trait ProtocolHandler: Send + Sync {
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
         net: &VtLinkNet,
-        links: &VtLinkLayer,
     );
 }
 

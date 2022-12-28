@@ -1,13 +1,17 @@
 mod fwd;
+mod link;
+
+pub use link::Args;
 
 use crate::drop_policy::{DropFactor, DropPolicy};
-use crate::link::{Ipv4PacketBuilder, VtLinkLayer};
 use crate::protocol::rip::RipMessage;
-use crate::protocol::Protocol;
+use crate::protocol::{Protocol, ProtocolHandler};
 use crate::utils::loop_with_interval;
-use crate::{Args, Message};
+use crate::utils::net::Ipv4PacketBuilder;
+use crate::Message;
 use async_trait::async_trait;
-use etherparse::Ipv4HeaderSlice;
+use etherparse::{InternetSlice, Ipv4HeaderSlice, SlicedPacket};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +20,8 @@ use tokio::task::JoinHandle;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub use self::fwd::{Entry, ForwardingTable};
+pub(crate) use link::{Error, Link, VtLinkLayer};
+pub use link::{LinkIter, LinkRef};
 
 use super::{Net, SendError};
 
@@ -141,6 +147,10 @@ impl VtLinkNet {
         }
     }
 
+    pub fn links(&self) -> &VtLinkLayer {
+        self.links.as_ref()
+    }
+
     #[allow(clippy::needless_lifetimes)]
     pub async fn get_forwarding_table_mut<'a>(&'a self) -> RwLockWriteGuard<'a, ForwardingTable> {
         self.routes.write().await
@@ -153,6 +163,75 @@ impl VtLinkNet {
 
     pub fn is_my_addr(&self, addr: Ipv4Addr) -> bool {
         self.my_addrs.iter().any(|a| *a == addr)
+    }
+
+    pub async fn run(&self, handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>) {
+        let mut listener = self.links.listen().await;
+        while let Ok(bytes) = listener.recv().await {
+            // 0. parse bytes to packet
+            // 1. drop if packet is not valid or TTL = 0
+            // 2. if packet is for "me", pass packet to the correct protocol handler
+            // 3. if forwarding table has rule for packet, send to the next-hop interface
+
+            self.handle_packet_bytes(&bytes, handlers).await;
+        }
+    }
+
+    async fn handle_packet_bytes(
+        &self,
+        bytes: &[u8],
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+    ) {
+        match SlicedPacket::from_ip(bytes) {
+            Err(value) => eprintln!("Err {:?}", value),
+            Ok(packet) => {
+                if packet.ip.is_none() {
+                    eprintln!("Packet has no IP fields");
+                    return;
+                }
+
+                let ip = packet.ip.unwrap();
+
+                match ip {
+                    InternetSlice::Ipv4(header, _) => {
+                        let ipv4_header_len = 20;
+                        let payload = &bytes[ipv4_header_len..];
+                        self.handle_packet(&header, payload, handlers).await;
+                    }
+                    InternetSlice::Ipv6(_, _) => eprintln!("Unsupported IPV6 packet"),
+                };
+            }
+        }
+    }
+
+    async fn handle_packet<'a>(
+        &self,
+        header: &Ipv4HeaderSlice<'a>,
+        payload: &[u8],
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+    ) {
+        match self.decide_packet(header).await {
+            PacketDecision::Drop => {}
+            PacketDecision::Forward => self.forward_packet(header, payload).await,
+            PacketDecision::Consume => self.consume_packet(header, payload, handlers).await,
+        }
+    }
+
+    async fn consume_packet<'a>(
+        &self,
+        header: &Ipv4HeaderSlice<'a>,
+        payload: &[u8],
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+    ) {
+        match header.protocol().try_into() {
+            Ok(protocol) => match handlers.get(&protocol) {
+                Some(handler) => {
+                    handler.handle_packet(header, payload, self).await;
+                }
+                None => eprintln!("Warning: no protocol handler for protocol {:?}", protocol),
+            },
+            Err(_) => eprintln!("Unrecognized protocol {}", header.protocol()),
+        }
     }
 
     pub async fn decide_packet<'a>(&self, header: &Ipv4HeaderSlice<'a>) -> PacketDecision {
