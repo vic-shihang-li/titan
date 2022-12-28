@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::usize;
 
 use crate::protocol::tcp::socket::UpdateAction;
-use crate::{link::VtLinkLayer, protocol::ProtocolHandler, route::Router};
+use crate::{link::VtLinkLayer, net::Router, protocol::ProtocolHandler};
 use async_trait::async_trait;
 use etherparse::{Ipv4HeaderSlice, TcpHeaderSlice};
 use socket::Socket;

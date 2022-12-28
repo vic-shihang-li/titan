@@ -5,10 +5,10 @@ mod drop_policy;
 #[cfg(test)]
 mod fixture;
 mod link;
+mod net;
 pub mod node;
 pub mod protocol;
 mod repl;
-mod route;
 mod utils;
 
 pub use link::Args;

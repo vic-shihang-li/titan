@@ -5,13 +5,13 @@ use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
 use crate::link::{self, LinkIter, LinkRef, VtLinkLayer};
+use crate::net::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
 use crate::protocol::tcp::{
     SocketRef, Tcp, TcpCloseError, TcpConn, TcpConnError, TcpHandler, TcpListenError, TcpListener,
     TcpReadError, TcpSendError,
 };
 use crate::protocol::{Protocol, ProtocolHandler};
-use crate::route::{self, ForwardingTable, PacketDecision, Router, RouterConfig};
 use crate::Args;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -177,7 +177,7 @@ impl Node {
         payload: &[u8],
         protocol: P,
         dest_vip: Ipv4Addr,
-    ) -> Result<(), route::SendError> {
+    ) -> Result<(), net::SendError> {
         self.router.send(payload, protocol, dest_vip).await
     }
 

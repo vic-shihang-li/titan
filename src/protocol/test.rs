@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
 use crate::link::VtLinkLayer;
+use crate::net::Router;
 use crate::protocol::ProtocolHandler;
-use crate::route::Router;
 use crate::Message;
 
 #[derive(Default)]

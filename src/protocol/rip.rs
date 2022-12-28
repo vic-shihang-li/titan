@@ -3,8 +3,8 @@ use etherparse::Ipv4HeaderSlice;
 
 use crate::{
     link::{Ipv4PacketBuilder, Link, VtLinkLayer},
+    net::{Entry as RoutingEntry, ForwardingTable, Router},
     protocol::Protocol,
-    route::{Entry as RoutingEntry, ForwardingTable, Router},
 };
 
 use std::{cmp, cmp::Ordering, net::Ipv4Addr};
