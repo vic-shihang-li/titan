@@ -44,6 +44,58 @@ impl Ord for RtxRequest {
     }
 }
 
+struct RtxTimer {
+    /// smoothed round-trip time
+    srtt: Option<Duration>,
+    /// round-trip time variation
+    rtt_var: Option<Duration>,
+    /// retransmission timeout
+    rto: Duration,
+    /// timer tick interval
+    tick: Duration,
+
+    // parameters for smoothening
+    alpha: f64,
+    beta: f64,
+}
+
+impl RtxTimer {
+    fn update(&mut self, rtt: Duration) {
+        match (self.srtt, self.rtt_var) {
+            (None, None) => {
+                self.srtt = Some(rtt);
+                self.rtt_var = Some(rtt / 2);
+                self.rto = std::cmp::max(self.tick, 4 * self.rtt_var.unwrap());
+            }
+            (Some(srtt), Some(rtt_var)) => {
+                let (alpha, beta) = (self.alpha, self.beta);
+
+                // RTTVAR <- (1 - beta) * RTTVAR + beta * |SRTT - R'|
+                // SRTT <- (1 - alpha) * SRTT + alpha * R'
+
+                let srtt_rtt_diff = {
+                    if srtt > rtt {
+                        srtt - rtt
+                    } else {
+                        rtt - srtt
+                    }
+                };
+
+                let rtt_var = rtt_var.mul_f64(1f64 - beta) + srtt_rtt_diff.mul_f64(beta);
+                let srtt = srtt.mul_f64(1f64 - alpha) + rtt.mul_f64(alpha);
+
+                self.srtt = Some(srtt);
+                self.rtt_var = Some(rtt_var);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn rto(&self) -> Duration {
+        self.rto
+    }
+}
+
 pub struct TcpTransport<const N: usize> {
     send_buf: SendBuf<N>,
     recv_buf: RecvBuf<N>,
