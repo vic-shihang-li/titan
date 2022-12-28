@@ -338,7 +338,7 @@ impl<const N: usize> TcpTransport<N> {
     async fn zero_window_probe(&mut self) {
         let mut buf = [0; 1];
         if self.send_buf.try_slice(self.seq_no, &mut buf).await.is_ok() {
-            self.send(self.seq_no, &buf).await.ok();
+            self.send_no_rtx(self.seq_no, &buf).await.ok();
         }
     }
 
@@ -349,6 +349,19 @@ impl<const N: usize> TcpTransport<N> {
     }
 
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
+        self._send(seq_no, payload, true).await
+    }
+
+    async fn send_no_rtx(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
+        self._send(seq_no, payload, false).await
+    }
+
+    async fn _send(
+        &mut self,
+        seq_no: usize,
+        payload: &[u8],
+        should_retransmit: bool,
+    ) -> Result<(), SendError> {
         let mut bytes = Vec::new();
         let mut tcp_header = self.prepare_tcp_packet(seq_no).await;
 
@@ -370,11 +383,13 @@ impl<const N: usize> TcpTransport<N> {
             .map(|_| {
                 self.last_transmitted = Instant::now();
                 self.last_ack_transmitted = ack.try_into().unwrap();
-                self.rtx_timers.push(Reverse(RtxRequest {
-                    tx_time: self.last_transmitted,
-                    deadline: self.dyn_rto.rto(),
-                    seq_no,
-                }));
+                if should_retransmit {
+                    self.rtx_timers.push(Reverse(RtxRequest {
+                        tx_time: self.last_transmitted,
+                        deadline: self.dyn_rto.rto(),
+                        seq_no,
+                    }));
+                }
             })
     }
 
