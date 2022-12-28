@@ -3,12 +3,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ip::cli;
-use ip::node::NodeBuilder;
-use ip::Args;
+use ip_tcp::cli;
+use ip_tcp::node::NodeBuilder;
+use ip_tcp::Args;
 
 use cli::Cli;
-use ip::protocol::{rip::RipHandler, test::TestHandler, Protocol};
+use ip_tcp::protocol::{rip::RipHandler, test::TestHandler, Protocol};
 
 const RIP_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
 const ROUTING_ENTRY_MAX_AGE: Duration = Duration::from_secs(12);
