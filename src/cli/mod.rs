@@ -22,7 +22,11 @@ pub enum Command {
     SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenListenSocket(Port),
     ConnectSocket(Ipv4Addr, Port),
-    ReadSocket(TcpReadCmd),
+    ReadSocket {
+        descriptor: SocketDescriptor,
+        num_bytes: usize,
+        would_block: bool,
+    },
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
     SendFile {
@@ -63,37 +67,6 @@ pub enum RecvFileError {
 impl From<std::io::Error> for RecvFileError {
     fn from(e: std::io::Error) -> Self {
         RecvFileError::FileIo(e)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct TcpReadCmd {
-    descriptor: SocketDescriptor,
-    num_bytes: usize,
-    would_block: bool,
-}
-
-impl TcpReadCmd {
-    fn new_blocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
-        Self {
-            descriptor,
-            num_bytes,
-            would_block: true,
-        }
-    }
-
-    fn new_nonblocking(descriptor: SocketDescriptor, num_bytes: usize) -> Self {
-        Self {
-            descriptor,
-            num_bytes,
-            would_block: false,
-        }
-    }
-}
-
-impl From<TcpReadCmd> for Command {
-    fn from(r: TcpReadCmd) -> Self {
-        Command::ReadSocket(r)
     }
 }
 
@@ -185,9 +158,18 @@ impl Cli {
             Command::ConnectSocket(ip, port) => {
                 self.connect(ip, port).await;
             }
-            Command::ReadSocket(cmd) => {
-                self.tcp_read(cmd).await;
+            Command::ReadSocket {
+                descriptor,
+                num_bytes,
+                would_block,
+            } => {
+                if would_block {
+                    self.tcp_read(descriptor, num_bytes).await;
+                } else {
+                    self.tcp_bg_read(descriptor, num_bytes).await;
+                }
             }
+
             Command::Shutdown(socket, opt) => {
                 self.shutdown(socket, opt).await;
             }
@@ -246,29 +228,13 @@ impl Cli {
         }
     }
 
-    async fn tcp_read(&self, cmd: TcpReadCmd) {
-        if cmd.would_block {
-            match self.node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
-                Ok(bytes) => {
-                    println!("{}", String::from_utf8_lossy(&bytes))
-                }
-                Err(e) => {
-                    eprintln!("Failed to read: {e:?}");
-                }
-            }
-        } else {
-            let node = self.node.clone();
-            tokio::spawn(async move {
-                match node.tcp_read(cmd.descriptor, cmd.num_bytes).await {
-                    Ok(bytes) => {
-                        println!("{}", String::from_utf8_lossy(&bytes));
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to read: {e:?}");
-                    }
-                }
-            });
-        }
+    async fn tcp_bg_read(&self, descriptor: SocketDescriptor, num_bytes: usize) {
+        let node = self.node.clone();
+        tokio::spawn(async move { tcp_read(&node, descriptor, num_bytes).await });
+    }
+
+    async fn tcp_read(&self, descriptor: SocketDescriptor, num_bytes: usize) {
+        tcp_read(&self.node, descriptor, num_bytes).await
     }
 
     async fn shutdown(&self, descriptor: SocketDescriptor, option: TcpShutdownKind) {
@@ -351,6 +317,17 @@ impl Cli {
                 "Failed to close socket: socket {} does not exist",
                 socket_descriptor.0
             );
+        }
+    }
+}
+
+async fn tcp_read(node: &Node, sid: SocketDescriptor, num_bytes: usize) {
+    match node.tcp_read(sid, num_bytes).await {
+        Ok(bytes) => {
+            println!("{}", String::from_utf8_lossy(&bytes));
+        }
+        Err(e) => {
+            eprintln!("Failed to read: {e:?}");
         }
     }
 }

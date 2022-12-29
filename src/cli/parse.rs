@@ -5,7 +5,7 @@ use crate::protocol::{
     Protocol,
 };
 
-use super::{Command, IPv4SendCmd, TcpReadCmd, TcpShutdownKind};
+use super::{Command, IPv4SendCmd, TcpShutdownKind};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseOpenListenSocketError {
@@ -367,7 +367,7 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
                 .map_err(|_| ParseTcpReadError::InvalidNumBytesToRead)?;
 
             let maybe_blocking = tokens.next();
-            let blocking = match maybe_blocking {
+            let would_block = match maybe_blocking {
                 Some(token) => match token {
                     "y" => true,
                     "N" => false,
@@ -376,10 +376,11 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
                 None => false,
             };
 
-            match blocking {
-                true => Ok(TcpReadCmd::new_blocking(sid, num_bytes).into()),
-                false => Ok(TcpReadCmd::new_nonblocking(sid, num_bytes).into()),
-            }
+            Ok(Command::ReadSocket {
+                descriptor: sid,
+                num_bytes,
+                would_block,
+            })
         }
         "sd" => {
             let sid = tokens
