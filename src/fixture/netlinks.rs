@@ -3,8 +3,6 @@ use crate::Args;
 pub mod abc {
     use rand::{thread_rng, Rng};
 
-    use crate::net::LinkDefinition;
-
     use super::*;
 
     pub struct ABCNet {
@@ -49,16 +47,12 @@ pub mod abc {
 
             for arg in args {
                 for mut link in &mut arg.links {
-                    Self::replace_link_ports(&mut link, &replacements);
-                }
-            }
-        }
-
-        fn replace_link_ports(link: &mut LinkDefinition, replacements: &[(u16, u16)]) {
-            for (old, new) in replacements {
-                if link.dest_port == *old {
-                    link.dest_port = *new;
-                    break;
+                    for (old, new) in &replacements {
+                        if link.dest_port == *old {
+                            link.dest_port = *new;
+                            break;
+                        }
+                    }
                 }
             }
         }

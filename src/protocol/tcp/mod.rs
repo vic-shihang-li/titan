@@ -505,6 +505,7 @@ mod tests {
     use tokio::sync::Barrier;
 
     use crate::{
+        drop_policy::{DropFactor, NeverDrop},
         node::{Node, NodeBuilder},
         protocol::{rip::RipHandler, tcp::socket::SocketStatus, Protocol},
         Args,
@@ -518,7 +519,7 @@ mod tests {
 
         for _ in 0..NUM_REPEATS {
             let payload = String::from("hello world!").as_bytes().into();
-            let f = test_send_recv(payload, vec![], 0, 0);
+            let f = test_send_recv(payload, vec![], NeverDrop, NeverDrop);
             test_timeout(Duration::from_secs(1), f).await;
         }
     }
@@ -528,7 +529,7 @@ mod tests {
         let test_file_size = 1_000_000;
 
         for _ in 0..NUM_REPEATS {
-            let f = test_send_file(make_in_mem_test_file(test_file_size), 0);
+            let f = test_send_file(make_in_mem_test_file(test_file_size), NeverDrop);
             test_timeout(Duration::from_secs(8), f).await;
         }
     }
@@ -538,7 +539,12 @@ mod tests {
         let test_file_size = 1_500_000;
 
         for _ in 0..NUM_REPEATS {
-            let f = test_send_recv(make_in_mem_test_file(test_file_size), vec![], 0, 5);
+            let f = test_send_recv(
+                make_in_mem_test_file(test_file_size),
+                vec![],
+                NeverDrop,
+                DropFactor::drop_20_pc(),
+            );
             test_timeout(Duration::from_secs(10), f).await;
         }
     }
@@ -551,8 +557,8 @@ mod tests {
             let f = test_send_recv(
                 make_in_mem_test_file(test_file_size),
                 make_in_mem_test_file(test_file_size),
-                0,
-                0,
+                NeverDrop,
+                NeverDrop,
             );
             test_timeout(Duration::from_secs(10), f).await;
         }
@@ -566,8 +572,8 @@ mod tests {
             let f = test_send_recv(
                 make_in_mem_test_file(test_file_size),
                 make_in_mem_test_file(test_file_size),
-                5,
-                5,
+                DropFactor::drop_20_pc(),
+                DropFactor::drop_20_pc(),
             );
             test_timeout(Duration::from_secs(10), f).await;
         }
@@ -592,7 +598,7 @@ mod tests {
         let n2_cfg = recv_cfg.clone();
 
         let n1 = tokio::spawn(async move {
-            let node = create_and_start_node(n1_cfg, 0).await;
+            let node = create_and_start_node(n1_cfg, NeverDrop).await;
             listen_barr_clone.wait().await;
 
             let dest_ip = {
@@ -625,7 +631,7 @@ mod tests {
         });
 
         let n2 = tokio::spawn(async move {
-            let node = create_and_start_node(recv_cfg, 0).await;
+            let node = create_and_start_node(recv_cfg, NeverDrop).await;
 
             let mut listener = node.listen(recv_listen_port).await.unwrap();
             listen_barr.wait().await;
@@ -650,7 +656,7 @@ mod tests {
         n2.await.unwrap();
     }
 
-    async fn test_send_file(in_mem_file: Vec<u8>, drop_factor: usize) {
+    async fn test_send_file(in_mem_file: Vec<u8>, drop_policy: impl DropPolicy) {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         let send_cfg = abc_net.a.clone();
         let recv_cfg = abc_net.b.clone();
@@ -661,7 +667,7 @@ mod tests {
         let listen_port = Port(8981);
 
         let n1 = tokio::spawn(async move {
-            let node = create_and_start_node(n1_cfg, 0).await;
+            let node = create_and_start_node(n1_cfg, NeverDrop).await;
 
             let dest_ip = {
                 let recv_ips = n2_cfg.get_my_interface_ips();
@@ -677,7 +683,7 @@ mod tests {
         });
 
         let n2 = tokio::spawn(async move {
-            let node = create_and_start_node(recv_cfg, drop_factor).await;
+            let node = create_and_start_node(recv_cfg, drop_policy).await;
             let got = node.listen_and_recv_bytes(listen_port).await.unwrap();
             assert_eq!(got, expected);
         });
@@ -690,8 +696,8 @@ mod tests {
     async fn test_send_recv(
         payload1: Vec<u8>,
         payload2: Vec<u8>,
-        n1_drop_factor: usize,
-        n2_drop_factor: usize,
+        n1_drop_policy: impl DropPolicy,
+        n2_drop_policy: impl DropPolicy,
     ) {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         let send_cfg = abc_net.a.clone();
@@ -707,7 +713,7 @@ mod tests {
         let n2_cfg = recv_cfg.clone();
 
         let n1 = tokio::spawn(async move {
-            let node = create_and_start_node(n1_cfg, n1_drop_factor).await;
+            let node = create_and_start_node(n1_cfg, n1_drop_policy).await;
             listen_barr.wait().await;
 
             let dest_ip = {
@@ -732,7 +738,7 @@ mod tests {
         });
 
         let n2 = tokio::spawn(async move {
-            let node = create_and_start_node(recv_cfg, n2_drop_factor).await;
+            let node = create_and_start_node(recv_cfg, n2_drop_policy).await;
 
             let mut listener = node.listen(recv_listen_port).await.unwrap();
             barr.wait().await;
@@ -762,14 +768,14 @@ mod tests {
         base_data.into_iter().cycle().take(size).collect()
     }
 
-    async fn create_and_start_node(cfg: Args, drop_factor: usize) -> Arc<Node> {
+    async fn create_and_start_node<DP: DropPolicy>(cfg: Args, drop_policy: DP) -> Arc<Node<DP>> {
         let node = Arc::new(
             NodeBuilder::new(&cfg)
                 .with_rip_interval(Duration::from_millis(1))
                 .with_entry_max_age(Duration::from_millis(12))
                 .with_prune_interval(Duration::from_millis(1))
+                .with_drop_policy(drop_policy)
                 .with_protocol_handler(Protocol::Rip, RipHandler::default())
-                .with_drop_factor(drop_factor)
                 .build()
                 .await,
         );

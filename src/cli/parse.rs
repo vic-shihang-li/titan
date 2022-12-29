@@ -543,17 +543,29 @@ mod tests {
         let c = parse_command("r 33 100 y".into()).unwrap();
         assert_eq!(
             c,
-            TcpReadCmd::new_blocking(SocketDescriptor(33), 100).into()
+            Command::ReadSocket {
+                descriptor: SocketDescriptor(33),
+                num_bytes: 100,
+                would_block: true
+            }
         );
         let c = parse_command("r 33 100 N".into()).unwrap();
         assert_eq!(
             c,
-            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            Command::ReadSocket {
+                descriptor: SocketDescriptor(33),
+                num_bytes: 100,
+                would_block: false
+            }
         );
         let c = parse_command("r 33 100".into()).unwrap();
         assert_eq!(
             c,
-            TcpReadCmd::new_nonblocking(SocketDescriptor(33), 100).into()
+            Command::ReadSocket {
+                descriptor: SocketDescriptor(33),
+                num_bytes: 100,
+                would_block: false
+            }
         );
     }
 

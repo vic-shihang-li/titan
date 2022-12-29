@@ -355,6 +355,8 @@ fn verify_header_checksum(header: &Ipv4HeaderSlice<'_>) -> bool {
 mod tests {
     use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
+    use crate::drop_policy::NeverDrop;
+
     use super::*;
 
     #[tokio::test]
@@ -469,12 +471,12 @@ mod tests {
         (header, payload)
     }
 
-    async fn make_mock_router() -> VtLinkNet {
+    async fn make_mock_router() -> VtLinkNet<NeverDrop> {
         let abc_net = crate::fixture::netlinks::abc::gen_unique();
         make_mock_router_with_args(abc_net.a).await
     }
 
-    async fn make_mock_router_with_args(args: Args) -> VtLinkNet {
+    async fn make_mock_router_with_args(args: Args) -> VtLinkNet<NeverDrop> {
         let links = Arc::new(VtLinkLayer::new(&args).await);
         let router = VtLinkNet::new(links, &args, VtLinkNetConfig::default());
         router
