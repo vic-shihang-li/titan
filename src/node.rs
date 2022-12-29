@@ -1,7 +1,7 @@
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::cli::{RecvFileCmd, RecvFileError, SendFileCmd, SendFileError};
+use crate::cli::{RecvFileError, SendFileError};
 use crate::net::vtlink::{self, LinkIter, LinkRef, VtLinkLayer, VtLinkNet, VtLinkNetConfig};
 use crate::net::Net;
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor, SocketId};
@@ -227,24 +227,21 @@ impl Node {
         self.tcp.listen(port).await
     }
 
-    pub async fn send_file(&self, cmd: SendFileCmd) -> Result<(), SendFileError> {
-        let mut f = File::open(&cmd.path)
-            .await
-            .map_err(SendFileError::OpenFile)?;
+    pub async fn send_file(&self, path: &str, remote: Remote) -> Result<(), SendFileError> {
+        let mut f = File::open(path).await.map_err(SendFileError::OpenFile)?;
 
         let mut input = Vec::new();
         f.read_to_end(&mut input)
             .await
             .map_err(SendFileError::ReadFile)?;
 
-        self.connect_and_send_bytes(Remote::new(cmd.dest_ip, cmd.port), &input)
-            .await
+        self.connect_and_send_bytes(remote, &input).await
     }
 
-    pub async fn recv_file(&self, cmd: RecvFileCmd) -> Result<(), RecvFileError> {
-        let received = self.listen_and_recv_bytes(cmd.port).await?;
+    pub async fn recv_file(&self, out_path: &str, port: Port) -> Result<(), RecvFileError> {
+        let received = self.listen_and_recv_bytes(port).await?;
 
-        let mut out_file = File::create(cmd.out_path).await?;
+        let mut out_file = File::create(out_path).await?;
         out_file.write_all(&received).await?;
 
         Ok(())

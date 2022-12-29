@@ -18,6 +18,16 @@ impl Remote {
     }
 }
 
+impl<Addr, P> From<(Addr, P)> for Remote
+where
+    Addr: Into<Ipv4Addr>,
+    P: Into<Port>,
+{
+    fn from(value: (Addr, P)) -> Self {
+        Remote((value.0.into(), value.1.into()))
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
 pub struct SocketDescriptor(pub u16);
 

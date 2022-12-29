@@ -1,7 +1,7 @@
 mod parse;
 
 use crate::node::Node;
-use crate::protocol::tcp::prelude::{Port, SocketDescriptor};
+use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor};
 use crate::protocol::tcp::{TcpAcceptError, TcpConnError, TcpListenError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::repl::{HandleUserInput, HandleUserInputError, Repl};
@@ -25,8 +25,15 @@ pub enum Command {
     ReadSocket(TcpReadCmd),
     Shutdown(SocketDescriptor, TcpShutdownKind),
     Close(SocketDescriptor),
-    SendFile(SendFileCmd),
-    RecvFile(RecvFileCmd),
+    SendFile {
+        path: String,
+        dest_ip: Ipv4Addr,
+        port: Port,
+    },
+    RecvFile {
+        out_path: String,
+        port: Port,
+    },
     Quit,
     None,
 }
@@ -46,28 +53,6 @@ pub enum SendFileError {
     Send(TcpSendError),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct SendFileCmd {
-    pub path: String,
-    pub dest_ip: Ipv4Addr,
-    pub port: Port,
-}
-
-impl SendFileCmd {
-    fn new(path: String, dest_ip: Ipv4Addr, port: Port) -> Self {
-        Self {
-            path,
-            dest_ip,
-            port,
-        }
-    }
-}
-impl From<SendFileCmd> for Command {
-    fn from(s: SendFileCmd) -> Self {
-        Command::SendFile(s)
-    }
-}
-
 #[derive(Debug)]
 pub enum RecvFileError {
     FileIo(std::io::Error),
@@ -78,24 +63,6 @@ pub enum RecvFileError {
 impl From<std::io::Error> for RecvFileError {
     fn from(e: std::io::Error) -> Self {
         RecvFileError::FileIo(e)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct RecvFileCmd {
-    pub out_path: String,
-    pub port: Port,
-}
-
-impl RecvFileCmd {
-    fn new(out_path: String, port: Port) -> Self {
-        Self { out_path, port }
-    }
-}
-
-impl From<RecvFileCmd> for Command {
-    fn from(s: RecvFileCmd) -> Self {
-        Command::RecvFile(s)
     }
 }
 
@@ -227,10 +194,14 @@ impl Cli {
             Command::Close(socket_descriptor) => {
                 self.close_socket(socket_descriptor).await;
             }
-            Command::SendFile(cmd) => {
-                self.send_file(cmd);
+            Command::SendFile {
+                path,
+                dest_ip,
+                port,
+            } => {
+                self.send_file(&path, (dest_ip, port));
             }
-            Command::RecvFile(cmd) => self.recv_file(cmd),
+            Command::RecvFile { out_path, port } => self.recv_file(&out_path, port),
             Command::Quit => {
                 eprintln!("Quitting");
             }
@@ -244,8 +215,7 @@ impl Cli {
                 let mut f = File::create(file).unwrap();
                 f.write_all(b"id\tstate\tlocal\t\tremote\tport\n").unwrap();
                 for link in &*self.node.iter_links().await {
-                    f.write_all(format!("{id}\t{link}\n").as_bytes())
-                        .unwrap();
+                    f.write_all(format!("{id}\t{link}\n").as_bytes()).unwrap();
                     id += 1;
                 }
             }
@@ -339,10 +309,12 @@ impl Cli {
         }
     }
 
-    fn send_file(&self, cmd: SendFileCmd) {
+    fn send_file(&self, path: &str, remote: impl Into<Remote>) {
+        let remote = remote.into();
         let node = self.node.clone();
+        let path: String = path.into();
         tokio::spawn(async move {
-            match node.send_file(cmd).await {
+            match node.send_file(&path, remote).await {
                 Ok(_) => {
                     eprintln!("Send file complete.");
                 }
@@ -353,10 +325,11 @@ impl Cli {
         });
     }
 
-    fn recv_file(&self, cmd: RecvFileCmd) {
+    fn recv_file(&self, out_path: &str, port: Port) {
         let node = self.node.clone();
+        let out_path: String = out_path.into();
         tokio::spawn(async move {
-            match node.recv_file(cmd).await {
+            match node.recv_file(&out_path, port).await {
                 Ok(_) => {
                     eprintln!("Receive file complete");
                 }

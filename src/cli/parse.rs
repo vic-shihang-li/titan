@@ -5,7 +5,7 @@ use crate::protocol::{
     Protocol,
 };
 
-use super::{Command, IPv4SendCmd, RecvFileCmd, SendFileCmd, TcpReadCmd, TcpShutdownKind};
+use super::{Command, IPv4SendCmd, TcpReadCmd, TcpShutdownKind};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseOpenListenSocketError {
@@ -429,7 +429,11 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
                 .map_err(|_| ParseSendFileError::InvalidPort)?
                 .into();
 
-            Ok(SendFileCmd::new(filename.into(), ip, port).into())
+            Ok(Command::SendFile {
+                path: filename.into(),
+                dest_ip: ip,
+                port,
+            })
         }
         "rf" => {
             let filename = tokens.next().ok_or(ParseRecvFileError::NoFile)?;
@@ -439,7 +443,10 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
                 .parse::<u16>()
                 .map_err(|_| ParseRecvFileError::InvalidPort)?
                 .into();
-            Ok(RecvFileCmd::new(filename.into(), port).into())
+            Ok(Command::RecvFile {
+                out_path: filename.into(),
+                port,
+            })
         }
         "q" => Ok(Command::Quit),
         _ => Err(ParseError::Unknown),
@@ -649,11 +656,11 @@ mod tests {
         let c = parse_command("sf hello 1.2.3.4 3434".into()).unwrap();
         assert_eq!(
             c,
-            Command::SendFile(SendFileCmd::new(
-                "hello".into(),
-                Ipv4Addr::new(1, 2, 3, 4),
-                Port(3434)
-            ))
+            Command::SendFile {
+                path: "hello".into(),
+                dest_ip: Ipv4Addr::new(1, 2, 3, 4),
+                port: Port(3434)
+            }
         );
     }
 
@@ -677,7 +684,10 @@ mod tests {
         let c = parse_command("rf hello 5000".into()).unwrap();
         assert_eq!(
             c,
-            Command::RecvFile(RecvFileCmd::new(String::from("hello"), Port(5000)))
+            Command::RecvFile {
+                out_path: "hello".into(),
+                port: Port(5000)
+            }
         );
     }
 }
