@@ -3,7 +3,7 @@ mod link;
 
 pub use link::Args;
 
-use crate::drop_policy::{DropFactor, DropPolicy};
+use crate::drop_policy::{self, DropPolicy};
 use crate::protocol::rip::RipMessage;
 use crate::protocol::{Protocol, ProtocolHandler};
 use crate::utils::loop_with_interval;
@@ -32,34 +32,34 @@ pub enum PacketDecision {
     Consume,
 }
 
-pub struct VtLinkNetConfig {
+pub struct VtLinkNetConfig<DP: DropPolicy> {
     pub prune_interval: Duration,
     pub rip_update_interval: Duration,
     pub entry_max_age: Duration,
-    pub drop_factor: usize,
+    pub drop_policy: DP,
 }
 
-impl Default for VtLinkNetConfig {
+impl Default for VtLinkNetConfig<drop_policy::NeverDrop> {
     fn default() -> Self {
         Self {
             prune_interval: Duration::from_secs(1),
             rip_update_interval: Duration::from_secs(5),
             entry_max_age: Duration::from_secs(12),
-            drop_factor: 0,
+            drop_policy: drop_policy::NeverDrop::default(),
         }
     }
 }
-pub struct VtLinkNet {
+pub struct VtLinkNet<DP: DropPolicy> {
     links: Arc<VtLinkLayer>,
     my_addrs: Vec<Ipv4Addr>,
     routes: Arc<RwLock<ForwardingTable>>,
     pruner: JoinHandle<()>,
     rip_updater: JoinHandle<()>,
-    drop_policy: DropFactor,
+    drop_policy: DP,
 }
 
 #[async_trait]
-impl Net for VtLinkNet {
+impl<DP: DropPolicy> Net for VtLinkNet<DP> {
     async fn get_outbound_ip(&self, dest: Ipv4Addr) -> Option<[u8; 4]> {
         let rt = self.routes.read().await;
         if let Some(forward_rule) = rt.find_entry_for(dest) {
@@ -111,8 +111,8 @@ impl Net for VtLinkNet {
     }
 }
 
-impl VtLinkNet {
-    pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: VtLinkNetConfig) -> Self {
+impl<DP: DropPolicy> VtLinkNet<DP> {
+    pub fn new(links: Arc<VtLinkLayer>, program_args: &Args, config: VtLinkNetConfig<DP>) -> Self {
         let my_addrs = program_args.get_my_interface_ips();
 
         let entries = program_args
@@ -143,7 +143,7 @@ impl VtLinkNet {
             routes,
             pruner,
             rip_updater,
-            drop_policy: DropFactor::new(config.drop_factor),
+            drop_policy: config.drop_policy,
         }
     }
 
@@ -163,7 +163,7 @@ impl VtLinkNet {
         self.my_addrs.iter().any(|a| *a == addr)
     }
 
-    pub async fn run(&self, handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>) {
+    pub async fn run(&self, handlers: &HashMap<Protocol, Box<dyn ProtocolHandler<DP>>>) {
         let mut listener = self.links.listen().await;
         while let Ok(bytes) = listener.recv().await {
             // 0. parse bytes to packet
@@ -178,7 +178,7 @@ impl VtLinkNet {
     async fn handle_packet_bytes(
         &self,
         bytes: &[u8],
-        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler<DP>>>,
     ) {
         match SlicedPacket::from_ip(bytes) {
             Err(value) => eprintln!("Err {value:?}"),
@@ -206,7 +206,7 @@ impl VtLinkNet {
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler<DP>>>,
     ) {
         match self.decide_packet(header).await {
             PacketDecision::Drop => {}
@@ -219,7 +219,7 @@ impl VtLinkNet {
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler>>,
+        handlers: &HashMap<Protocol, Box<dyn ProtocolHandler<DP>>>,
     ) {
         match header.protocol().try_into() {
             Ok(protocol) => match handlers.get(&protocol) {
@@ -297,7 +297,7 @@ impl VtLinkNet {
     }
 }
 
-impl Drop for VtLinkNet {
+impl<DP: DropPolicy> Drop for VtLinkNet<DP> {
     fn drop(&mut self) {
         self.pruner.abort();
         self.rip_updater.abort();

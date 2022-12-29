@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
 use crate::{
+    drop_policy::DropPolicy,
     net::vtlink::{Entry as RoutingEntry, ForwardingTable, Link, VtLinkNet},
     protocol::Protocol,
     utils::net::Ipv4PacketBuilder,
@@ -191,13 +192,15 @@ impl Entry {
 pub struct RipHandler {}
 
 #[async_trait]
-impl ProtocolHandler for RipHandler {
+impl<DP: DropPolicy> ProtocolHandler<DP> for RipHandler {
     async fn handle_packet<'a>(
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        net: &VtLinkNet,
-    ) {
+        net: &VtLinkNet<DP>,
+    ) where
+        DP: DropPolicy,
+    {
         let message = RipMessage::from_bytes(payload);
 
         log::info!("Received RIP packet from {}", header.source_addr());

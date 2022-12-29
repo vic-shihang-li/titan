@@ -1,5 +1,6 @@
 mod parse;
 
+use crate::drop_policy::DropPolicy;
 use crate::node::Node;
 use crate::protocol::tcp::prelude::{Port, Remote, SocketDescriptor};
 use crate::protocol::tcp::{TcpAcceptError, TcpConnError, TcpListenError, TcpSendError};
@@ -74,12 +75,12 @@ impl From<std::io::Error> for RecvFileError {
     }
 }
 
-pub struct Cli {
-    node: Arc<Node>,
+pub struct Cli<DP: DropPolicy> {
+    node: Arc<Node<DP>>,
 }
 
 #[async_trait]
-impl HandleUserInput for Cli {
+impl<DP: DropPolicy> HandleUserInput for Cli<DP> {
     async fn handle(
         &mut self,
         user_input: String,
@@ -97,8 +98,8 @@ impl HandleUserInput for Cli {
     }
 }
 
-impl Cli {
-    pub fn new(node: Arc<Node>) -> Self {
+impl<DP: DropPolicy> Cli<DP> {
+    pub fn new(node: Arc<Node<DP>>) -> Self {
         Self { node }
     }
 
@@ -321,7 +322,7 @@ impl Cli {
     }
 }
 
-async fn tcp_read(node: &Node, sid: SocketDescriptor, num_bytes: usize) {
+async fn tcp_read<DP: DropPolicy>(node: &Node<DP>, sid: SocketDescriptor, num_bytes: usize) {
     match node.tcp_read(sid, num_bytes).await {
         Ok(bytes) => {
             println!("{}", String::from_utf8_lossy(&bytes));

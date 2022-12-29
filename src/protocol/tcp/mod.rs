@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
 
+use crate::drop_policy::DropPolicy;
 use crate::net::Net;
 use crate::protocol::tcp::socket::UpdateAction;
 use crate::{net::vtlink::VtLinkNet, protocol::ProtocolHandler};
@@ -411,13 +412,15 @@ impl<N: Net> TcpHandler<N> {
 }
 
 #[async_trait]
-impl<N: Net + Send + Sync> ProtocolHandler for TcpHandler<N> {
+impl<N: Net, DP: DropPolicy> ProtocolHandler<DP> for TcpHandler<N> {
     async fn handle_packet<'a>(
         &self,
         ip_header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        _net: &VtLinkNet,
-    ) {
+        _net: &VtLinkNet<DP>,
+    ) where
+        DP: DropPolicy,
+    {
         // Step 1: validate checksum
         let tcp_header = TcpHeaderSlice::from_slice(payload).expect("Failed to parse TCP Header");
         log::debug!(

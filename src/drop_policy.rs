@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicUsize;
 
 use etherparse::Ipv4HeaderSlice;
 
-pub trait DropPolicy {
+pub trait DropPolicy: 'static + Sync + Send {
     fn should_drop(&self, ip_header: &Ipv4HeaderSlice<'_>) -> bool;
 }
 

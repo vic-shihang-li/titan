@@ -1,19 +1,19 @@
 use async_trait::async_trait;
 use etherparse::Ipv4HeaderSlice;
 
-use crate::net::vtlink::VtLinkNet;
+use crate::{drop_policy::DropPolicy, net::vtlink::VtLinkNet};
 
 pub mod rip;
 pub mod tcp;
 pub mod test;
 
 #[async_trait]
-pub trait ProtocolHandler: Send + Sync {
+pub trait ProtocolHandler<DP: DropPolicy>: Send + Sync {
     async fn handle_packet<'a>(
         &self,
         header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        net: &VtLinkNet,
+        net: &VtLinkNet<DP>,
     );
 }
 

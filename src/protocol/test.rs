@@ -4,6 +4,7 @@ use std::net::Ipv4Addr;
 use async_trait::async_trait;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 
+use crate::drop_policy::DropPolicy;
 use crate::net::vtlink::VtLinkNet;
 use crate::protocol::ProtocolHandler;
 use crate::Message;
@@ -17,13 +18,13 @@ pub struct TestMessage {
 }
 
 impl TestMessage {
-    pub fn from_packet(_header: &Ipv4HeaderSlice, payload: &[u8]) -> Self {
+    pub fn from_packet(header: &Ipv4HeaderSlice, payload: &[u8]) -> Self {
         let header = Ipv4Header::new(
-            _header.payload_len(),
-            _header.ttl() - 1,
-            _header.protocol(),
-            _header.source(),
-            _header.destination(),
+            header.payload_len(),
+            header.ttl() - 1,
+            header.protocol(),
+            header.source(),
+            header.destination(),
         );
         Self {
             header,
@@ -51,12 +52,12 @@ impl Message for TestMessage {
 }
 
 #[async_trait]
-impl ProtocolHandler for TestHandler {
+impl<DP: DropPolicy> ProtocolHandler<DP> for TestHandler {
     async fn handle_packet<'a>(
         &self,
         _header: &Ipv4HeaderSlice<'a>,
         payload: &[u8],
-        _net: &VtLinkNet,
+        _net: &VtLinkNet<DP>,
     ) {
         let message = TestMessage::from_packet(_header, payload);
         print!("{message}");
