@@ -5,7 +5,7 @@ use crate::protocol::{
     Protocol,
 };
 
-use super::{Command, IPv4SendCmd, TcpShutdownKind};
+use super::{Command, TcpShutdownKind};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseOpenListenSocketError {
@@ -318,11 +318,11 @@ fn parse_cmd(cmd: &str, mut tokens: SplitWhitespace) -> Result<Command, ParseErr
             let virtual_ip = virtual_ip.parse().map_err(|_| ParseSendError::InvalidIp)?;
             let protocol =
                 Protocol::try_from(protocol).map_err(|_| ParseSendError::InvalidProtocol)?;
-            Ok(Command::SendIPv4Packet(IPv4SendCmd {
+            Ok(Command::SendIPv4Packet {
                 virtual_ip,
                 protocol,
                 payload,
-            }))
+            })
         }
         "ls" => {
             let arg = tokens.next();

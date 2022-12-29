@@ -133,14 +133,17 @@ impl Cli {
                     eprintln!("Failed to turn interface {interface} up: {e:?}");
                 }
             }
-            Command::SendIPv4Packet(cmd) => {
+            Command::SendIPv4Packet {
+                virtual_ip,
+                protocol,
+                payload,
+            } => {
                 eprintln!(
-                    "Sending packet \"{}\" with protocol {:?} to {}",
-                    cmd.payload, cmd.protocol, cmd.virtual_ip
+                    "Sending packet \"{payload}\" with protocol {protocol:?} to {virtual_ip}",
                 );
                 if let Err(e) = self
                     .node
-                    .send(cmd.payload.as_bytes(), cmd.protocol, cmd.virtual_ip)
+                    .send(payload.as_bytes(), protocol, virtual_ip)
                     .await
                 {
                     eprintln!("Failed to send packet: {e:?}");
