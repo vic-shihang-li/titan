@@ -18,7 +18,11 @@ pub enum Command {
     ListSockets(Option<String>),
     InterfaceDown(u16),
     InterfaceUp(u16),
-    SendIPv4Packet(IPv4SendCmd),
+    SendIPv4Packet {
+        virtual_ip: Ipv4Addr,
+        protocol: Protocol,
+        payload: String,
+    },
     SendTCPPacket(SocketDescriptor, Vec<u8>),
     OpenListenSocket(Port),
     ConnectSocket(Ipv4Addr, Port),
@@ -68,13 +72,6 @@ impl From<std::io::Error> for RecvFileError {
     fn from(e: std::io::Error) -> Self {
         RecvFileError::FileIo(e)
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct IPv4SendCmd {
-    virtual_ip: Ipv4Addr,
-    protocol: Protocol,
-    payload: String,
 }
 
 pub struct Cli {
