@@ -266,7 +266,7 @@ pub enum AddSocketError {
     ConnectionExists(SocketId),
 }
 
-pub struct SocketTable<N: Net + 'static> {
+pub(crate) struct SocketTable<N: Net + 'static> {
     socket_id_map: HashMap<SocketDescriptor, SocketId>,
     socket_map: HashMap<SocketId, Socket<N>>,
     socket_builder: SocketBuilder<N>,
