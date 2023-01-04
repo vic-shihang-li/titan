@@ -312,7 +312,7 @@ impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
 
     fn on_last_byte_acked_updated(&mut self, next_expected_seq_no: usize) {
         let mut last_acked_tx_time = None;
-        let start_time = Instant::now();
+        let ack_recv_time = Instant::now();
 
         loop {
             let Some(rtx_req) = self.rtx_timers.peek() else {
@@ -329,8 +329,8 @@ impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
             last_acked_tx_time = Some(rtx_req.tx_time);
         }
 
-        if let Some(last_acked_tx_time) = last_acked_tx_time {
-            let rtt = start_time - last_acked_tx_time;
+        if let Some(tx_time) = last_acked_tx_time {
+            let rtt = ack_recv_time - tx_time;
             self.dyn_rto.update(rtt);
         }
     }
