@@ -345,7 +345,7 @@ impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
     async fn send_ack(&mut self) -> Result<(), SendError> {
         // The empty-payload packet's main purpose is to update the remote
         // about our latest ACK sequence number.
-        self.send(self.seq_no, &[]).await
+        self.send_no_rtx(self.seq_no, &[]).await
     }
 
     async fn send(&mut self, seq_no: usize, payload: &[u8]) -> Result<(), SendError> {
