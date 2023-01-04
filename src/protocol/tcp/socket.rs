@@ -363,7 +363,7 @@ impl<N: Net> From<&TcpState<N>> for SocketStatus {
     }
 }
 
-enum TcpState<N: Net> {
+enum TcpState<N> {
     Closed(Closed<N>),
     SynSent(SynSent<N>),
     SynReceived(SynReceived<N>),
@@ -499,7 +499,7 @@ impl<N: Net> TcpState<N> {
     }
 }
 
-struct Closed<N: Net> {
+struct Closed<N> {
     seq_no: u32,
     net: Arc<N>,
 }
@@ -582,7 +582,7 @@ impl<N: Net> Closed<N> {
     }
 }
 
-struct Listen<N: Net> {
+struct Listen<N> {
     port: Port,
     seq_no: u32,
     net: Arc<N>,
@@ -656,7 +656,7 @@ impl<N: Net> Listen<N> {
     }
 }
 
-struct SynSent<N: Net> {
+struct SynSent<N> {
     seq_no: u32,
     src_port: Port,
     dest_ip: Ipv4Addr,
@@ -743,7 +743,7 @@ impl<N: Net> SynSent<N> {
     }
 }
 
-pub struct SynReceived<N: Net> {
+pub struct SynReceived<N> {
     seq_no: u32,
     local_port: Port,
     remote_ip: Ipv4Addr,
@@ -794,7 +794,7 @@ impl<N: Net> SynReceived<N> {
     }
 }
 
-struct Established<N: Net> {
+struct Established<N> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -972,7 +972,7 @@ impl<N: Net> Established<N> {
     }
 }
 
-struct FinWait1<N: Net> {
+struct FinWait1<N> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -1087,7 +1087,7 @@ impl<N: Net> FinWait1<N> {
     }
 }
 
-struct FinWait2<N: Net> {
+struct FinWait2<N> {
     local_port: Port,
     remote_ip: Ipv4Addr,
     remote_port: Port,
@@ -1169,7 +1169,7 @@ struct TimeWait {}
 
 impl TimeWait {}
 
-struct CloseWait<N: Net> {
+struct CloseWait<N> {
     conn: TcpConn,
     last_seq: u32,
     net: Arc<N>,
@@ -1225,7 +1225,7 @@ impl<N: Net> CloseWait<N> {
     }
 }
 
-struct LastAck<N: Net> {
+struct LastAck<N> {
     net: Arc<N>,
 }
 
