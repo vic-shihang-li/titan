@@ -405,17 +405,17 @@ impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
     }
 }
 
-pub struct RetransmissionConfig {
+pub struct RtxConfig {
     max_err_retries: usize,
-    retrans_interval: Duration,
+    rtx_interval: Duration,
     timeout: Duration,
 }
 
-impl Default for RetransmissionConfig {
+impl Default for RtxConfig {
     fn default() -> Self {
         Self {
             max_err_retries: 80,
-            retrans_interval: Duration::from_millis(50),
+            rtx_interval: Duration::from_millis(50),
             timeout: Duration::from_secs(3),
         }
     }
@@ -425,7 +425,7 @@ pub fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'st
     payload: Vec<u8>,
     remote: Remote,
     router: Arc<N>,
-    cfg: RetransmissionConfig,
+    cfg: RtxConfig,
     on_err: F,
 ) -> AckHandle {
     let (acked_tx, acked_rx) = oneshot::channel();
@@ -435,7 +435,7 @@ pub fn transport_single_message<F: FnOnce(TransmissionError) + Send + Sync + 'st
             payload,
             remote,
             net: router,
-            retransmission_cfg: cfg,
+            rtx_cfg: cfg,
             acked_rx,
             on_err,
         };
@@ -482,15 +482,14 @@ struct SingleMessageTransport<F: FnOnce(TransmissionError) + Send, N: Net> {
     payload: Vec<u8>,
     remote: Remote,
     net: Arc<N>,
-    retransmission_cfg: RetransmissionConfig,
+    rtx_cfg: RtxConfig,
     acked_rx: oneshot::Receiver<()>,
     on_err: F,
 }
 
 impl<F: FnOnce(TransmissionError) + Send, N: Net> SingleMessageTransport<F, N> {
     pub async fn run(mut self) {
-        match tokio::time::timeout(self.retransmission_cfg.timeout, self.transmission_loop()).await
-        {
+        match tokio::time::timeout(self.rtx_cfg.timeout, self.transmission_loop()).await {
             Ok(succeeded) => {
                 if !succeeded {
                     (self.on_err)(TransmissionError::MaxRetransExceeded);
@@ -507,13 +506,13 @@ impl<F: FnOnce(TransmissionError) + Send, N: Net> SingleMessageTransport<F, N> {
     async fn transmission_loop(&mut self) -> bool {
         let mut retried = 0;
 
-        let mut retransmit = tokio::time::interval(self.retransmission_cfg.retrans_interval);
+        let mut retransmit = tokio::time::interval(self.rtx_cfg.rtx_interval);
         loop {
             tokio::select! {
                 _ = retransmit.tick() => {
                     if self.send().await.is_err() {
                         retried += 1;
-                        if retried >= self.retransmission_cfg.max_err_retries {
+                        if retried >= self.rtx_cfg.max_err_retries {
                             return false;
                         }
                     }
