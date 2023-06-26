@@ -1,7 +1,7 @@
 use crate::net::Net;
 use crate::protocol::tcp::buf::{FillError, SetTailError, WriteRangeError};
 use crate::protocol::tcp::prelude::SocketIdBuilder;
-use crate::protocol::tcp::transport::RetransmissionConfig;
+use crate::protocol::tcp::transport::RtxConfig;
 use crate::protocol::tcp::{TcpAcceptError, TcpReadError, TcpSendError};
 use crate::protocol::Protocol;
 use crate::utils::sync::RaceOneShotSender;
@@ -530,7 +530,7 @@ impl<N: Net> Closed<N> {
             syn_pkt,
             Remote::new(dest_ip, dest_port),
             self.net.clone(),
-            RetransmissionConfig::default(),
+            RtxConfig::default(),
             move |_| {
                 established.send(Err(TcpConnError::Timeout)).ok();
             },
@@ -607,7 +607,7 @@ impl<N: Net> Listen<N> {
             syn_ack_pkt,
             Remote::new(ip_header.source_addr(), syn_packet.source_port().into()),
             self.net.clone(),
-            RetransmissionConfig::default(),
+            RtxConfig::default(),
             move |_| {
                 // TODO: delete SynReceived socketx
             },
@@ -887,13 +887,8 @@ impl<N: Net> Established<N> {
                 remote.ip().octets(),
             );
 
-            let mut ack_handle = transport_single_message(
-                fin_packet,
-                remote,
-                net,
-                RetransmissionConfig::default(),
-                |_| {},
-            );
+            let mut ack_handle =
+                transport_single_message(fin_packet, remote, net, RtxConfig::default(), |_| {});
 
             {
                 let mut write_guard = fin_seq_no_clone.lock().await;
