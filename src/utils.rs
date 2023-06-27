@@ -8,6 +8,16 @@ pub async fn loop_with_interval<Fut: Future<Output = ()>>(interval: Duration, f:
     }
 }
 
+/// Time any arbitrary expression's execution time.
+#[macro_export]
+macro_rules! timed {
+    ($e: expr) => {{
+        let t = Instant::now();
+        $e;
+        t.elapsed()
+    }};
+}
+
 pub mod net {
     use std::net::{Ipv4Addr, SocketAddr};
 
