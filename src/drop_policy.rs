@@ -43,6 +43,10 @@ impl DropFactor {
         DropFactor::new(10)
     }
 
+    pub fn drop_5_pc() -> Self {
+        DropFactor::new(20)
+    }
+
     pub fn drop_50_pc() -> Self {
         DropFactor::new(2)
     }
