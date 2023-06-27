@@ -134,7 +134,7 @@ impl Entry {
     }
 
     pub fn restart_delete_timer(&mut self) {
-        log::info!("resetting timer for entry: {}", self);
+        log::debug!("resetting timer for entry: {}", self);
         self.last_updated = Instant::now();
     }
 

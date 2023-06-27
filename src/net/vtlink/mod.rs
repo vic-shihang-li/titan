@@ -324,7 +324,7 @@ async fn periodic_rip_update(
 ) {
     loop_with_interval(interval, || async {
         for link in &*links.iter_links().await {
-            log::info!("Sending periodic update to {}", link.dest());
+            log::debug!("Sending periodic update to {}", link.dest());
             let rip_msg = RipMessage::from_entries_with_poisoned_reverse(
                 table.read().await.entries(),
                 link.dest(),
