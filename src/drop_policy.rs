@@ -27,28 +27,17 @@ pub struct DropFactor {
 #[allow(dead_code)]
 impl DropFactor {
     /// Configure the router to drop 1 packet every `drop_factor` packets.
-    pub fn new(drop_factor: usize) -> Self {
-        Self {
-            never_drop: drop_factor == 0,
-            factor: drop_factor,
-            count: AtomicUsize::new(0),
+    pub fn new(drop_factor: f32) -> Self {
+        if (0.0..1.0).contains(&drop_factor) {
+            let factor: usize = (1.0 / drop_factor) as usize;
+            Self {
+                never_drop: drop_factor == 0.0,
+                factor,
+                count: AtomicUsize::new(0),
+            }
+        } else {
+            panic!("drop factor must be between 0 and 1")
         }
-    }
-
-    pub fn drop_20_pc() -> Self {
-        DropFactor::new(5)
-    }
-
-    pub fn drop_10_pc() -> Self {
-        DropFactor::new(10)
-    }
-
-    pub fn drop_5_pc() -> Self {
-        DropFactor::new(20)
-    }
-
-    pub fn drop_50_pc() -> Self {
-        DropFactor::new(2)
     }
 }
 
@@ -77,7 +66,7 @@ mod tests {
     #[test]
     fn drop_rate() {
         // drop 20% packet, or once every 5 packets.
-        let dropper = DropFactor::new(5);
+        let dropper = DropFactor::new(0.2);
 
         let mut bytes = Vec::new();
         let ip_header_slice = {
