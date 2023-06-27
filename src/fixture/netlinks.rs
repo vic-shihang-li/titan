@@ -46,7 +46,7 @@ pub mod abc {
             }
 
             for arg in args {
-                for mut link in &mut arg.links {
+                for link in &mut arg.links {
                     for (old, new) in &replacements {
                         if link.dest_port == *old {
                             link.dest_port = *new;
