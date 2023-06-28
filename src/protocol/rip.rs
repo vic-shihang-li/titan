@@ -203,7 +203,7 @@ impl<DP: DropPolicy> ProtocolHandler<DP> for RipHandler {
     {
         let message = RipMessage::from_bytes(payload);
 
-        log::info!("Received RIP packet from {}", header.source_addr());
+        log::debug!("Received RIP packet from {}", header.source_addr());
 
         let mut ft = net.get_forwarding_table_mut().await;
         let updates = self.update_forwarding_table(&mut ft, message, header.source_addr());
