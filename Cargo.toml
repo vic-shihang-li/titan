@@ -9,7 +9,7 @@ edition = "2021"
 opt-level = 3
 
 [dependencies]
-tokio = { version = "1.21.1", features = ["full"] }
+tokio = { version = "1.24.2", features = ["full"] }
 tokio-stream = { version = "0.1.10", features = ["sync"] }
 async-trait = "0.1.57"
 rand = "0.8.5"
