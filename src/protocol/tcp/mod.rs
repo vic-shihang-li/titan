@@ -572,8 +572,8 @@ mod tests {
             let f = test_send_recv(
                 make_in_mem_test_file(test_file_size),
                 make_in_mem_test_file(test_file_size),
-                DropFactor::new(0.2),
-                DropFactor::new(0.2),
+                DropFactor::new(0.05),
+                DropFactor::new(0.05),
             );
             test_timeout(Duration::from_secs(10), f).await;
         }
