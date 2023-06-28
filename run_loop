@@ -1,1 +1,0 @@
-cargo build && ./tools/run_net --clean ./target/debug/node ./net_links/loop
