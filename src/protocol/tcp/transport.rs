@@ -294,7 +294,6 @@ impl<const BUF_SZ: usize, N: Net> TcpTransport<BUF_SZ, N> {
             .await
             .is_ok()
         {
-            log::info!("Retransmitting {}", self.last_acked);
             // TODO: handle failure
             self.send(self.last_acked, segment_buf).await.unwrap();
         }

@@ -2,6 +2,7 @@ mod fwd;
 mod link;
 
 pub use link::Args;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::drop_policy::{self, DropPolicy};
 use crate::protocol::rip::RipMessage;
@@ -165,13 +166,18 @@ impl<DP: DropPolicy> VtLinkNet<DP> {
 
     pub async fn run(&self, handlers: &HashMap<Protocol, Box<dyn ProtocolHandler<DP>>>) {
         let mut listener = self.links.listen().await;
-        while let Ok(bytes) = listener.recv().await {
-            // 0. parse bytes to packet
-            // 1. drop if packet is not valid or TTL = 0
-            // 2. if packet is for "me", pass packet to the correct protocol handler
-            // 3. if forwarding table has rule for packet, send to the next-hop interface
-
-            self.handle_packet_bytes(&bytes, handlers).await;
+        loop {
+            match listener.recv().await {
+                Ok(bytes) => {
+                    self.handle_packet_bytes(&bytes, handlers).await;
+                }
+                Err(e) => match e {
+                    RecvError::Lagged(n) => {
+                        log::warn!("Missed handling {n} packets b/c internal buffer full")
+                    }
+                    RecvError::Closed => break,
+                },
+            }
         }
     }
 

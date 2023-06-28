@@ -167,19 +167,15 @@ impl VtLinkLayer {
             .expect("cannot listen on an uninitialized network")
             .clone_socket();
 
-        let (tx, rx) = broadcast::channel(100);
+        let (tx, rx) = broadcast::channel(1024);
         let sender = tx.clone();
 
         tokio::spawn(async move {
             let mut buf = [0; 65536];
             while let Ok(sz) = sock.recv(&mut buf).await {
-                // Note: there seems to be a bug here. We should be able to
-                // unwrap send() b/c there should always be a listener, and we
-                // do assert that the receiver is running (see Router::run()).
-                // However, after running the node for long enough,
-                // send().unwrap() panics.
                 if sender.send(buf[..sz].into()).is_err() {
-                    log::error!("Failed to send packet to receiver");
+                    log::debug!("All subscribers terminated");
+                    break;
                 }
             }
         });
